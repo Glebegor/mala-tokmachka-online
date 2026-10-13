@@ -100,6 +100,8 @@ export interface MapDef {
   roads?: RoadLine[];
   /** Terrain grid (see tools/build-terrain.mjs). In map JSON use `terrainFile` instead. */
   terrain?: TerrainGridData;
+  /** State borders and country labels GeoJSON. In map JSON use `bordersFile` instead. */
+  borders?: any;
   capturePoints: CapturePointDef[];
   spawns: [LngLat[], LngLat[]];
 }
