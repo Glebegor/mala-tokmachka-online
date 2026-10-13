@@ -14,7 +14,9 @@
     "damage": 10,
     "vision": 4,
     "mobility": "foot",
-    "symbol": "infantry"
+    "symbol": "infantry",
+    "fx": "burst",
+    "missRate": 0.45
   },
   {
     "id": "tank",
@@ -33,7 +35,9 @@
     "damage": 45,
     "vision": 5,
     "mobility": "tracked",
-    "symbol": "armor"
+    "symbol": "armor",
+    "fx": "shell",
+    "missRate": 0.2
   },
   {
     "id": "artillery",
@@ -51,7 +55,9 @@
     "damage": 30,
     "vision": 3,
     "mobility": "wheeled",
-    "symbol": "artillery"
+    "symbol": "artillery",
+    "fx": "arc",
+    "missRate": 0.35
   },
   {
     "id": "drone",
@@ -69,6 +75,8 @@
     "damage": 4,
     "vision": 18,
     "mobility": "air",
-    "symbol": "uav"
+    "symbol": "uav",
+    "fx": "beam",
+    "missRate": 0.12
   }
 ]
