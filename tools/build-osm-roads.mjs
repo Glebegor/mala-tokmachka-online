@@ -1,23 +1,84 @@
-import { readFileSync, writeFileSync } from 'node:fs';
+import { DatabaseSync } from 'node:sqlite';
+import { writeFileSync } from 'node:fs';
 
-const [src, bboxArg, out] = process.argv.slice(2);
-const srcFile = src || 'C:/Users/AKIRA/.gemini/antigravity/scratch/ukr_roads.geojson';
-const bbox = bboxArg ? bboxArg.split(',').map(Number) : [22.0, 43.8, 41.5, 53.2];
-const outFile = out || 'mods/base/maps/ukraine.roads.json';
+const gpkgPath = 'C:/Users/AKIRA/.gemini/antigravity/scratch/roads.gpkg';
+const outFile = 'mods/base/maps/ukraine.roads.json';
+const [W, S, E, N] = [22.0, 43.8, 41.5, 53.2];
 
-const [W, S, E, N] = bbox;
+console.log(`Opening ${gpkgPath}...`);
+const db = new DatabaseSync(gpkgPath);
+
+function parseGpkgGeom(buf) {
+  if (!buf || buf.length < 8) return null;
+  if (buf[0] !== 0x47 || buf[1] !== 0x50) return null;
+  const flags = buf[3];
+  const envelopeType = (flags >> 1) & 0x07;
+  let envelopeSize = 0;
+  if (envelopeType === 1) envelopeSize = 32;
+  else if (envelopeType === 2 || envelopeType === 3) envelopeSize = 48;
+  else if (envelopeType === 4) envelopeSize = 64;
+
+  const headerSize = 8 + envelopeSize;
+  if (buf.length <= headerSize) return null;
+
+  const b = Buffer.from(buf.buffer, buf.byteOffset + headerSize, buf.byteLength - headerSize);
+  const le = b[0] === 1;
+  const geomType = le ? b.readUInt32LE(1) : b.readUInt32BE(1);
+
+  if (geomType === 2) {
+    const numPoints = le ? b.readUInt32LE(5) : b.readUInt32BE(5);
+    const pts = [];
+    let offset = 9;
+    for (let i = 0; i < numPoints; i++) {
+      const x = le ? b.readDoubleLE(offset) : b.readDoubleBE(offset);
+      const y = le ? b.readDoubleLE(offset + 8) : b.readDoubleBE(offset + 8);
+      pts.push([x, y]);
+      offset += 16;
+    }
+    return [pts];
+  } else if (geomType === 5) {
+    const numLines = le ? b.readUInt32LE(5) : b.readUInt32BE(5);
+    const lines = [];
+    let offset = 9;
+    for (let l = 0; l < numLines; l++) {
+      const lineLe = b[offset] === 1;
+      const numPoints = lineLe ? b.readUInt32LE(offset + 5) : b.readUInt32BE(offset + 5);
+      offset += 9;
+      const pts = [];
+      for (let i = 0; i < numPoints; i++) {
+        const x = lineLe ? b.readDoubleLE(offset) : b.readDoubleBE(offset);
+        const y = lineLe ? b.readDoubleLE(offset + 8) : b.readDoubleBE(offset + 8);
+        pts.push([x, y]);
+        offset += 16;
+      }
+      lines.push(pts);
+    }
+    return lines;
+  }
+  return null;
+}
+
 const inside = (c) => c[0] >= W && c[0] <= E && c[1] >= S && c[1] <= N;
-const round = (v) => Math.round(v * 1000) / 1000;
+// 5 decimals gives ~0.7m precision: completely prevents staircase rasterization
+const round = (v) => Math.round(v * 100000) / 100000;
 
-console.log(`Loading ${srcFile}...`);
-const data = JSON.parse(readFileSync(srcFile, 'utf8'));
+console.log('Querying roads (motorway, trunk, primary, secondary + links)...');
+const query = `
+  SELECT highway, geom FROM roads
+  WHERE highway IN (
+    'motorway', 'trunk', 'primary', 'secondary', 'tertiary',
+    'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link'
+  )
+`;
 
-console.log(`Extracting lines within bounds [${W}, ${S}, ${E}, ${N}]...`);
+const rows = db.prepare(query).all();
+console.log(`Found ${rows.length} candidate road features in GPKG.`);
+
 const raw = [];
-for (const f of data.features) {
-  if (!f.geometry) continue;
-  const major = f.properties?.ntlclass === 'motorway' || f.properties?.ntlclass === 'trunk' ? 1 : 0;
-  const parts = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates;
+for (const r of rows) {
+  const parts = parseGpkgGeom(r.geom);
+  if (!parts) continue;
+  const major = r.highway.startsWith('motorway') || r.highway.startsWith('trunk') ? 1 : 0;
   for (const part of parts) {
     let run = [];
     const flush = () => {
@@ -31,9 +92,9 @@ for (const f of data.features) {
     flush();
   }
 }
-console.log(`Extracted ${raw.length} segments.`);
+console.log(`Extracted ${raw.length} line segments inside map bounds.`);
 
-// Chain contiguous segments of the same major type
+// Chain contiguous segments of the same road class
 function chainLines(lines) {
   const ptKey = (p) => `${p[0]},${p[1]}`;
   const endpoints = new Map();
@@ -92,9 +153,9 @@ function chainLines(lines) {
 }
 
 const chained = chainLines(raw);
-console.log(`Chained down to ${chained.length} lines.`);
+console.log(`Chained down to ${chained.length} continuous lines.`);
 
-// Build spatial grid for crossings and snapping
+// Build spatial grid
 const CELL = 0.05;
 const cellsOf = (a, b) => {
   const out = [];
@@ -134,10 +195,8 @@ for (const [cellKey, bucket] of grid.entries()) {
       const minXb = Math.min(p3[0], p4[0]), maxXb = Math.max(p3[0], p4[0]);
       const minYb = Math.min(p3[1], p4[1]), maxYb = Math.max(p3[1], p4[1]);
 
-      // Bounding box test
       if (maxXa < minXb || maxXb < minXa || maxYa < minYb || maxYb < minYa) continue;
 
-      // Ensure pair is evaluated in exactly one cell (the top-left cell of the bbox intersection)
       const interMinX = Math.max(minXa, minXb);
       const interMinY = Math.max(minYa, minYb);
       const anchorCell = `${Math.floor(interMinX / CELL)},${Math.floor(interMinY / CELL)}`;
@@ -156,8 +215,8 @@ for (const [cellKey, bucket] of grid.entries()) {
   }
 }
 
-// Dead ends that stop within ~1.5 km (SNAP = 0.02) of another road are joined
-const SNAP = 0.02;
+// Dead ends that stop within ~500 m (SNAP = 0.005) are joined to prevent gaps at junctions
+const SNAP = 0.005;
 chained.forEach((l, li) => {
   for (const end of [0, l.pts.length - 1]) {
     const e = l.pts[end];
@@ -194,7 +253,7 @@ chained.forEach((l, li) => {
 });
 console.log(`${crossings} crossings noded, ${snapped} dead ends snapped.`);
 
-// Junction preservation & Douglas-Peucker simplification
+// Junction preservation & Douglas-Peucker simplification with tight 0.0003 (~25-30m) tolerance
 const uses = new Map();
 for (const l of chained) {
   for (const k of new Set(l.pts.map((p) => p.join(',')))) uses.set(k, (uses.get(k) ?? 0) + 1);
@@ -222,7 +281,8 @@ function simplify(pts, tol) {
   return pts.filter((_, i) => keep[i]);
 }
 
-const lines = chained.map((l) => ({ major: l.major, pts: simplify(l.pts, 0.002) }));
+console.log('Simplifying with tol 0.0003 (~30m)...');
+const lines = chained.map((l) => ({ major: l.major, pts: simplify(l.pts, 0.0003) }));
 const packed = lines.map((l) => [l.major, ...l.pts.flat()]);
 writeFileSync(outFile, JSON.stringify(packed));
 const totalPts = lines.reduce((a, l) => a + l.pts.length, 0);

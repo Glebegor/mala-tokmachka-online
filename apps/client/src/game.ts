@@ -30,7 +30,7 @@ const STYLE: maplibregl.StyleSpecification = {
 const TEAM_COLOR = ['#3d8bff', '#ff4d4d'];
 const TEAM_NAME = ['UKRAINE', 'RUSSIA'];
 const GROUP_ZOOM = 8; // below this zoom a group is drawn as one formation marker
-const HINT = 'Click: select · Shift+drag: box · Right click: move · G: group · 1-9: select group · T: terrain';
+const HINT = 'Click: select · Shift+drag: box · Right click: move · G: group · 1-9: select group · T: terrain · M: map';
 
 type Fc = { type: 'FeatureCollection'; features: any[] };
 const empty = (): Fc => ({ type: 'FeatureCollection', features: [] });
@@ -68,6 +68,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const hint = h('div', { class: 'hint' }, 'Connecting…');
   const boxEl = h('div', { class: 'selbox' });
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
+  const basemapBtn = h('button', { class: 'ghost', onClick: () => toggleBasemap(), title: 'Toggle real map filter (M)' }, 'Map: ON');
   const leave = () => {
     closed = true;
     ws.close();
@@ -80,7 +81,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   };
   app.append(
     h('div', { class: 'game' }, mapEl,
-      h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl),
   );
 
@@ -100,6 +101,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
   const pMarkers = new Map<string, HTMLElement>();
   let shown: FrontNode[] = [];
+  const unitPos = new Map<number, { lng: number; lat: number }>();
+  const curPos = (u: UnitView): LngLat => {
+    const p = unitPos.get(u.id);
+    return p ? [p.lng, p.lat] : u.pos;
+  };
 
   // ---------- network ----------
   ws.onmessage = (ev) => {
@@ -332,7 +338,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const x0 = Math.min(start.x, e.clientX) - r.left, x1 = Math.max(start.x, e.clientX) - r.left;
     const y0 = Math.min(start.y, e.clientY) - r.top, y1 = Math.max(start.y, e.clientY) - r.top;
     selUnits = new Set(snap.units.filter((u) => u.owner === me).filter((u) => {
-      const p = map.project(u.pos);
+      const p = map.project(curPos(u));
       return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
     }).map((u) => u.id));
     selBuilding = null;
@@ -347,6 +353,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const k = e.key.toLowerCase();
     if (k === 's' && selUnits.size) return void send({ type: 'stop', units: [...selUnits] });
     if (k === 't') return toggleTerrain();
+    if (k === 'm') return toggleBasemap();
     if (k === 'g' && selUnits.size) return makeGroup();
     if (k === 'u' && selUnits.size) return ungroup();
     if (/^[1-9]$/.test(e.key)) {
@@ -393,7 +400,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     render();
   }
-  const centroid = (us: UnitView[]): LngLat | null => (us.length ? [us.reduce((a, u) => a + u.pos[0], 0) / us.length, us.reduce((a, u) => a + u.pos[1], 0) / us.length] : null);
+  const centroid = (us: UnitView[]): LngLat | null => (us.length ? [us.reduce((a, u) => a + curPos(u)[0], 0) / us.length, us.reduce((a, u) => a + curPos(u)[1], 0) / us.length] : null);
 
   function renderGroups() {
     clear(groupBar);
@@ -429,6 +436,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const on = map.getLayoutProperty('terrain', 'visibility') !== 'visible';
     map.setLayoutProperty('terrain', 'visibility', on ? 'visible' : 'none');
     terrainBtn.classList.toggle('on', on);
+  }
+  function toggleBasemap() {
+    if (!mapReady || !map.getLayer('osm')) return;
+    const isVisible = map.getLayoutProperty('osm', 'visibility') !== 'none';
+    const next = isVisible ? 'none' : 'visible';
+    map.setLayoutProperty('osm', 'visibility', next);
+    basemapBtn.classList.toggle('on', next === 'none');
+    basemapBtn.textContent = next === 'none' ? 'Map: OFF' : 'Map: ON';
   }
   function showTerrain(p: LngLat) {
     if (!terrain || !init) return;
@@ -645,6 +660,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function onSnapshot(s: SnapMsg) {
     snap = s;
     if (shown.length !== s.front.length) shown = s.front.map((n) => ({ ...n }));
+    for (const u of s.units) {
+      if (!unitPos.has(u.id)) unitPos.set(u.id, { lng: u.pos[0], lat: u.pos[1] });
+    }
     pruneGroups();
     for (const id of selUnits) if (!s.units.some((u) => u.id === id)) selUnits.delete(id);
     fx?.add(s.shots);
@@ -668,22 +686,44 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (mapReady) renderMap();
   }
 
-  function renderMap() {
-    if (!init || !snap) return;
+  function renderUnitsLayer() {
+    if (!init || !snap || !mapReady) return;
     const myTeam = init.team;
     const grouped = new Map<number, number>();
     for (const g of groups.values()) for (const id of g.ids) grouped.set(id, g.id);
 
-    (map.getSource('units') as GeoJSONSource).setData({
+    (map.getSource('units') as GeoJSONSource)?.setData({
       type: 'FeatureCollection',
       features: snap.units.map((u) => {
         const d = defU.get(u.def);
         const own = u.owner === me;
         const sel = selUnits.has(u.id);
         const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own });
-        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), icon, z: sel ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: u.pos } };
+        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), icon, z: sel ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: curPos(u) } };
       }),
     });
+  }
+
+  function renderSelLines() {
+    if (!init || !snap || !mapReady) return;
+    (map.getSource('sel') as GeoJSONSource)?.setData({
+      type: 'FeatureCollection',
+      features: snap.units.filter((u) => selUnits.has(u.id) && u.target).slice(0, 60).map((u) => ({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'LineString', coordinates: [curPos(u), u.target] },
+      })),
+    });
+  }
+
+  function renderMap() {
+    if (!init || !snap) return;
+    const myTeam = init.team;
+    const grouped = new Map<number, number>();
+    for (const g of groups.values()) for (const id of g.ids) grouped.set(id, g.id);
+
+    renderUnitsLayer();
+    renderSelLines();
 
     // one formation marker per group (shown when zoomed out)
     const formations: any[] = [];
@@ -718,12 +758,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       });
     }
     (map.getSource('formations') as GeoJSONSource).setData({ type: 'FeatureCollection', features: formations });
-
-    // destination lines for the selection
-    (map.getSource('sel') as GeoJSONSource).setData({
-      type: 'FeatureCollection',
-      features: snap.units.filter((u) => selUnits.has(u.id) && u.target).slice(0, 60).map((u) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [u.pos, u.target] } })),
-    });
 
     // vision rings for own long-range assets
     const rings: any[] = [];
@@ -778,33 +812,67 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     snap.points.forEach((p) => pMarkers.get(p.id)?.style.setProperty('--c', TEAM_COLOR[p.owner]));
   }
 
-  // ---------- front animation (smooth between 5 Hz snapshots) ----------
+  // ---------- animation loop (60 FPS interpolation between 5 Hz snapshots) ----------
+  let frontDrawn = false;
   function animate() {
     if (closed) return;
     requestAnimationFrame(animate);
     if (!snap || !init || !mapReady) return;
+
+    // 1. Frontline smooth lerp
     if (shown.length !== snap.front.length) shown = snap.front.map((n) => ({ ...n }));
-    let moved = false;
+    let frontMoved = false;
     shown.forEach((n, i) => {
       const t = snap!.front[i];
       const dx = t.lng - n.lng, dy = t.lat - n.lat;
-      if (Math.abs(dx) + Math.abs(dy) > 1e-6 || n.v !== t.v) moved = true;
-      n.lng += dx * 0.18;
-      n.lat += dy * 0.18;
+      if (Math.abs(dx) + Math.abs(dy) > 1e-6 || n.v !== t.v) frontMoved = true;
+      n.lng += dx * 0.28;
+      n.lat += dy * 0.28;
       n.v = t.v;
     });
-    if (!moved && frontDrawn) return;
-    frontDrawn = true;
-    const line: LngLat[] = shown.map((n) => [n.lng, n.lat]);
-    (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } as any);
-    (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...line, ...init.map.occupiedClosure, line[0]]] } } as any);
-    const maxV = init.ruleset.rules.frontMaxSpeed;
-    (map.getSource('pressure') as GeoJSONSource).setData({
-      type: 'FeatureCollection',
-      features: shown.filter((n) => n.v !== 0).map((n) => ({ type: 'Feature', properties: { v: n.v, mag: Math.min(1, Math.abs(n.v) / (maxV * 0.4)) }, geometry: { type: 'Point', coordinates: [n.lng, n.lat] } })),
-    });
+    if (frontMoved || !frontDrawn) {
+      frontDrawn = true;
+      const line: LngLat[] = shown.map((n) => [n.lng, n.lat]);
+      (map.getSource('front') as GeoJSONSource)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } as any);
+      (map.getSource('occupied') as GeoJSONSource)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...line, ...init.map.occupiedClosure, line[0]]] } } as any);
+      const maxV = init.ruleset.rules.frontMaxSpeed;
+      (map.getSource('pressure') as GeoJSONSource)?.setData({
+        type: 'FeatureCollection',
+        features: shown.filter((n) => n.v !== 0).map((n) => ({ type: 'Feature', properties: { v: n.v, mag: Math.min(1, Math.abs(n.v) / (maxV * 0.4)) }, geometry: { type: 'Point', coordinates: [n.lng, n.lat] } })),
+      });
+    }
+
+    // 2. Units smooth 60 FPS interpolation (eliminates 5 Hz stutter)
+    let unitsMoved = false;
+    const aliveUnits = new Set<number>();
+    for (const u of snap.units) {
+      aliveUnits.add(u.id);
+      let p = unitPos.get(u.id);
+      if (!p) {
+        p = { lng: u.pos[0], lat: u.pos[1] };
+        unitPos.set(u.id, p);
+      }
+      const dx = u.pos[0] - p.lng;
+      const dy = u.pos[1] - p.lat;
+      const dist2 = dx * dx + dy * dy;
+      if (dist2 > 0.05) {
+        p.lng = u.pos[0];
+        p.lat = u.pos[1];
+        unitsMoved = true;
+      } else if (dist2 > 1e-9) {
+        p.lng += dx * 0.28;
+        p.lat += dy * 0.28;
+        unitsMoved = true;
+      }
+    }
+    for (const id of unitPos.keys()) {
+      if (!aliveUnits.has(id)) unitPos.delete(id);
+    }
+    if (unitsMoved) {
+      renderUnitsLayer();
+      if (selUnits.size > 0) renderSelLines();
+    }
   }
-  let frontDrawn = false;
 
   const ping = setInterval(() => (closed ? clearInterval(ping) : ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ping' } satisfies ClientMsg))), 15000);
 }

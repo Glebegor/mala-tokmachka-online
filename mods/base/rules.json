@@ -1,6 +1,9 @@
 {
   "matchSeconds": 1800,
-  "frontPush": 0.0006,
-  "frontNodeSpacingKm": 9,
+  "frontPush": 0.0012,
+  "frontMaxSpeed": 0.08,
+  "frontSmoothing": 0.5,
+  "frontInfluenceKm": 18,
+  "frontNodeSpacingKm": 2.5,
   "startUnits": ["infantry", "infantry", "infantry", "infantry", "drone"]
 }

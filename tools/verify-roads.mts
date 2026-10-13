@@ -45,7 +45,15 @@ const cities: [string, [number, number]][] = [
 
 for (const [name, pos] of cities) {
   const node = net.nearest(pos, 40);
-  console.log(`${name}: nearest node ${node}, comp ${node >= 0 ? seen[node] : 'none'}`);
+  const comp = node >= 0 ? seen[node] : -1;
+  let comp0Dist = Infinity;
+  for (let i = 0; i < net.size; i++) {
+    if (seen[i] === 0) {
+      const d = (net as any).nodes ? Math.hypot((net as any).nodes[i][0] - pos[0], (net as any).nodes[i][1] - pos[1]) * 100 : 0;
+      if (d < comp0Dist) comp0Dist = d;
+    }
+  }
+  console.log(`${name}: nearest node ${node}, comp ${comp}, comp0 dist: ${comp0Dist.toFixed(1)} km`);
 }
 
 const pairs: [[string, [number, number]], [string, [number, number]]][] = [
