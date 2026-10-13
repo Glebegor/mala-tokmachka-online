@@ -51,10 +51,11 @@ function simplify(points, tol) {
 }
 
 // Crimea: Kerch strait (pt 66) along southern/western coast to Kinburn spit (pt 625)
-const crimea = simplify(dsPts.slice(66, 626), 0.02).map((p) => [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000]);
+// tol 0.003 (~300m) preserves all capes including Cape Tarkhankut and bays
+const crimea = simplify(dsPts.slice(66, 626), 0.003).map((p) => [Math.round(p[0] * 10000) / 10000, Math.round(p[1] * 10000) / 10000]);
 
 // Belarus: from Senkivka westwards to Poland
-const belarusClean = simplify(belarusPts, 0.02).map((p) => [Math.round(p[0] * 1000) / 1000, Math.round(p[1] * 1000) / 1000]);
+const belarusClean = simplify(belarusPts, 0.005).map((p) => [Math.round(p[0] * 10000) / 10000, Math.round(p[1] * 10000) / 10000]);
 
 // Combine: Kerch -> Crimea coastline -> Kinburn spit -> Active combat line -> Senkivka -> Belarus border -> Poland
 const newFront = [
@@ -63,11 +64,14 @@ const newFront = [
   ...belarusClean.slice(1)
 ];
 
-// Occupied closure: around Belarus/Russia back to Kerch
+// Occupied closure: routes entirely outside the visible map bounds [22.0, 43.8, 41.5, 53.2]
+// so that no artificial straight cut lines are ever visible on the map
 const occupiedClosure = [
-  [newFront[newFront.length - 1][0], 56.0],
+  [20.0, newFront[newFront.length - 1][1]],
+  [20.0, 56.0],
   [45.0, 56.0],
-  [45.0, newFront[0][1]]
+  [45.0, 42.0],
+  [newFront[0][0], 42.0]
 ];
 
 const frontStr = '[\n' + newFront.map((p) => '    [' + p[0] + ', ' + p[1] + ']').join(',\n') + '\n  ]';
