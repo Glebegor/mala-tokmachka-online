@@ -35,14 +35,23 @@ function showLogin(error = '') {
   pass.addEventListener('keydown', (e) => e.key === 'Enter' && go(false));
 }
 
-export function route() {
+/** `leftMatch`: a running match the player just stepped out of; the lobby offers to rejoin instead of jumping back in. */
+export function route(leftMatch?: string) {
   const s = session.get();
   if (!s) return showLogin();
   showLobby(app, s, {
+    leftMatch,
     onLogout: () => (session.set(null), showLogin()),
     onMatch: (matchId) => {
       clear(app);
-      startGame(app, s, matchId, () => route());
+      startGame(app, s, matchId, async (finished) => {
+        if (finished) {
+          // a finished match frees the player's slot so the lobby shows the room list again
+          const mine = (await api.rooms().catch(() => [])).find((r) => r.matchId === matchId);
+          if (mine) await api.leave(mine.id).catch(() => {});
+          route();
+        } else route(matchId);
+      });
     },
   });
 }

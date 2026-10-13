@@ -1,6 +1,6 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { Building, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
+import type { BuildingView, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
 
 export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' };
 
@@ -21,7 +21,7 @@ export interface SnapMsg {
   energyNet: number;
   /** Net production per second, per resource. */
   rates: Record<string, number>;
-  buildings: Building[];
+  buildings: BuildingView[];
   units: UnitView[];
   /** Shots fired since the previous snapshot (animation only). */
   shots: Shot[];

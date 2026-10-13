@@ -31,11 +31,20 @@ export interface BuildingDef {
   defense?: { radiusKm: number; mult: number };
   trains?: string[];
   maxPerPlayer?: number;
+  /** Static weapon, e.g. air defence. */
+  attack?: { range: number; damage: number; targets: 'air' | 'ground' | 'all'; fx?: string; missRate?: number };
+  /** Boats/pontoons: friendly ground units may cross barrier water inside this radius. */
+  crossing?: { radiusKm: number; speed: number };
+  /** Training centre: ground units that walk in are schooled in batches and come out one rank higher. */
+  training?: { minUnits: number; capacity: number; baseTime: number; timePerRank: number };
+  /** Must be built within this many km of barrier water (river bank). */
+  needsWaterWithinKm?: number;
 }
 
 export interface UnitDef {
   id: string;
   name: string;
+  description?: string;
   kind: 'ground' | 'air';
   /** Mobility class looked up in each terrain's `speed` table: foot, tracked, wheeled, air (mods may add more). */
   mobility?: string;
@@ -45,6 +54,8 @@ export interface UnitDef {
   fx?: string;
   /** Share of shots that visibly miss, 0..1 (animation only, damage is unaffected). */
   missRate?: number;
+  /** Damage multiplier against air units (default: rules.airDamageDefault). */
+  airDamage?: number;
   cost: ResourceAmounts;
   trainTime: number;
   hp: number;
@@ -66,6 +77,11 @@ export interface TerrainDef {
   concealment: number;
   /** How much this terrain slows the front line passing through it, 0..1. */
   frontResist: number;
+  /** Multiplier on how far ground units standing here can see (high ground sees further). Default 1. */
+  vision?: number;
+  description?: string;
+  /** Connected areas of at least `minCells` cells block these mobility classes (bridges and boat crossings excepted). */
+  barrier?: { minCells: number; mobility: string[] };
 }
 
 /** Veterancy step. Units start at the first rank and climb by fighting (or by paying `cost`). */
@@ -125,6 +141,9 @@ export interface RulesConfig {
   roadOutputMult: number; // output bonus for connected buildings
   xpPerDamage: number;
   xpPerKill: number;
+  airDamageDefault: number; // ground weapons against aircraft
+  transportDamageMult: number; // damage taken while driving in column on a road
+  maxQueuedOrders: number;
 }
 
 export interface ScriptSource {
@@ -155,7 +174,7 @@ export const DEFAULT_RULES: RulesConfig = {
   frontInfluenceKm: 28,
   frontPush: 0.0004,
   frontMaxSpeed: 0.05,
-  frontSmoothing: 0.35,
+  frontSmoothing: 0.2,
   abstractPower: 1,
   energyDeficitMult: 0.4,
   pointScorePerSec: 1,
@@ -166,5 +185,8 @@ export const DEFAULT_RULES: RulesConfig = {
   roadAccessKm: 5,
   roadOutputMult: 1.15,
   xpPerDamage: 0.2,
-  xpPerKill: 15,
+  xpPerKill: 25,
+  airDamageDefault: 0.25,
+  transportDamageMult: 1.5,
+  maxQueuedOrders: 8,
 };

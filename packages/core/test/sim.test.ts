@@ -1,6 +1,6 @@
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, type SlotInit } from '../src';
+import { distToFrontKm, Sim, type LngLat, type SlotInit } from '../src';
 
 const rs = await loadRuleset(new URL('../../../mods', import.meta.url).pathname);
 const slots: SlotInit[] = [];
@@ -20,9 +20,13 @@ for (let i = 0; i < 10 * 1200 && sim.world.winner === null; i++) {
 report(sim.world.time);
 function report(t: number) {
   const w = sim.world;
-  const shift = w.front.reduce((a, n, i) => a + Math.hypot(n.lng - front0[i][0], n.lat - front0[i][1]), 0) / w.front.length;
+  const shift = front0.reduce((a, p) => a + Math.abs(distToFrontKm(w.front, p as LngLat)), 0) / front0.length;
+  const wet = w.units.filter((u) => sim.defs.u.get(u.def)!.kind !== 'air' && !(u.path[0]?.road) && sim.terrain?.isBarrier(u.pos) && !w.buildings.some((b) => b.team === u.team && sim.defs.b.get(b.def)!.crossing)).length;
+  const moving = w.units.filter((u) => u.path.length).length;
+  const transport = w.units.filter((u) => u.transport).length;
+  const school = w.buildings.reduce((a, b) => a + b.inside.length, 0);
   const ranks = [0, 1, 2, 3, 4].map((r) => w.units.filter((u) => u.rank === r).length).join('/');
-  console.log(`t=${t.toFixed(0)}s buildings=${w.buildings.length} units=${w.units.length} avgFrontShift=${shift.toFixed(3)}° shots=${shots} ranks=${ranks} points=${w.points.map((p) => p.owner).join('')} scores=${w.scores.map(Math.round)} winner=${w.winner} ${w.winReason ?? ''}`);
+  console.log(`t=${t.toFixed(0)}s buildings=${w.buildings.length} units=${w.units.length} nodes=${w.front.length} avgFrontShift=${shift.toFixed(1)}km moving=${moving} transport=${transport} inSchool=${school} inRiver=${wet} shots=${shots} ranks=${ranks} points=${w.points.map((p) => p.owner).join('')} scores=${w.scores.map(Math.round)} winner=${w.winner} ${w.winReason ?? ''}`);
 }
 console.log(`wall ${Date.now() - t0}ms`);
 const bad = sim.world.players.some((p) => Object.values(p.res).some((v) => !Number.isFinite(v) || v < 0));

@@ -21,11 +21,14 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | --- | --- |
 | Select unit / formation / building | left click (Shift+click adds) |
 | Box select | Shift + drag |
-| Move (uses roads when faster) | right click |
+| Move by the fastest route (roads in transport mode, bridges over rivers) | right click |
+| Add a waypoint to the current orders | Shift + right click |
+| Move straight across country, combat-ready | Alt + right click |
 | Stop | S |
 | Group / ungroup selection | G / U |
 | Numbered group: assign / select / jump to | Ctrl+1-9 / 1-9 / press again |
 | Terrain overlay | T |
+| Send units into a Training Centre | select them, right click the centre |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |
 
 Hover the map to see the terrain under the cursor and how it affects each kind of unit.
@@ -36,7 +39,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/MODDING.md](docs/MODDING
 
 ## Map data
 
-Roads and urban areas: Natural Earth (public domain). Forest/water classification and basemap: © OpenStreetMap contributors (ODbL).
+Roads, rivers and urban areas: Natural Earth (public domain). Forest/water classification and basemap: © OpenStreetMap contributors (ODbL).
+Hills, mountains and relief shading: Mapzen / AWS Terrain Tiles (open data).
 Rebuild with `tools/build-roads.mjs` and `tools/build-terrain.mjs`; validate with `npm run check:maps`.
 
 ## Docker

@@ -1,5 +1,8 @@
 import type maplibregl from 'maplibre-gl';
-import { offsetKm, type LngLat, type Shot, type UnitDef } from '@sw/core';
+import { offsetKm, type LngLat, type Shot } from '@sw/core';
+
+/** How a weapon looks when it fires, looked up by the unit or building id carried in the shot. */
+export type FxLookup = (def: string) => { fx?: string; missRate?: number } | undefined;
 
 interface Effect {
   kind: string;
@@ -12,7 +15,7 @@ interface Effect {
   seed: number;
 }
 
-const DUR: Record<string, number> = { burst: 420, shell: 520, arc: 1500, beam: 380 };
+const DUR: Record<string, number> = { burst: 420, shell: 520, arc: 1500, beam: 380, missile: 900 };
 
 /** Canvas overlay that animates weapon fire. Misses are cosmetic: the server has already resolved damage. */
 export class ShotFx {
@@ -21,7 +24,7 @@ export class ShotFx {
   private effects: Effect[] = [];
   private raf = 0;
 
-  constructor(private map: maplibregl.Map, parent: HTMLElement, private units: Map<string, UnitDef>, private teamColor: string[]) {
+  constructor(private map: maplibregl.Map, parent: HTMLElement, private lookup: FxLookup, private teamColor: string[]) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'fx';
     parent.append(this.canvas);
@@ -42,7 +45,7 @@ export class ShotFx {
     const now = performance.now();
     for (const s of shots) {
       if (this.effects.length > 500) break;
-      const d = this.units.get(s.def);
+      const d = this.lookup(s.def);
       const kind = d?.fx ?? 'burst';
       const miss = Math.random() < (d?.missRate ?? 0.3);
       // a miss lands 0.3–1.5 km off (more for indirect fire)
@@ -136,6 +139,38 @@ export class ShotFx {
         if (impactT > 0 && impactT < 1) {
           this.flash(b.x, b.y, (e.hit ? 14 : 9) * k * (0.5 + impactT), e.hit ? '#ff7a2f' : '#8a8f98', (1 - impactT) * (e.hit ? 1 : 0.6));
           this.ring(b.x, b.y, 20 * k * impactT, e.hit ? '#ffd27a' : '#9aa0a8', 1 - impactT);
+        }
+      } else if (e.kind === 'missile') {
+        // air-defence missile: accelerating streak with a smoke trail, bursts in the air
+        const u = Math.min(1, t * t * 0.6 + t * 0.4);
+        const wob = (v: number) => ({ x: at(v).x + Math.sin(v * 9 + e.seed * 6) * 3 * k * (1 - v), y: at(v).y + Math.cos(v * 7 + e.seed * 6) * 3 * k * (1 - v) });
+        if (t <= 1.4) {
+          g.strokeStyle = '#d7dde5';
+          g.lineWidth = 1.3 * k;
+          g.globalAlpha = 0.45 * Math.max(0, 1.4 - t);
+          g.beginPath();
+          for (let i = 0; i <= 14; i++) {
+            const p = wob((u * i) / 14);
+            i ? g.lineTo(p.x, p.y) : g.moveTo(p.x, p.y);
+          }
+          g.stroke();
+        }
+        if (t <= 1) {
+          const head = wob(u);
+          this.flash(head.x, head.y, 2.6 * k, '#fff6d0', 1);
+          this.flash(head.x, head.y, 5 * k, '#ff9a3c', 0.35);
+        }
+        if (t < 0.15) this.flash(a.x, a.y, 6 * k, '#ffe2a0', 1 - t / 0.15);
+        if (impactT > 0 && impactT < 1) {
+          if (e.hit) {
+            this.flash(b.x, b.y, 8 * k * (0.5 + impactT), '#fff1b8', 1 - impactT);
+            for (let i = 0; i < 6; i++) {
+              const ang = (i / 6) * Math.PI * 2 + e.seed * 6;
+              this.flash(b.x + Math.cos(ang) * 12 * k * impactT, b.y + Math.sin(ang) * 12 * k * impactT, 1.6 * k, '#ffb347', 1 - impactT);
+            }
+          } else {
+            this.ring(b.x, b.y, 6 * k * impactT, '#d7dde5', 0.6 * (1 - impactT));
+          }
         }
       } else {
         // drone strike: thin dashed line snapping onto the target

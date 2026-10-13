@@ -14,7 +14,7 @@ export function lobbyRoutes(lobby: LobbyService, secret: string) {
     .get('/rooms', (r) => (who(r.headers), ok(lobby.list())))
     .post('/rooms', (r) => ok(lobby.create(who(r.headers), r.body?.name, r.body?.settings, team(r.body?.team))))
     .post('/rooms/:id/join', (r) => ok(lobby.join(who(r.headers), r.params.id, team(r.body?.team))))
-    .post('/rooms/:id/leave', (r) => (lobby.leaveAll(who(r.headers).id), ok()))
+    .post('/rooms/:id/leave', (r) => (lobby.leaveAll(who(r.headers).id, true), ok()))
     .post('/rooms/:id/settings', (r) => ok(lobby.updateSettings(who(r.headers), r.params.id, r.body ?? {})))
     .post('/rooms/:id/bots', (r) => ok(lobby.addBot(who(r.headers), r.params.id, team(r.body?.team))))
     .post('/rooms/:id/bots/remove', (r) => ok(lobby.removeBot(who(r.headers), r.params.id, String(r.body?.slot))))

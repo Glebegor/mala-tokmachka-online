@@ -170,21 +170,80 @@ export class RoadNetwork {
     return { nodes, km: g[b] };
   }
 
+  /** Up to `k` road nodes around p, nearest first, that `accept` (e.g. reachable without crossing a river). */
+  private candidates(p: LngLat, maxKm: number, k: number, accept: (node: LngLat) => boolean): { id: number; km: number }[] {
+    const near: { id: number; km: number }[] = [];
+    this.around(p, maxKm, (id) => {
+      const km = distKm(p, this.nodes[id]);
+      if (km <= maxKm) near.push({ id, km });
+    });
+    near.sort((a, b) => a.km - b.km);
+    const out: { id: number; km: number }[] = [];
+    // spread the picks out: neighbours on the same road add nothing, a node on another road might
+    for (const c of near) {
+      if (out.length >= k) break;
+      if (out.some((o) => distKm(this.nodes[o.id], this.nodes[c.id]) < 3)) continue;
+      if (accept(this.nodes[c.id])) out.push(c);
+    }
+    return out;
+  }
+
   /**
-   * Fastest way from `from` to `to` for something that drives `mult` times faster on roads.
-   * Returns road waypoints to follow (may be empty when going cross-country is quicker).
+   * Quickest road trip from `from` to `to`, in seconds: leave the start cross-country to one of several nearby road
+   * nodes, drive, then leave the road towards the target. `clear(a, b)` says whether the cross-country hop a→b is allowed.
    */
-  route(from: LngLat, to: LngLat, mult: number, accessKm = 40): LngLat[] {
-    const direct = distKm(from, to);
-    if (direct < 8 || mult <= 1) return [];
-    const a = this.nearest(from, accessKm);
-    const b = this.nearest(to, accessKm);
-    if (a < 0 || b < 0 || a === b) return [];
-    const p = this.path(a, b);
-    if (!p) return [];
-    const cost = distKm(from, this.nodes[a]) + p.km / mult + distKm(this.nodes[b], to);
-    if (cost > direct * 0.92) return [];
-    return p.nodes.map((id) => this.nodes[id]);
+  routeTimed(
+    from: LngLat,
+    to: LngLat,
+    o: { roadSpeed: number; offSpeed: number; clear: (a: LngLat, b: LngLat) => boolean; usable?: (node: LngLat) => boolean; accessKm?: number; k?: number },
+  ): { points: LngLat[]; seconds: number } | null {
+    const accessKm = o.accessKm ?? 45;
+    const k = o.k ?? 6;
+    const usable = o.usable ?? (() => true);
+    const entries = this.candidates(from, accessKm, k, (n) => usable(n) && o.clear(from, n));
+    const exits = this.candidates(to, accessKm, k, (n) => usable(n) && o.clear(n, to));
+    if (!entries.length || !exits.length) return null;
+    const exitCost = new Map(exits.map((e) => [e.id, e.km / o.offSpeed]));
+
+    const n = this.nodes.length;
+    const g = new Float64Array(n).fill(Infinity);
+    const prev = new Int32Array(n).fill(-1);
+    const done = new Uint8Array(n);
+    const heap = new MinHeap();
+    const h = (id: number) => distKm(this.nodes[id], to) / o.roadSpeed;
+    for (const e of entries) {
+      const c = e.km / o.offSpeed;
+      if (c < g[e.id]) {
+        g[e.id] = c;
+        heap.push(e.id, c + h(e.id));
+      }
+    }
+    let best = Infinity;
+    let bestNode = -1;
+    while (heap.size) {
+      const cur = heap.pop();
+      if (done[cur]) continue;
+      done[cur] = 1;
+      if (g[cur] + h(cur) >= best) break; // nothing left can beat the best finished trip
+      const out = exitCost.get(cur);
+      if (out !== undefined && g[cur] + out < best) {
+        best = g[cur] + out;
+        bestNode = cur;
+      }
+      for (const e of this.adj[cur]) {
+        const cost = g[cur] + e.km / o.roadSpeed;
+        if (cost < g[e.to]) {
+          g[e.to] = cost;
+          prev[e.to] = cur;
+          heap.push(e.to, cost + h(e.to));
+        }
+      }
+    }
+    if (bestNode < 0) return null;
+    const points: LngLat[] = [];
+    for (let c = bestNode; c !== -1; c = prev[c]) points.push(this.nodes[c]);
+    points.reverse();
+    return { points, seconds: best };
   }
 }
 
