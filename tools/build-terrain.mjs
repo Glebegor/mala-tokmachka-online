@@ -1,5 +1,5 @@
 // Builds a terrain grid (field / forest / hill / mountain / city / water) for a map.
-//  - forest and water are classified from OpenStreetMap standard tiles at zoom 8 (© OpenStreetMap contributors, ODbL)
+//  - forest and water are classified from OpenStreetMap standard tiles at zoom 9 (© OpenStreetMap contributors, ODbL)
 //  - cities come from Natural Earth 1:10m urban areas (public domain)
 //  - hills and mountains come from elevation (Mapzen/AWS Terrain Tiles, terrarium encoding, open data)
 // The grid is uniform in longitude and in Web-Mercator Y so it lines up exactly with the basemap.
@@ -10,7 +10,7 @@ import { PNG } from 'pngjs';
 
 const [bboxArg, urbanFile, cache, out, riversFile] = process.argv.slice(2);
 const [W, S, E, N] = bboxArg.split(',').map(Number);
-const Z = 8, TILE = 256, BLOCK = 2; // one cell = 2×2 tile pixels ≈ 0.8 km
+const Z = 9, TILE = 256, BLOCK = 1; // one cell = one zoom-9 pixel ≈ 0.2 km
 const HILL_RELIEF = 90, MOUNTAIN_RELIEF = 230, MOUNTAIN_ELEV = 900; // metres; relief is measured over ~4 km
 const WORLD = TILE * 2 ** Z;
 const px = (lng) => ((lng + 180) / 360) * WORLD;
@@ -63,14 +63,14 @@ for (let ty = Math.floor(y0 / TILE); ty <= Math.floor((y1 - 1) / TILE); ty++) {
         }
         const n = BLOCK * BLOCK;
         elev[gy * cols + gx] = sum / n;
-        grid[gy * cols + gx] = water * 4 >= n ? WATER : forest * 2 > n ? FOREST : FIELD;
+        grid[gy * cols + gx] = water * 4 >= n ? WATER : forest * 2 >= n ? FOREST : FIELD;
       }
     }
   }
 }
 
 // relief: height range within ~4 km decides hill / mountain. Mountains override forest; hills only replace open field.
-const RADIUS = 3;
+const RADIUS = 10; // cells, ≈ 2 km either side
 const colMin = new Float32Array(cols * rows), colMax = new Float32Array(cols * rows);
 for (let y = 0; y < rows; y++) {
   for (let x = 0; x < cols; x++) {
@@ -130,10 +130,12 @@ for (const f of urban.features) {
 let riverCells = 0;
 if (riversFile) {
   const rivers = JSON.parse(readFileSync(riversFile, 'utf8'));
-  const stamp = (gx, gy) => {
+  const stamp1 = (gx, gy) => {
     if (gx < 0 || gy < 0 || gx >= cols || gy >= rows) return;
     if (grid[gy * cols + gx] !== WATER) (grid[gy * cols + gx] = WATER), riverCells++;
   };
+  // rivers are two cells (~400 m) wide so that nothing can slip across a diagonal
+  const stamp = (gx, gy) => (stamp1(gx, gy), stamp1(gx + 1, gy), stamp1(gx, gy + 1), stamp1(gx + 1, gy + 1));
   for (const f of rivers.features) {
     if (!f.geometry) continue;
     const parts = f.geometry.type === 'LineString' ? [f.geometry.coordinates] : f.geometry.coordinates;

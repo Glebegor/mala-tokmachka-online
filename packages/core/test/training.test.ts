@@ -40,15 +40,19 @@ run(400);
 assert.equal(tc.inside.length, 4);
 const money = me.res.money;
 const terms = sim.courseTerms(tc);
+assert.equal(terms.perSecond, 4, '4 recruits x 0.1 per tick x 10 ticks/s');
 assert.ok(sim.apply('a', { type: 'course', building: tc.id }).ok);
-assert.equal(me.res.money, money - terms.cost.money, 'course is paid for');
+assert.equal(me.res.money, money, 'nothing is charged up front');
 assert.equal(sim.apply('a', { type: 'release', building: tc.id }).ok, false, 'locked in during the course');
 run(terms.seconds - 2);
 assert.equal(tc.inside.length, 4, 'still training');
 run(4);
 assert.equal(tc.inside.length, 0, 'class graduated');
 assert.ok(squad.every((u) => u.rank === 1 && sim.world.units.includes(u)), 'everyone is one rank up and back on the map');
-console.log(`training ok: 4 units, ${terms.seconds}s, cost ${JSON.stringify(terms.cost)}`);
+// add back what the economy earned meanwhile; what is left over is the tuition
+const paid = money - me.res.money + (terms.seconds + 2) * (sim.income.get('a')?.money ?? 0);
+assert.ok(Math.abs(paid - terms.perSecond * terms.seconds) < 6, `tuition was paid as it ran (${paid.toFixed(0)})`);
+console.log(`training ok: 4 units, ${terms.seconds}s, ${terms.perSecond}/s while running, ~${paid.toFixed(0)} money in total`);
 
 // --- waypoints ---
 const scout = squad[0];
@@ -71,3 +75,42 @@ for (let i = 0; i < 3000 && swimmer.path.length; i++) {
 }
 assert.equal(wet, 0, 'never in the river off a bridge');
 console.log(`river ok: unit ${swimmer.path.length ? 'still driving round' : distKm(swimmer.pos, east) < 1 ? 'arrived by bridge' : 'stopped on the near bank'}`);
+
+// --- cauldron: a salient whose neck is closed becomes a pocket, the troops inside are cut off and finally lost ---
+{
+  const s2 = new Sim(rs, 'zaporizhzhia', [
+    { id: 'a', name: 'a', team: 0, bot: false },
+    { id: 'b', name: 'b', team: 1, bot: false },
+  ]);
+  const f = s2.world.front;
+  const k = Math.floor(f.length / 2) - 4;
+  const neck: LngLat = [f[k].lng, f[k].lat];
+  // the front runs south→north with team 0 on the west. Bend nodes k+1..k+7 into a loop bulging east (into team 1's
+  // ground), walked counter-clockwise, whose two ends (the jaws) are only ~2 km apart.
+  const centre: LngLat = [neck[0] + 0.22, neck[1]];
+  for (let i = 1; i <= 7; i++) {
+    const ang = ((-160 + ((i - 1) * 320) / 6) * Math.PI) / 180;
+    f[k + i].lng = centre[0] + 0.2 * Math.cos(ang);
+    f[k + i].lat = centre[1] + 0.13 * Math.sin(ang);
+  }
+  (f[k].lng = neck[0]), (f[k].lat = neck[1] - 0.01);
+  (f[k + 8].lng = neck[0]), (f[k + 8].lat = neck[1] + 0.01);
+  const p0 = s2.player('a')!;
+  const victim = s2.spawnUnit('infantry', p0, centre);
+  assert.equal(s2.side(centre), 0, 'the salient is team 0 ground before it is cut off');
+  for (let i = 0; i < 10; i++) s2.step(0.1);
+  assert.equal(s2.world.pockets.length, 1, 'neck closed: a cauldron forms');
+  assert.equal(s2.world.pockets[0].team, 0, 'team 0 is the one encircled');
+  assert.equal(s2.side(centre), 0, 'ground inside still belongs to the encircled side');
+  assert.ok(victim.encircled, 'unit inside is flagged as encircled');
+  const hp = victim.hp;
+  for (let i = 0; i < 100; i++) s2.step(0.1);
+  assert.ok(victim.hp < hp, 'encircled units lose strength');
+  // squeeze the pocket shut
+  for (const n of s2.world.pockets[0]?.nodes ?? []) (n.lng = centre[0] + (n.lng - centre[0]) * 0.1), (n.lat = centre[1] + (n.lat - centre[1]) * 0.1);
+  for (let i = 0; i < 20; i++) s2.step(0.1);
+  assert.equal(s2.world.pockets.length, 0, 'squeezed pocket collapses');
+  assert.equal(s2.world.units.includes(victim), false, 'the garrison is lost');
+  assert.equal(s2.side(centre), 1, 'the ground goes to the besiegers');
+  console.log('cauldron ok: formed, drained, collapsed');
+}

@@ -1,4 +1,4 @@
-import { type BotDifficulty, distKm, moveToward, nearestNode, offsetKm, sideOf, type LngLat, type Player, type Sim } from '@sw/core';
+import { type BotDifficulty, distKm, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim } from '@sw/core';
 
 const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'gas_station', 'trench', 'signal_station', 'housing', 'antiair', 'training_center', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
 
@@ -70,7 +70,7 @@ export class Bot {
   private command(sim: Sim, p: Player) {
     const w = sim.world;
     const army = w.units.filter((u) => u.owner === p.id && u.def !== 'drone');
-    const enemyPoints = sim.map.capturePoints.filter((cp) => sideOf(w.front, cp.pos) !== p.team);
+    const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchor: LngLat = hq?.pos ?? sim.map.center;
 

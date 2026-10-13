@@ -1,6 +1,6 @@
 import type { LngLat } from './geo';
 import { distKm, kmPerDegLng } from './geo';
-import type { FrontNode, Team } from './state';
+import type { FrontNode, Pocket, Team } from './state';
 
 const KM = 111.32;
 
@@ -117,4 +117,64 @@ export function normalAt(front: FrontNode[], i: number): [number, number] {
   const ty = (b.lat - a.lat) * KM;
   const len = Math.hypot(tx, ty) || 1;
   return [ty / len, -tx / len];
+}
+
+/** Unit normal at `cur` pointing to the right of the direction prev→next (team 1's side), in km space. */
+export function normalOf(prev: FrontNode, cur: FrontNode, next: FrontNode): [number, number] {
+  const tx = (next.lng - prev.lng) * kmPerDegLng(cur.lat);
+  const ty = (next.lat - prev.lat) * KM;
+  const len = Math.hypot(tx, ty) || 1;
+  return [ty / len, -tx / len];
+}
+
+/** Signed area of a closed ring in km² (positive = counter-clockwise, i.e. its inside is on the left). */
+export function ringAreaKm2(nodes: FrontNode[]): number {
+  if (nodes.length < 3) return 0;
+  const k = kmPerDegLng(nodes[0].lat);
+  let a = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const p = nodes[i];
+    const q = nodes[(i + 1) % nodes.length];
+    a += p.lng * k * (q.lat * KM) - q.lng * k * (p.lat * KM);
+  }
+  return a / 2;
+}
+
+export function pointInRing(nodes: { lng: number; lat: number }[], p: LngLat): boolean {
+  let inside = false;
+  for (let i = 0, j = nodes.length - 1; i < nodes.length; j = i++) {
+    const a = nodes[i];
+    const b = nodes[j];
+    if (a.lat > p[1] !== b.lat > p[1] && p[0] < ((b.lng - a.lng) * (p[1] - a.lat)) / (b.lat - a.lat) + a.lng) inside = !inside;
+  }
+  return inside;
+}
+
+/** The pocket (cauldron) this position is inside, if any. */
+export function pocketAt(pockets: Pocket[], p: LngLat): Pocket | null {
+  for (const pocket of pockets) if (pointInRing(pocket.nodes, p)) return pocket;
+  return null;
+}
+
+/**
+ * Look for two stretches of the line that have closed to within `maxKm` of each other (the jaws of a pincer meeting).
+ * Returns the node range [from, to] that would be cut off as a loop, or null. `minGap` ignores neighbours.
+ */
+export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { from: number; to: number } | null {
+  let best: { from: number; to: number; d: number } | null = null;
+  for (let i = 0; i < nodes.length; i++) {
+    const kx = kmPerDegLng(nodes[i].lat);
+    for (let j = i + minGap; j < nodes.length - 1; j++) {
+      // quick reject on latitude before the exact point-to-segment test
+      if (Math.min(Math.abs(nodes[j].lat - nodes[i].lat), Math.abs(nodes[j + 1].lat - nodes[i].lat)) * KM > maxKm * 3) continue;
+      const ax = (nodes[j].lng - nodes[i].lng) * kx, ay = (nodes[j].lat - nodes[i].lat) * KM;
+      const bx = (nodes[j + 1].lng - nodes[i].lng) * kx, by = (nodes[j + 1].lat - nodes[i].lat) * KM;
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy || 1e-9;
+      const t = Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2));
+      const d = Math.hypot(ax + dx * t, ay + dy * t);
+      if (d <= maxKm && (!best || d < best.d)) best = { from: i + 1, to: t < 0.5 ? j : j + 1, d };
+    }
+  }
+  return best && best.to - best.from >= 2 ? { from: best.from, to: best.to } : null;
 }

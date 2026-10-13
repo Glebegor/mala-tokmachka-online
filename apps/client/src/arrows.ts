@@ -1,5 +1,5 @@
 import type maplibregl from 'maplibre-gl';
-import { kmPerDegLng, normalAt, type FrontNode, type LngLat } from '@sw/core';
+import { distKm, kmPerDegLng, nearestNode, type FrontNode, type LngLat, type Shot } from '@sw/core';
 
 interface Arrow {
   tail: LngLat;
@@ -8,24 +8,33 @@ interface Arrow {
   team: 0 | 1;
   power: number; // 0..1
   seed: number;
+  alpha: number; // fades in and out with the fighting
+  live: boolean;
 }
 
+const WINDOW_MS = 5000; // how long a shot keeps a battle "hot"
+const CELL_LNG = 0.3, CELL_LAT = 0.2; // battles are grouped per ~22 km cell
+
 /**
- * Attack arrows in the style of situation maps: one bold tapered arrow per stretch of front that is being pushed,
- * drawn from the attacker's rear across the line, with highlights racing towards the head.
+ * Attack arrows in the style of situation maps. An arrow appears only where units are actually fighting, and only for
+ * fights the player can see: it is built from the shots the server reports, which are already filtered by fog of war.
  */
 export class FrontArrows {
   private canvas: HTMLCanvasElement;
   private g: CanvasRenderingContext2D;
-  private arrows: Arrow[] = [];
+  private arrows = new Map<string, Arrow>();
+  private shots: { t: number; s: Shot }[] = [];
   private raf = 0;
+  private lastBuild = 0;
 
-  constructor(private map: maplibregl.Map, parent: HTMLElement, private colors: string[]) {
+  constructor(private map: maplibregl.Map, parent: HTMLElement, private colors: string[], private front: () => FrontNode[]) {
     this.canvas = document.createElement('canvas');
     this.canvas.className = 'fx arrows';
     parent.append(this.canvas);
     this.g = this.canvas.getContext('2d')!;
     const loop = () => {
+      const now = performance.now();
+      if (now - this.lastBuild > 400) (this.lastBuild = now), this.rebuild(now);
       this.draw();
       this.raf = requestAnimationFrame(loop);
     };
@@ -37,47 +46,74 @@ export class FrontArrows {
     this.canvas.remove();
   }
 
-  /** Rebuild the arrows from the current front. `maxV` is the fastest the front can move. */
-  update(front: FrontNode[], maxV: number) {
-    const minV = maxV * 0.03;
-    const out: Arrow[] = [];
-    const flush = (from: number, to: number) => {
-      // long pushes get several arrows, roughly one per 60 km
-      const parts = Math.max(1, Math.round((to - from + 1) / 7));
-      for (let k = 0; k < parts; k++) {
-        const a = from + Math.floor(((to - from + 1) * k) / parts);
-        const b = from + Math.floor(((to - from + 1) * (k + 1)) / parts) - 1;
-        if (b < a) continue;
-        const mid = Math.round((a + b) / 2);
-        let v = 0;
-        for (let i = a; i <= b; i++) v += front[i].v;
-        v /= b - a + 1;
-        const team: 0 | 1 = v > 0 ? 0 : 1;
-        const s = v > 0 ? 1 : -1;
-        const [nx, ny] = normalAt(front, mid); // unit vector towards team 1's side, km space
-        const power = Math.min(1, Math.abs(v) / (maxV * 0.5));
-        const node = front[mid];
-        const at = (alongKm: number, sideKm: number): LngLat => [
-          node.lng + (nx * s * alongKm - ny * s * sideKm) / kmPerDegLng(node.lat),
-          node.lat + (ny * s * alongKm + nx * s * sideKm) / 111.32,
-        ];
-        const length = 16 + 26 * power;
-        const curve = (mid % 2 ? 1 : -1) * (3 + 5 * power);
-        out.push({ tail: at(-length, curve), bend: at(-length * 0.45, -curve * 0.6), tip: at(5 + 9 * power, 0), team, power, seed: mid * 0.37 });
+  /** Shots from the latest snapshot (visible ones only). */
+  feed(shots: Shot[]) {
+    const t = performance.now();
+    for (const s of shots) this.shots.push({ t, s });
+    if (this.shots.length > 3000) this.shots.splice(0, this.shots.length - 3000);
+  }
+
+  /** Group recent fire into battles and aim one arrow per battle from the attackers at what they are shooting at. */
+  private rebuild(now: number) {
+    this.shots = this.shots.filter((x) => now - x.t < WINDOW_MS);
+    interface Side { n: number; fx: number; fy: number; tx: number; ty: number }
+    const cells = new Map<string, [Side, Side]>();
+    for (const { s } of this.shots) {
+      const mx = (s.from[0] + s.to[0]) / 2, my = (s.from[1] + s.to[1]) / 2;
+      const key = `${Math.floor(mx / CELL_LNG)}|${Math.floor(my / CELL_LAT)}`;
+      let c = cells.get(key);
+      if (!c) cells.set(key, (c = [{ n: 0, fx: 0, fy: 0, tx: 0, ty: 0 }, { n: 0, fx: 0, fy: 0, tx: 0, ty: 0 }]));
+      const side = c[s.team];
+      side.n++;
+      side.fx += s.from[0];
+      side.fy += s.from[1];
+      side.tx += s.to[0];
+      side.ty += s.to[1];
+    }
+    for (const a of this.arrows.values()) a.live = false;
+    const front = this.front();
+    for (const [key, c] of cells) {
+      if (c[0].n + c[1].n < 4) continue; // a stray shot is not a battle
+      // the attacker is whoever the front is yielding to here; with a static front, whoever is firing more
+      let team: 0 | 1 = c[0].n >= c[1].n ? 0 : 1;
+      const any = c[team];
+      const mid: LngLat = [(any.fx + any.tx) / (2 * any.n), (any.fy + any.ty) / (2 * any.n)];
+      if (front.length) {
+        const v = front[nearestNode(front, mid)].v;
+        if (v > 0 && c[0].n) team = 0;
+        else if (v < 0 && c[1].n) team = 1;
       }
-    };
-    let start = -1;
-    for (let i = 1; i < front.length - 1; i++) {
-      const on = Math.abs(front[i].v) >= minV;
-      const same = start >= 0 && Math.sign(front[i].v) === Math.sign(front[start].v);
-      if (on && start < 0) start = i;
-      else if (start >= 0 && (!on || !same)) {
-        if (i - start >= 2) flush(start, i - 1);
-        start = on ? i : -1;
+      const side = c[team];
+      if (side.n < 2) continue;
+      let from: LngLat = [side.fx / side.n, side.fy / side.n];
+      const to: LngLat = [side.tx / side.n, side.ty / side.n];
+      const kx = kmPerDegLng(to[1]);
+      let dx = (to[0] - from[0]) * kx, dy = (to[1] - from[1]) * 111.32;
+      const len = Math.hypot(dx, dy);
+      if (len < 0.05) continue;
+      dx /= len;
+      dy /= len;
+      const power = Math.min(1, (c[0].n + c[1].n) / 40);
+      // start a little behind the attackers and never draw a stub
+      const back = Math.max(5, 12 + 10 * power - len);
+      from = [from[0] - (dx * back) / kx, from[1] - (dy * back) / 111.32];
+      const total = distKm(from, to);
+      const hand = (parseInt(key.replace(/\D/g, '').slice(-3) || '0', 10) % 2 ? 1 : -1) * total * 0.16;
+      const bend: LngLat = [(from[0] + to[0]) / 2 + (-dy * hand) / kx, (from[1] + to[1]) / 2 + (dx * hand) / 111.32];
+      const id = `${key}|${team}`;
+      const old = this.arrows.get(id);
+      if (old) {
+        // ease towards the new position so the arrow does not jitter with every volley
+        const mix = (a: LngLat, b: LngLat): LngLat => [a[0] + (b[0] - a[0]) * 0.35, a[1] + (b[1] - a[1]) * 0.35];
+        old.tail = mix(old.tail, from);
+        old.bend = mix(old.bend, bend);
+        old.tip = mix(old.tip, to);
+        old.power += (power - old.power) * 0.35;
+        old.live = true;
+      } else {
+        this.arrows.set(id, { tail: from, bend, tip: to, team, power, seed: Math.random() * 6, alpha: 0, live: true });
       }
     }
-    if (start >= 0 && front.length - 1 - start >= 2) flush(start, front.length - 2);
-    this.arrows = out;
   }
 
   private draw() {
@@ -87,10 +123,15 @@ export class FrontArrows {
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) (canvas.width = w * dpr), (canvas.height = h * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    if (!this.arrows.length) return;
+    if (!this.arrows.size) return;
     const now = performance.now() / 1000;
 
-    for (const a of this.arrows) {
+    for (const [id, a] of this.arrows) {
+      a.alpha += ((a.live ? 1 : 0) - a.alpha) * 0.08;
+      if (!a.live && a.alpha < 0.03) {
+        this.arrows.delete(id);
+        continue;
+      }
       let p0 = map.project(a.tail), p1 = map.project(a.bend), p2 = map.project(a.tip);
       // keep arrows readable when zoomed far out: stretch short ones about their tip
       const len = Math.hypot(p2.x - p0.x, p2.y - p0.y);
@@ -142,7 +183,7 @@ export class FrontArrows {
 
       const color = this.colors[a.team];
       g.lineJoin = 'round';
-      g.globalAlpha = 0.9;
+      g.globalAlpha = 0.9 * a.alpha;
       g.strokeStyle = '#0b0d10';
       g.lineWidth = 3;
       g.stroke(shape);
@@ -152,7 +193,7 @@ export class FrontArrows {
       // light streaks running up the shaft towards the head (fast)
       g.save();
       g.clip(shape);
-      g.globalAlpha = 0.55;
+      g.globalAlpha = 0.55 * a.alpha;
       g.strokeStyle = '#ffffff';
       g.lineWidth = 2.2;
       const speed = 1.6 + 1.4 * a.power; // cycles per second

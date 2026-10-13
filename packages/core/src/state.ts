@@ -45,6 +45,8 @@ export interface Unit {
   rank: number; // index into ruleset.ranks
   /** Driving in column on a road: fast, but cannot fire and takes extra damage. */
   transport: boolean;
+  /** Cut off inside a cauldron: weaker and bleeding strength until relieved or destroyed. */
+  encircled: boolean;
   /** Id of the building this unit is walking to in order to go inside, 0 = none. */
   enter: number;
   /** Remaining waypoints (server side only). `road` legs use road speed and ignore terrain. */
@@ -88,6 +90,13 @@ export interface FrontNode {
   v: number; // km/s along the normal, + = team 0 advancing
 }
 
+/** A cut-off piece of territory (cauldron): a closed ring of front nodes around ground still held by `team`. */
+export interface Pocket {
+  id: number;
+  team: Team;
+  nodes: FrontNode[];
+}
+
 export interface CapturePoint {
   id: string;
   owner: Team;
@@ -101,6 +110,7 @@ export interface World {
   units: Unit[];
   queue: TrainItem[];
   front: FrontNode[];
+  pockets: Pocket[];
   points: CapturePoint[];
   scores: [number, number];
   winner: Team | null;
