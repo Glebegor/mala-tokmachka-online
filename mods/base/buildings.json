@@ -143,7 +143,7 @@
     "name": "Trench Line",
     "category": "military",
     "icon": "≋",
-    "description": "Cheap fortification. Friendly units and buildings within 6 km take less damage and the front is harder to push there.",
+    "description": "Cheap fortification. Friendly units and buildings within 6 km take less damage and the front is harder to push there. Several trenches covering the same spot do not add up: upgrade one instead (3 levels).",
     "cost": {
       "money": 80,
       "people": 5
@@ -154,14 +154,34 @@
       "radiusKm": 6,
       "mult": 0.25
     },
-    "vision": 3
+    "vision": 3,
+    "levels": [
+      {
+        "cost": {
+          "money": 120,
+          "people": 5
+        },
+        "time": 10,
+        "defenseMult": 0.4,
+        "hp": 450
+      },
+      {
+        "cost": {
+          "money": 220,
+          "metal": 10
+        },
+        "time": 14,
+        "defenseMult": 0.55,
+        "hp": 650
+      }
+    ]
   },
   {
     "id": "bunker",
     "name": "Bunker",
     "category": "military",
     "icon": "▣",
-    "description": "Hardened position: strong damage reduction and front resistance within 8 km.",
+    "description": "Hardened position: strong damage reduction and front resistance within 8 km. Bunkers do not stack with each other (a bunker and a trench do): upgrade it instead (3 levels).",
     "cost": {
       "money": 220,
       "metal": 25
@@ -172,7 +192,27 @@
       "radiusKm": 8,
       "mult": 0.6
     },
-    "vision": 4
+    "vision": 4,
+    "levels": [
+      {
+        "cost": {
+          "money": 300,
+          "metal": 40
+        },
+        "time": 16,
+        "defenseMult": 0.85,
+        "hp": 1400
+      },
+      {
+        "cost": {
+          "money": 500,
+          "metal": 80
+        },
+        "time": 22,
+        "defenseMult": 1.1,
+        "hp": 2000
+      }
+    ]
   },
   {
     "id": "signal_station",

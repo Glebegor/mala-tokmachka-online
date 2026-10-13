@@ -10,7 +10,7 @@ const p4 = (p: LngLat): LngLat => [r4(p[0]), r4(p[1])];
  * Fog of war: own side is fully visible, enemy objects only inside friendly vision/signal radius.
  * Ground units in concealing terrain (forest, city) must be approached closer to be spotted.
  */
-export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[] = []): SnapMsg {
+export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[] = [], countdown = 0): SnapMsg {
   const w = sim.world;
   const fog = sim.ruleset.rules.fogOfWar;
   const watchers: { pos: LngLat; r: number }[] = [];
@@ -30,21 +30,24 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
   return {
     t: 'snap',
     time: Math.round(w.time * 10) / 10,
+    countdown,
     res: me ? { ...me.res } : {},
     energyNet: sim.energyNet.get(playerId) ?? 0,
     rates: { ...(sim.income.get(playerId) ?? {}) },
     buildings: w.buildings
       .filter((b) => b.team === team || seen(b.pos))
       .map((b) => ({
-        id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0,
+        id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0, level: b.level,
+        upgrade: b.team === team && b.upgrade ? { remaining: Math.ceil(b.upgrade.remaining), total: b.upgrade.total } : null,
         course: b.team === team && b.course ? { remaining: Math.ceil(b.course.remaining), total: b.course.total } : null,
         inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank })) : undefined,
       })),
     units: w.units
       .filter((u) => u.team === team || seen(u.pos, sim.defs.u.get(u.def)!.kind === 'air' ? 1 : sim.terrainAt(u.pos).concealment))
-      .map((u) => ({ id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp), target: u.team === team ? u.target : null, cooldown: 0, xp: Math.round(u.xp), rank: u.rank, transport: u.transport, encircled: u.encircled, entering: u.owner === playerId && u.enter ? u.enter : undefined, route: u.owner === playerId && u.path.length ? u.path.filter((w) => w.end).map((w) => p4(w.p)) : undefined })),
+      .map((u) => ({ id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp), target: u.team === team ? u.target : null, cooldown: 0, xp: Math.round(u.xp), rank: u.rank, transport: u.transport, encircled: u.encircled, status: u.status, entering: u.owner === playerId && u.enter ? u.enter : undefined, route: u.owner === playerId && u.path.length ? u.path.filter((w) => w.end).map((w) => p4(w.p)) : undefined })),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),
+    grey: w.grey.map((z) => ({ team: z.team, pos: p4(z.pos), r: z.r })),
     pockets: w.pockets.map((p) => ({ id: p.id, team: p.team, nodes: p.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat) })) })),
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],

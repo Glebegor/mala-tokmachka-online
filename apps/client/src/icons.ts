@@ -13,3 +13,23 @@ export function iconHtml(name: string | undefined, color: string): string {
   if (name) return `<span class="ico-svg glyph-ico" style="color:${color}">${name.slice(0, 2)}</span>`;
   return `<span class="ico-svg dot-ico" style="background:${color}"></span>`;
 }
+
+/** Buffs and debuffs: icon, name and what it does (`v` is the value sent by the server). */
+const pct = (v: number) => `${Math.round(v * 100)}%`;
+export const STATUS: Record<string, { name: string; icon: string; text: (v: number) => string }> = {
+  cover: { name: 'In cover', icon: '<path d="M8 1.5 13.5 3.5v4.2c0 3.2-2.3 5.6-5.5 6.8C4.8 13.3 2.5 10.9 2.5 7.7V3.5z" fill="currentColor"/>', text: (v) => `Takes ${pct(v)} less damage from the terrain it stands in.` },
+  concealed: { name: 'Concealed', icon: '<path d="M1.5 8s2.4-4 6.5-4 6.5 4 6.5 4-2.4 4-6.5 4-6.5-4-6.5-4z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M3 13 13 3" stroke="currentColor" stroke-width="1.6"/>', text: (v) => `Enemies must come within ${pct(v)} of their normal sight range to spot it.` },
+  highground: { name: 'High ground', icon: '<path d="M1.5 13 6 5l2.5 4 2-2.5 4 6.5z" fill="currentColor"/>', text: (v) => `Sees ${pct(v - 1)} further.` },
+  fortified: { name: 'Fortified', icon: '<path d="M2.5 14V5h2v2h2V5h3v2h2V5h2v9z" fill="currentColor"/>', text: (v) => `Near trenches or bunkers: incoming damage is divided by ${v.toFixed(2)}.` },
+  veteran: { name: 'Veteran', icon: '<path d="M8 1.5l1.9 4.1 4.4.5-3.3 3 .9 4.4L8 11.3l-3.9 2.2.9-4.4-3.3-3 4.4-.5z" fill="currentColor"/>', text: (v) => `Rank bonus: deals ${pct(v - 1)} more damage, with more health and range.` },
+  exposed: { name: 'Exposed', icon: '<path d="M8 1.5 14.5 13h-13z" fill="none" stroke="currentColor" stroke-width="1.6"/><path d="M8 6v3.5M8 11.2v.6" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>', text: (v) => `In the water: takes ${pct(v)} more damage.` },
+  lowsight: { name: 'Poor sight', icon: '<path d="M1.5 8s2.4-3.2 6.5-3.2S14.5 8 14.5 8" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 10.5 3 12.5M8 11v2.2M12 10.5l1 2" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/>', text: (v) => `Sight range cut to ${pct(v)} by the terrain.` },
+  slowed: { name: 'Slowed', icon: '<path d="M3 3.5 8 8l5-4.5M3 8.5 8 13l5-4.5" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>', text: (v) => `Moves at ${pct(v)} speed across this terrain. Roads avoid this.` },
+  transport: { name: 'Transport mode', icon: '<path d="M1.5 4h8v6h-8zM9.5 6h3l2 2.2V10h-5z" fill="currentColor"/><circle cx="4.5" cy="11.5" r="1.7" fill="currentColor"/><circle cx="11.5" cy="11.5" r="1.7" fill="currentColor"/>', text: (v) => `Driving in column: cannot fire and takes ${pct(v - 1)} more damage.` },
+  encircled: { name: 'Encircled', icon: '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.2"/><circle cx="8" cy="8" r="2" fill="currentColor"/>', text: (v) => `Cut off in a cauldron: deals only ${pct(v)} damage and loses strength every second.` },
+};
+
+export function statusIconHtml(id: string, good: boolean): string {
+  const s = STATUS[id];
+  return `<svg class="st-ico ${good ? 'good' : 'bad'}" viewBox="0 0 16 16">${s?.icon ?? '<circle cx="8" cy="8" r="4" fill="currentColor"/>'}</svg>`;
+}

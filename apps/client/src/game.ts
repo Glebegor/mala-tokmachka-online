@@ -1,13 +1,13 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  distKm, distToFrontKm, offsetKm, pointInRing, RoadNetwork, TerrainGrid,
+  DEBUFFS, distKm, distToFrontKm, offsetKm, pointInRing, RoadNetwork, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
 import { clear, h } from './dom';
 import { ShotFx } from './fx';
-import { iconHtml } from './icons';
+import { iconHtml, STATUS, statusIconHtml } from './icons';
 import { FrontArrows } from './arrows';
 import { drawNato, echelonFor, natoId, parseNatoId } from './nato';
 
@@ -83,6 +83,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const toasts = h('div', { class: 'toasts' });
   const hint = h('div', { class: 'hint' }, 'Connecting…');
   const boxEl = h('div', { class: 'selbox' });
+  const countEl = h('div', { class: 'countdown' });
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const leave = () => {
     closed = true;
@@ -99,7 +100,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   app.append(
     h('div', { class: 'game' }, mapEl,
       h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
-      palette, side, groupBar, terrainChip, toasts, hint, boxEl),
+      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl),
   );
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
@@ -144,7 +145,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.produces) f.push(`Produces ${amounts(d.produces, true)}`);
     if (d.consumes) f.push(`Uses ${amounts(d.consumes, true)}`);
     if (d.aura) f.push(`+${Math.round((d.aura.outputMult - 1) * 100)}% output within ${d.aura.radiusKm} km`);
-    if (d.defense) f.push(`Defence +${Math.round(d.defense.mult * 100)}% within ${d.defense.radiusKm} km`);
+    if (d.defense) f.push(`Defence +${Math.round(d.defense.mult * 100)}% within ${d.defense.radiusKm} km (same kind does not stack)`);
+    if (d.levels) f.push(`Upgradable to level ${d.levels.length + 1}: ${d.levels.map((l) => `+${Math.round((l.defenseMult ?? 0) * 100)}%`).join(', ')}`);
     if (d.attack) f.push(`Hits ${d.attack.targets} targets: ${d.attack.damage} dmg/s, ${d.attack.range} km`);
     if (d.crossing) f.push(`River crossing within ${d.crossing.radiusKm} km`);
     if (d.training) f.push(`Courses for ${d.training.minUnits}–${d.training.capacity} units, ${d.training.baseTime + d.training.timePerRank}s and up`);
@@ -251,7 +253,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -273,11 +275,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'line-width': ['interpolate', ['linear'], ['zoom'], 5, ['case', ['==', ['get', 'major'], 1], 0.9, 0.4], 10, ['case', ['==', ['get', 'major'], 1], 2.6, 1.4]],
         },
       });
+      // blue zone: ground held by team 0, the mirror image of the red occupied zone
+      map.addLayer({ id: 'held-fill', type: 'fill', source: 'held', paint: { 'fill-color': TEAM_COLOR[0], 'fill-opacity': 0.09, 'fill-antialias': false } });
       // front: flat occupied tint, a hard-edged contact zone, and a crisp cased line with sharp corners (no blur, no rounding)
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#e5383b', 'fill-opacity': 0.12, 'fill-antialias': false } });
       map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
       map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
+      // grey zone: contested ground behind the line
+      map.addLayer({ id: 'grey-fill', type: 'fill', source: 'grey', paint: { 'fill-color': '#b9bfc8', 'fill-opacity': 0.34 } });
+      map.addLayer({ id: 'grey-line', type: 'line', source: 'grey', paint: { 'line-color': '#e3e7ec', 'line-width': 1.2, 'line-opacity': 0.7, 'line-dasharray': [2, 2] } });
       // cauldrons: yellow broken ring around the cut-off ground
       map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
       map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
@@ -310,6 +317,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (import.meta.env.DEV) (window as any).__sw = { map, fx, arrows, snap: () => snap, fakePockets: [] };
       mapReady = true;
       if (snap) render();
+      showStart();
+      // tell the server the map is drawn: the 3-2-1 countdown waits for every player
+      map.once('idle', () => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ready' } satisfies ClientMsg)));
+      setTimeout(() => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ready' } satisfies ClientMsg)), 6000);
       requestAnimationFrame(animate);
     });
 
@@ -407,6 +418,49 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         e.preventDefault();
         if (selUnits.size) makeGroup(n);
       } else selectGroup(n, true);
+    }
+  }
+
+  // ---------- start: countdown and "you are here" ----------
+  let startMarker: maplibregl.Marker | null = null;
+  let startShown = false;
+  let lastCount = -2;
+  /** Fly to the player's headquarters and point a big arrow at it. */
+  function showStart() {
+    if (startShown || !snap || !mapReady) return;
+    const hq = snap.buildings.find((b) => b.owner === me && b.def === 'hq');
+    if (!hq) return;
+    startShown = true;
+    const el = h('div', { class: 'start-arrow' }, h('span', {}, 'YOU START HERE'), h('i', {}));
+    startMarker = new maplibregl.Marker({ element: el, anchor: 'bottom', offset: [0, -26] }).setLngLat(hq.pos).addTo(map);
+    if (snap.countdown !== 0) map.jumpTo({ center: hq.pos, zoom: 8.6 });
+    else setTimeout(removeStart, 6000); // rejoining a running match: just a brief pointer
+  }
+  function removeStart() {
+    startMarker?.getElement().classList.add('gone');
+    const m = startMarker;
+    startMarker = null;
+    setTimeout(() => m?.remove(), 600);
+  }
+  function showCountdown(n: number) {
+    if (n === lastCount) return;
+    const was = lastCount;
+    lastCount = n;
+    if (n > 0) {
+      countEl.textContent = String(n);
+      countEl.className = 'countdown show';
+      void countEl.offsetWidth; // restart the pop animation for every number
+      countEl.classList.add('pop');
+    } else if (n < 0) {
+      countEl.textContent = 'Waiting for players…';
+      countEl.className = 'countdown show small';
+    } else if (was !== -2 && was !== 0) {
+      countEl.textContent = 'GO';
+      countEl.className = 'countdown show pop go';
+      setTimeout(() => (countEl.className = 'countdown'), 900);
+      setTimeout(removeStart, 7000);
+    } else {
+      countEl.className = 'countdown';
     }
   }
 
@@ -539,6 +593,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
     const pocket = snap.pockets.find((k) => pointInRing(k.nodes, p));
     if (pocket) return pocket.team === init.team ? 'this ground is encircled' : 'not your territory';
+    if (snap.grey.some((z) => distKm(z.pos, p) <= z.r)) return 'contested ground (grey zone)';
     if (d < 0) return 'not your territory';
     if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     if (terrain?.at(p) === 'water') return 'cannot build on water';
@@ -653,7 +708,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         side.append(
           h('h3', {}, `${d.icon} ${d.name}`),
           h('div', { class: 'muted' }, d.description ?? ''),
-          h('div', { class: 'stat' }, `HP ${b.hp}/${d.hp}`),
+          h('div', { class: 'stat' }, `HP ${b.hp}/${d.levels?.[b.level - 2]?.hp ?? d.hp}`),
         );
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
         if (d.training && b.progress >= 1) {
@@ -687,6 +742,21 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             if (inside.length) side.append(h('button', { onClick: () => send({ type: 'release', building: b.id }) }, 'Send everyone out'));
             side.append(h('div', { class: 'muted' }, 'Select ground units and right click this building to send them in. Graduates come out one rank higher at full strength.'));
           }
+        }
+        const next = d.levels?.[b.level - 1];
+        if (d.levels && b.progress >= 1) {
+          const maxLevel = d.levels.length + 1;
+          const cur = d.levels[b.level - 2]?.defenseMult ?? d.defense?.mult ?? 0;
+          side.append(h('div', { class: 'stat' }, `Level ${b.level}/${maxLevel}${d.defense ? ` · defence +${Math.round(cur * 100)}%` : ''}`));
+          if (b.upgrade) {
+            side.append(h('div', { class: 'stat' }, `Upgrading: ${b.upgrade.remaining}s left`), h('div', { class: 'bar' }, h('i', { style: { width: `${Math.round((1 - b.upgrade.remaining / b.upgrade.total) * 100)}%`, background: 'var(--accent)' } })));
+          } else if (next) {
+            side.append(h('button', { class: 'bld', onClick: () => send({ type: 'upgrade', building: b.id }) },
+              h('span', { class: 'ico' }, '⇧'),
+              h('span', { class: 'meta' }, h('b', {}, `Upgrade to level ${b.level + 1} · ${next.time}s`), costHtml(next.cost, snap.res),
+                h('small', {}, `${next.defenseMult ? `defence +${Math.round(next.defenseMult * 100)}%` : ''}${next.hp ? ` · ${next.hp} HP` : ''}`))));
+          }
+          if (d.defense) side.append(h('div', { class: 'muted' }, `Only the best ${d.name.toLowerCase()} in range counts; different kinds of fortification add up.`));
         }
         if (d.attack) side.append(h('div', { class: 'stat' }, `Engages ${d.attack.targets} targets within ${d.attack.range} km`));
         if (d.crossing) side.append(h('div', { class: 'stat' }, `River crossing radius ${d.crossing.radiusKm} km`));
@@ -723,8 +793,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           ...unitFacts(d).map((f) => h('div', { class: 'fact' }, f)),
         );
         if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Heading to the training centre'));
-        if (u.encircled) side.append(h('div', { class: 'stat', style: { color: '#ffd84a' } }, 'Encircled: cut off from supply, losing strength. Break out or be relieved.'));
-        if (u.transport) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Transport mode: on the road, cannot fire'));
+        side.append(statusList(u.status.map(([id, v]) => ({ id, v, n: 1 })), true));
       } else {
         const by = new Map<string, UnitView[]>();
         mine.forEach((u) => by.set(u.def, [...(by.get(u.def) ?? []), u]));
@@ -735,6 +804,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
       }
 
+      if (mine.length > 1) {
+        // how many of the selected units are under each effect
+        const agg = new Map<string, { id: string; v: number; n: number }>();
+        for (const u of mine) for (const [id, v] of u.status) agg.set(id, { id, v, n: (agg.get(id)?.n ?? 0) + 1 });
+        side.append(statusList([...agg.values()], false));
+      }
       if (mine.some((u) => rk[u.rank + 1] && defU.get(u.def)?.kind !== 'air')) {
         side.append(h('div', { class: 'muted' }, `Ranks are earned in combat (${init.ruleset.rules.xpPerKill} XP per kill) or in a Training Centre: right click one with these units selected.`));
       }
@@ -754,6 +829,27 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     side.classList.toggle('open', side.childElementCount > 0);
   }
 
+  /** Buffs and debuffs spelled out: icon, name and (for a single unit) exactly what each one does. */
+  function statusList(items: { id: string; v: number; n: number }[], detailed: boolean) {
+    const box = h('div', { class: 'status-list' });
+    if (!items.length) {
+      box.append(h('div', { class: 'muted' }, 'No buffs or debuffs.'));
+      return box;
+    }
+    items.sort((a, b) => Number(DEBUFFS.has(a.id)) - Number(DEBUFFS.has(b.id)));
+    for (const it of items) {
+      const good = !DEBUFFS.has(it.id);
+      const def = STATUS[it.id];
+      const ico = h('span', { class: 'st' });
+      ico.innerHTML = statusIconHtml(it.id, good);
+      box.append(
+        h('div', { class: 'status ' + (good ? 'good' : 'bad') }, ico,
+          h('div', {}, h('b', {}, `${def?.name ?? it.id}${it.n > 1 || !detailed ? ` ×${it.n}` : ''}`), detailed || it.n ? h('small', {}, def?.text(it.v) ?? '') : null)),
+      );
+    }
+    return box;
+  }
+
   function unitIcon(d: UnitDef, rank: number) {
     const c = h('canvas', { class: 'nato-ico', width: 128, height: 128 });
     c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: TEAM_COLOR[init!.team], symbol: d.symbol ?? 'infantry', echelon: '', rank, selected: false, own: true, transport: false }), 0, 0);
@@ -763,11 +859,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   // ---------- snapshot → view ----------
   let lastPalette = 0;
   function onSnapshot(s: SnapMsg) {
-    if (import.meta.env.DEV) s.pockets.push(...((window as any).__sw?.fakePockets ?? [])); // browser tests draw cauldrons this way
+    if (import.meta.env.DEV) s.pockets.push(...((window as any).__sw?.fakePockets ?? [])), s.grey.push(...((window as any).__sw?.fakeGrey ?? [])); // browser tests draw cauldrons this way
     snap = s;
     if (shown.length !== s.front.length) shown = s.front.map((n) => ({ ...n }));
     pruneGroups();
     for (const id of selUnits) if (!s.units.some((u) => u.id === id)) selUnits.delete(id);
+    showCountdown(s.countdown);
+    showStart();
     fx?.add(s.shots);
     arrows?.feed(s.shots);
     renderRes();
@@ -802,7 +900,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const d = defU.get(u.def);
         const own = u.owner === me;
         const sel = selUnits.has(u.id);
-        const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled });
+        const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
         return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), icon, z: sel ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: u.pos } };
       }),
     });
@@ -900,6 +998,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       m.el.classList.toggle('selected', selBuilding === b.id);
       m.el.style.setProperty('--p', String(b.progress));
       m.el.dataset.n = b.inside?.length ? String(b.inside.length) : '';
+      m.el.dataset.lv = b.level > 1 ? 'I'.repeat(b.level) : '';
       m.el.classList.toggle('busy', !!b.course);
       if (done && !m.done) {
         m.done = true;
@@ -914,6 +1013,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         setTimeout(() => m.marker.remove(), 400);
         bMarkers.delete(id);
       }
+    }
+
+    const greyKey = snap.grey.map((z) => `${z.pos[0]},${z.pos[1]}`).join('|');
+    if (greyKey !== lastGrey) {
+      lastGrey = greyKey;
+      (map.getSource('grey') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.grey.map((z) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(z.pos, z.r, 40)] } })) });
     }
 
     snap.points.forEach((p) => pMarkers.get(p.id)?.style.setProperty('--c', TEAM_COLOR[p.owner]));
@@ -946,9 +1051,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
     (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: [line, ...holes, ...patches] } } as any);
     (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes], ...patches.map((p) => [p])] } } as any);
+    // everything outside the occupied area (inside a box well beyond the map) is the blue zone
+    const world: LngLat[] = [[5, 30], [65, 30], [65, 65], [5, 65], [5, 30]];
+    (map.getSource('held') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[world, [...line, ...init.map.occupiedClosure, line[0]], ...patches], ...holes.map((p) => [p])] } } as any);
     (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
   }
   let frontDrawn = false;
+  let lastGrey = '-';
   let lastPockets = '';
 
   const ping = setInterval(() => (closed ? clearInterval(ping) : ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ping' } satisfies ClientMsg))), 15000);

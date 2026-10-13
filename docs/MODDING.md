@@ -25,14 +25,14 @@ All `content` keys are optional. Definitions are validated at load (unknown reso
 - **Resources** – `{ id, name, color, start, cap }`. `energy` is special: it is a stock fed by `produces.energy` and drained by `consumes.energy`.
 - **Buildings** – see `mods/base/buildings.json`. Mechanics are composable fields: `produces`, `consumes`, `aura`, `defense`, `vision`, `trains`,
   `attack` (`{ range, damage, targets: air|ground|all, fx, missRate }`), `crossing` (`{ radiusKm, speed }`), `needsWaterWithinKm`,
-  `training` (`{ minUnits, capacity, baseTime, timePerRank }`). `description` is shown on the hover card.
+  `training` (`{ minUnits, capacity, baseTime, timePerRank }`), `levels` (`[{ cost, time, defenseMult, hp }]`, upgrades to level 2, 3, …). `description` is shown on the hover card.
   A building with id `hq` is required.
 - **Units** – `{ id, kind: ground|air, cost, trainTime, hp, speed (km/s), range (km), damage (dps), vision (km) }` plus
   `mobility` (key into terrain speed tables: foot, tracked, wheeled, or your own), `symbol` (NATO icon: infantry, armor,
   mechanized, artillery, uav, recon, antiair, engineer, supply), `fx` (burst, shell, arc, beam, missile), `missRate` (cosmetic) and `airDamage` (multiplier against aircraft).
 - **Terrain** – `{ id, name, color, speed: { <mobility>: mult }, cover, concealment, frontResist, barrier?: { minCells, mobility[] } }`. Ids must match the map grid legend.
 - **Ranks** – `{ id, name, xp, damage, hp, range, cost }`, ordered by `xp`. The first one is what new units start with;
-  `cost` is what a training course charges per unit to reach that rank.
+  training courses are charged per tick through `rules.courseCostPerTick` / `courseCostPerRank`, so `cost` is normally `{}`.
 - **Maps** – bounds, initial `front` polyline (team 0 on the left of its direction, team 1 on the right), `occupiedClosure`
   (points that close team 1's side into a polygon for drawing), `capturePoints`, `spawns`, and optional `roadsFile` /
   `terrainFile` produced by `tools/build-roads.mjs` and `tools/build-terrain.mjs`. `tools/gen-spawns.mts` generates mirrored spawn pairs. Run `npm run check:maps` to verify that
@@ -45,7 +45,7 @@ All `content` keys are optional. Definitions are validated at load (unknown reso
 sw.on('pointCaptured', (e) => sw.giveResource(sw.teamPlayers(e.team)[0], 'money', 100));
 ```
 
-Events: `tick` (1/s), `buildingCompleted`, `buildingDestroyed`, `unitTrained`, `unitKilled`, `unitPromoted`, `courseFinished`, `pointCaptured`.
+Events: `tick` (1/s), `buildingCompleted`, `buildingDestroyed`, `unitTrained`, `unitKilled`, `unitPromoted`, `courseFinished`, `pointCaptured`, `cauldronFormed`, `cauldronDestroyed`.
 API: `sw.on`, `sw.giveResource`, `sw.teamPlayers`, `sw.toast`, `sw.log`.
 
 Security: scripts have no I/O and a CPU timeout, but `node:vm` is not a hard boundary. Only install mods you trust.

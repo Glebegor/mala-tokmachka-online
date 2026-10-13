@@ -2,7 +2,8 @@
 
 ```
 client (Vite + MapLibre) ──HTTP/WS──> gateway :8080 ──> auth :4001
-                                                   ├──> lobby :4002 ──(internal key)──> game :4003
+                                                   ├──> lobby :4002 ──(internal key)──> game :4003 ──(match results)──> profile :4004
+                                                   ├──> profile :4004
                                                    └──(WS proxy, token verified)───────> game :4003
 ```
 
@@ -13,6 +14,7 @@ client (Vite + MapLibre) ──HTTP/WS──> gateway :8080 ──> auth :4001
 | `services/auth` | Accounts and tokens. `domain` (entities + ports) → `application` (use cases) → `infrastructure` (JSON repo, scrypt) → `interface` (HTTP). |
 | `services/lobby` | Rooms, 8v8 slots, bot fill, launches matches in the game service. |
 | `services/game` | Authoritative match servers: mod loader, sandboxed script host, bots, tick loop, per-player fog-filtered snapshots over WebSocket. |
+| `services/profile` | Career statistics and leaderboard, fed by match reports from the game service. |
 | `services/gateway` | Single public entry: REST routing, WebSocket authentication and proxying. |
 | `apps/client` | Map rendering, building construction animation, HUD, input. |
 
@@ -32,6 +34,8 @@ Dependencies point inward: interface → application → domain; infrastructure 
   `TerrainGrid.barrier`) can only be crossed on road legs (bridges) or inside the radius of a friendly `crossing` building.
   Orders can be queued (`queue: true`).
 - **Terrain** (`terrain.ts`): run-length-encoded grid aligned with Web Mercator. Terrain definitions are mod data.
+- **Cauldrons** (`findPinch`, `Sim.pinch`, `Sim.collapsePockets`): `world.pockets` holds closed rings cut from the main
+  line when its jaws meet. `Sim.side()` checks pockets before the main line. Pocket rings move by the same force rule.
 - **Combat**: nearest enemy in range, one salvo per second; cover (terrain) and fortifications reduce damage.
   Every salvo is also reported as a `Shot` for client animation. Damage and kills give XP; ranks multiply damage/HP/range.
 - **Economy**: money, energy, people (+ ore, metal, fuel from the base mod). Energy deficit slows production; rail hubs and
@@ -43,7 +47,7 @@ Dependencies point inward: interface → application → domain; infrastructure 
 
 - Matches live in memory in one game process; scale out by running more game instances and having lobby pick one.
 - Services talk plain HTTP with a shared internal key; use mTLS or a message bus for real deployments.
-- The front does not check for self-intersection; extreme pincer moves could cross it over itself.
+- A cauldron cannot be re-joined to the main front; its garrison can only walk out.
 - Cross-country legs are straight lines: a unit whose straight line hits a river with no usable road or crossing gets no route.
 - Groups are client-side (not shared with allies, lost on page reload).
 - Capture-the-flag and destruction game modes are not implemented yet.

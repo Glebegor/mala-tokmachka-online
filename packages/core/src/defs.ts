@@ -35,6 +35,8 @@ export interface BuildingDef {
   attack?: { range: number; damage: number; targets: 'air' | 'ground' | 'all'; fx?: string; missRate?: number };
   /** Boats/pontoons: friendly ground units may cross barrier water inside this radius. */
   crossing?: { radiusKm: number; speed: number };
+  /** Upgrades bought with resources: entry 0 is level 2, entry 1 is level 3, … */
+  levels?: { cost: ResourceAmounts; time: number; defenseMult?: number; hp?: number }[];
   /** Training centre: ground units that walk in are schooled in batches and come out one rank higher. */
   training?: { minUnits: number; capacity: number; baseTime: number; timePerRank: number };
   /** Must be built within this many km of barrier water (river bank). */
@@ -151,6 +153,11 @@ export interface RulesConfig {
   cauldronScore: number; // score per unit destroyed when a cauldron collapses
   courseCostPerTick: number; // money per unit per simulation tick while a course runs
   courseCostPerRank: number; // added per rank the unit already holds
+  greyZoneSeconds: number; // unopposed time behind the front before ground turns grey
+  greyZoneSoloKm: number; // "unopposed" = no enemy unit this close
+  greyZoneRadiusKm: number;
+  greyZoneTtl: number; // seconds a grey zone lasts after the troops leave
+  greyZonePush: number; // extra force for the infiltrating side on front nodes at the zone
 }
 
 export interface ScriptSource {
@@ -203,4 +210,9 @@ export const DEFAULT_RULES: RulesConfig = {
   cauldronScore: 40,
   courseCostPerTick: 0.1,
   courseCostPerRank: 0.05,
+  greyZoneSeconds: 10,
+  greyZoneSoloKm: 6,
+  greyZoneRadiusKm: 5,
+  greyZoneTtl: 20,
+  greyZonePush: 5,
 };

@@ -7,10 +7,10 @@ Build civil and war infrastructure, command units by hand, and push a living fro
 
 ```
 npm install
-npm run dev        # auth :4001, lobby :4002, game :4003, gateway :8080, client :5173
+npm run dev        # auth :4001, lobby :4002, game :4003, profile :4004, gateway :8080, client :5173
 ```
 
-Open http://localhost:5173, register, create a room, start (empty slots are filled with bots).
+Open http://localhost:5173, register, create a room, add bots with `+ Bot` if you want opponents, and start.
 The basemap uses CARTO's free dark tiles, so it needs internet access.
 
 `npm test` runs a headless 8v8 bot match against the simulation (`npm test -- zaporizhzhia` for the small map).

@@ -2,6 +2,7 @@
  * NATO APP-6 style unit markers drawn on canvas and registered as map images on demand.
  * Frame shape = affiliation (friendly rectangle, hostile diamond); colour = side; icon = branch;
  * mark on top of the frame = echelon (size of the formation); chevrons to its right = veterancy rank;
+ * triangles to its left = buffs (green, up) and debuffs (red, down);
  * wheels below = transport mode.
  */
 export const NATO_PREFIX = 'nato|';
@@ -19,16 +20,19 @@ export interface NatoSpec {
   transport: boolean;
   /** Cut off in a cauldron. */
   encircled?: boolean;
+  /** Number of buffs / debuffs shown as pips on the left of the frame. */
+  buffs?: number;
+  debuffs?: number;
 }
 
 export function natoId(s: NatoSpec): string {
-  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}|${s.encircled ? 1 : 0}`;
+  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}|${s.encircled ? 1 : 0}|${Math.min(4, s.buffs ?? 0)}|${Math.min(4, s.debuffs ?? 0)}`;
 }
 
 export function parseNatoId(id: string): NatoSpec | null {
   if (!id.startsWith(NATO_PREFIX)) return null;
-  const [, aff, color, symbol, echelon, rank, sel, own, tr, enc] = id.split('|');
-  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1', encircled: enc === '1' };
+  const [, aff, color, symbol, echelon, rank, sel, own, tr, enc, bf, df] = id.split('|');
+  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1', encircled: enc === '1', buffs: Number(bf) || 0, debuffs: Number(df) || 0 };
 }
 
 /** Echelon mark for a formation of n units. */
@@ -181,6 +185,27 @@ export function drawNato(spec: NatoSpec): ImageData {
       g.stroke();
     }
     g.restore();
+  }
+
+  // buffs (green, pointing up) and debuffs (red, pointing down) stacked on the left-hand side of the frame
+  const pips = [...Array(Math.min(4, spec.buffs ?? 0)).fill(true), ...Array(Math.min(4, spec.debuffs ?? 0)).fill(false)].slice(0, 5);
+  if (pips.length) {
+    const x = cx - hw - 7;
+    g.lineJoin = 'round';
+    pips.forEach((good: boolean, i: number) => {
+      const y = cy + (i - (pips.length - 1) / 2) * 7.6;
+      const s = good ? -1 : 1;
+      g.beginPath();
+      g.moveTo(x, y + 3.3 * s);
+      g.lineTo(x + 4, y - 2.8 * s);
+      g.lineTo(x - 4, y - 2.8 * s);
+      g.closePath();
+      g.fillStyle = good ? '#4ade80' : '#ff5a5a';
+      g.strokeStyle = INK;
+      g.lineWidth = 1.3;
+      g.fill();
+      g.stroke();
+    });
   }
 
   // veterancy: chevrons stacked on the right-hand side of the frame

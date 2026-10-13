@@ -4,7 +4,7 @@ import { clamp, distKm, kmPerDegLng, moveToward, type LngLat } from './geo';
 import { buildFront, distToFrontKm, findPinch, normalOf, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
-import type { Building, FrontNode, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
+import type { Building, FrontNode, Player, Pocket, Shot, SlotInit, Team, Unit, UnitStatus, Waypoint, World } from './state';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
@@ -74,12 +74,14 @@ export class Sim {
       queue: [],
       front: buildFront(this.map.front, r.frontNodeSpacingKm),
       pockets: [],
+      grey: [],
       points: this.map.capturePoints.map((p) => ({ id: p.id, owner: 0 as Team })),
       scores: [0, 0],
       winner: null,
       winReason: null,
       nextId: 1,
       mapId: this.map.id,
+      stats: Object.fromEntries(players.map((p) => [p.id, { kills: 0, losses: 0, buildingsBuilt: 0, buildingsDestroyed: 0, unitsTrained: 0, damage: 0 }])),
     };
     this.world = w;
     const counters: [number, number] = [0, 0];
@@ -104,7 +106,7 @@ export class Sim {
   private spawnBuilding(def: string, p: Player, pos: LngLat, done = false): Building {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
-    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, cooldown: 0, inside: [], course: null };
+    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, cooldown: 0, level: 1, upgrade: null, inside: [], course: null };
     this.world.buildings.push(b);
     return b;
   }
@@ -112,7 +114,7 @@ export class Sim {
   spawnUnit(def: string, p: Player, pos: LngLat): Unit {
     const d = this.defs.u.get(def)!;
     pos = this.dry(d, pos);
-    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, transport: false, encircled: false, enter: 0, path: [], cap: 0 };
+    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, transport: false, encircled: false, infil: 0, status: [], enter: 0, path: [], cap: 0 };
     this.world.units.push(u);
     return u;
   }
@@ -203,6 +205,7 @@ export class Sim {
         const dist = distToFrontKm(w.front, cmd.pos) * (p.team === 0 ? 1 : -1);
         const pocket = w.pockets.length ? pocketAt(w.pockets, cmd.pos) : null;
         if (pocket) return fail(pocket.team === p.team ? 'this ground is encircled' : 'not your territory');
+        if (w.grey.some((z) => distKm(z.pos, cmd.pos) <= z.r)) return fail('contested ground (grey zone)');
         if (dist < 0) return fail('not your territory');
         if (dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
@@ -268,6 +271,17 @@ export class Sim {
         if (!b || b.owner !== p.id || !b.inside.length) return fail('nobody inside');
         if (b.course) return fail('a course is in progress');
         this.evict(b);
+        return ok();
+      }
+      case 'upgrade': {
+        const b = w.buildings.find((x) => x.id === cmd.building);
+        if (!b || b.owner !== p.id || b.progress < 1) return fail('building unavailable');
+        const next = this.defs.b.get(b.def)!.levels?.[b.level - 1];
+        if (!next) return fail('already at the highest level');
+        if (b.upgrade) return fail('upgrade already in progress');
+        if (!canAfford(p.res, next.cost)) return fail('not enough resources');
+        pay(p.res, next.cost);
+        b.upgrade = { remaining: next.time, total: next.time };
         return ok();
       }
       case 'demolish': {
@@ -435,6 +449,8 @@ export class Sim {
     this.frontline(dt);
     this.territory(dt);
     this.checkVictory();
+    if (w.tick % 2 === 0) this.refreshStatus();
+    if (w.tick % r.tickRate === 0) this.greyZones();
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
     if (w.time >= r.matchSeconds && w.winner === null) {
@@ -448,7 +464,71 @@ export class Sim {
       if (b.progress >= 1) continue;
       const d = this.defs.b.get(b.def)!;
       b.progress = Math.min(1, b.progress + dt / d.buildTime);
-      if (b.progress >= 1) this.hooks.emit('buildingCompleted', { id: b.id, def: b.def, owner: b.owner });
+      if (b.progress >= 1) {
+        this.stat(b.owner).buildingsBuilt++;
+        this.hooks.emit('buildingCompleted', { id: b.id, def: b.def, owner: b.owner });
+      }
+    }
+    for (const b of this.world.buildings) {
+      if (!b.upgrade) continue;
+      b.upgrade.remaining -= dt;
+      if (b.upgrade.remaining > 0) continue;
+      const d = this.defs.b.get(b.def)!;
+      const before = this.maxBuildingHp(b);
+      b.level++;
+      b.upgrade = null;
+      b.hp += this.maxBuildingHp(b) - before;
+      this.hooks.emit('buildingUpgraded', { id: b.id, def: d.id, owner: b.owner, level: b.level });
+    }
+  }
+
+  /**
+   * Grey zones, checked once a second: a ground unit that stays on the enemy's side of the front for a while with no
+   * enemy unit near it turns the ground around it into contested territory. The zone fades once nobody keeps it up.
+   */
+  private greyZones() {
+    const w = this.world;
+    const r = this.ruleset.rules;
+    for (const z of w.grey) z.ttl -= 1;
+    for (const u of w.units) {
+      if (this.defs.u.get(u.def)!.kind === 'air' || this.side(u.pos) === u.team) {
+        u.infil = 0;
+        continue;
+      }
+      const opposed = w.units.some((e) => e.team !== u.team && distKm(e.pos, u.pos) <= r.greyZoneSoloKm);
+      u.infil = opposed ? 0 : u.infil + 1;
+      if (u.infil < r.greyZoneSeconds) continue;
+      const near = w.grey.find((z) => z.team === u.team && distKm(z.pos, u.pos) <= r.greyZoneRadiusKm * 0.5);
+      if (near) near.ttl = r.greyZoneTtl;
+      else if (w.grey.length < 80) w.grey.push({ id: w.nextId++, team: u.team, pos: [u.pos[0], u.pos[1]], r: r.greyZoneRadiusKm, ttl: r.greyZoneTtl });
+    }
+    // ground the front has since passed over is no longer "behind enemy lines"
+    w.grey = w.grey.filter((z) => z.ttl > 0 && this.side(z.pos) !== z.team);
+  }
+
+  /** Work out the buffs and debuffs every unit is under right now (shown on markers and in the unit panel). */
+  private refreshStatus() {
+    const r = this.ruleset.rules;
+    for (const u of this.world.units) {
+      const d = this.defs.u.get(u.def)!;
+      const s: UnitStatus[] = [];
+      const rank = this.ranks[u.rank];
+      if (u.rank > 0) s.push(['veteran', rank.damage]);
+      if (d.kind !== 'air') {
+        const t = this.terrainAt(u.pos);
+        if (t.cover > 0) s.push(['cover', t.cover]);
+        if (t.concealment < 1) s.push(['concealed', t.concealment]);
+        if ((t.vision ?? 1) > 1) s.push(['highground', t.vision!]);
+        const hold = this.holdMult(u.team, u.pos);
+        if (hold > 1) s.push(['fortified', hold]);
+        if (t.cover < 0) s.push(['exposed', -t.cover]);
+        if ((t.vision ?? 1) < 1) s.push(['lowsight', t.vision!]);
+        const speed = this.terrainSpeed(d, u.pos);
+        if (speed < 1 && !u.transport) s.push(['slowed', speed]);
+        if (u.transport) s.push(['transport', r.transportDamageMult]);
+        if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
+      }
+      u.status = s;
     }
   }
 
@@ -555,19 +635,45 @@ export class Sim {
       const p = this.player(q.owner)!;
       const n = w.units.length;
       this.spawnUnit(q.unit, p, [b.pos[0] + 0.03 * Math.cos(n * 1.9), b.pos[1] + 0.02 * Math.sin(n * 1.9)]);
+      this.stat(q.owner).unitsTrained++;
       this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit });
       return false;
     });
   }
 
+  /** Player tallies (bots and unknown ids get a throwaway record). */
+  private stat(id: string) {
+    return (this.world.stats[id] ??= { kills: 0, losses: 0, buildingsBuilt: 0, buildingsDestroyed: 0, unitsTrained: 0, damage: 0 });
+  }
+
+  maxBuildingHp(b: Building): number {
+    const d = this.defs.b.get(b.def)!;
+    return d.levels?.[b.level - 2]?.hp ?? d.hp;
+  }
+
+  /** Defence bonus of one fortification at its current level. */
+  defenseOf(b: Building): number {
+    const d = this.defs.b.get(b.def)!;
+    return d.levels?.[b.level - 2]?.defenseMult ?? d.defense?.mult ?? 0;
+  }
+
+  /**
+   * How much friendly fortifications divide incoming damage here (and stiffen the front). Fortifications of the same
+   * kind do not stack: only the best trench in range counts, and only the best bunker, but a trench and a bunker add up.
+   */
   private holdMult(team: Team, pos: LngLat): number {
-    let m = 1;
+    let best: Map<string, number> | null = null;
     for (const b of this.world.buildings) {
       if (b.team !== team || b.progress < 1) continue;
       const d = this.defs.b.get(b.def)!.defense;
-      if (d && distKm(b.pos, pos) <= d.radiusKm) m += d.mult;
+      if (!d || distKm(b.pos, pos) > d.radiusKm) continue;
+      const m = this.defenseOf(b);
+      best ??= new Map();
+      if (m > (best.get(b.def) ?? 0)) best.set(b.def, m);
     }
-    return m;
+    let total = 1;
+    if (best) for (const m of best.values()) total += m;
+    return total;
   }
 
   private units(dt: number) {
@@ -612,13 +718,18 @@ export class Sim {
           dealt = (base * (air ? d.airDamage ?? r.airDamageDefault : 1) * (1 - cover) * (tu.transport ? r.transportDamageMult : 1)) / this.holdMult(tu.team, tu.pos);
           tu.hp -= dealt;
           this.shots.push({ def: u.def, team: u.team, from: u.pos, to: tu.pos });
-          if (tu.hp <= 0) u.xp += r.xpPerKill;
+          if (tu.hp <= 0) {
+            u.xp += r.xpPerKill;
+            this.stat(u.owner).kills++;
+          }
         } else {
           dealt = base / this.holdMult(tb!.team, tb!.pos);
           tb!.hp -= dealt;
           this.shots.push({ def: u.def, team: u.team, from: u.pos, to: tb!.pos });
+          if (tb!.hp <= 0) this.stat(u.owner).buildingsDestroyed++;
         }
         u.xp += dealt * r.xpPerDamage;
+        this.stat(u.owner).damage += dealt;
         this.rankUp(u);
       }
 
@@ -656,13 +767,17 @@ export class Sim {
       b.cooldown = 1;
       tgt.hp -= a.damage;
       this.shots.push({ def: b.def, team: b.team, from: b.pos, to: tgt.pos });
+      if (tgt.hp <= 0) this.stat(b.owner).kills++;
     }
     if (this.shots.length > 4000) this.shots.splice(0, this.shots.length - 4000);
 
     const deadU = w.units.filter((u) => u.hp <= 0);
     if (deadU.length) {
       w.units = w.units.filter((u) => u.hp > 0);
-      deadU.forEach((u) => this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner }));
+      deadU.forEach((u) => {
+        this.stat(u.owner).losses++;
+        this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner });
+      });
     }
     const deadB = w.buildings.filter((b) => b.hp <= 0);
     if (deadB.length) {
@@ -736,7 +851,6 @@ export class Sim {
     }
     // the abstract term is spread per 100 km of front so that map size does not change its weight
     const perNode: [number, number] = [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];
-    const defended = w.buildings.filter((b) => b.progress >= 1 && this.defs.b.get(b.def)!.defense);
     const degR = R / 111 + 0.05;
 
     const speedAt = (node: FrontNode, base: [number, number]): number => {
@@ -750,11 +864,9 @@ export class Sim {
         const ud = this.defs.u.get(u.def)!;
         force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R);
       }
-      const hold: [number, number] = [1, 1];
-      for (const b of defended) {
-        const def = this.defs.b.get(b.def)!.defense!;
-        if (distKm(b.pos, pos) <= def.radiusKm) hold[b.team] += def.mult;
-      }
+      // troops sitting unopposed behind the line loosen it
+      for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) force[z.team] += r.greyZonePush;
+      const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
       return clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
     };
@@ -833,7 +945,10 @@ export class Sim {
     if (w.units.some((u) => u.hp <= 0)) {
       const dead = w.units.filter((u) => u.hp <= 0);
       w.units = w.units.filter((u) => u.hp > 0);
-      dead.forEach((u) => this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner }));
+      dead.forEach((u) => {
+        this.stat(u.owner).losses++;
+        this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner });
+      });
     }
   }
 

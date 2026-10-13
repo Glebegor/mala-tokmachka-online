@@ -24,11 +24,12 @@ export function nameBots(room: Room) {
   }
 }
 
-/** Pad teams with bots: up to teamSize when fillBots is on, otherwise just guarantee one unit per side. */
+/** Bots are only added on request: with `fillBots` on, empty slots are padded up to teamSize; otherwise nothing is added. */
 export function fillWithBots(room: Room) {
-  for (const team of [0, 1] as const) {
-    const target = room.settings.fillBots ? room.settings.teamSize : 1;
-    while (slotsOf(room, team).length < target) room.slots.push(newBot(team));
+  if (room.settings.fillBots) {
+    for (const team of [0, 1] as const) {
+      while (slotsOf(room, team).length < room.settings.teamSize) room.slots.push(newBot(team));
+    }
   }
   nameBots(room);
 }

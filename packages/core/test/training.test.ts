@@ -114,3 +114,47 @@ console.log(`river ok: unit ${swimmer.path.length ? 'still driving round' : dist
   assert.equal(s2.side(centre), 1, 'the ground goes to the besiegers');
   console.log('cauldron ok: formed, drained, collapsed');
 }
+
+// --- fortifications of one kind do not stack; upgrades do; grey zone after 10 s unopposed behind the line ---
+{
+  const s3 = new Sim(rs, 'zaporizhzhia', [
+    { id: 'a', name: 'a', team: 0, bot: false },
+    { id: 'b', name: 'b', team: 1, bot: false },
+  ]);
+  const a = s3.player('a')!;
+  Object.keys(a.res).forEach((k) => (a.res[k] = 9000));
+  const hq3 = s3.world.buildings.find((b) => b.owner === 'a')!;
+  const hold = (p: LngLat) => (s3 as any).holdMult(0, p) as number;
+  const spots = [offsetKm(hq3.pos, 2, 0), offsetKm(hq3.pos, -2, 0), offsetKm(hq3.pos, 0, 2), offsetKm(hq3.pos, 0, -2)];
+  assert.ok(s3.apply('a', { type: 'build', def: 'trench', pos: spots[0] }).ok);
+  assert.ok(s3.apply('a', { type: 'build', def: 'trench', pos: spots[1] }).ok);
+  for (let i = 0; i < 100; i++) s3.step(0.1);
+  assert.equal(hold(hq3.pos).toFixed(2), '1.25', 'two trenches count as one');
+  assert.ok(s3.apply('a', { type: 'build', def: 'bunker', pos: spots[2] }).ok);
+  assert.ok(s3.apply('a', { type: 'build', def: 'bunker', pos: spots[3] }).ok);
+  for (let i = 0; i < 200; i++) s3.step(0.1);
+  assert.equal(hold(hq3.pos).toFixed(2), '1.85', 'trench + bunker add up, the second bunker does not');
+  const trench = s3.world.buildings.find((b) => b.def === 'trench')!;
+  assert.ok(s3.apply('a', { type: 'upgrade', building: trench.id }).ok);
+  assert.equal(s3.apply('a', { type: 'upgrade', building: trench.id }).ok, false, 'one upgrade at a time');
+  for (let i = 0; i < 110; i++) s3.step(0.1);
+  assert.equal(trench.level, 2);
+  assert.equal(hold(hq3.pos).toFixed(2), '2.00', 'upgraded trench gives +40%');
+  assert.equal(trench.hp, 450, 'upgrade raises hit points');
+
+  // grey zone: a lone unit sits 12 km behind the enemy line
+  const front = s3.world.front[Math.floor(s3.world.front.length / 2)];
+  const behind: LngLat = offsetKm([front.lng, front.lat], 12, 0);
+  assert.equal(s3.side(behind), 1);
+  s3.world.units = s3.world.units.filter((u) => u.team === 0); // nobody to oppose it
+  const raider = s3.spawnUnit('infantry', a, behind);
+  for (let i = 0; i < 80; i++) s3.step(0.1);
+  assert.equal(s3.world.grey.length, 0, 'not yet: needs 10 s');
+  for (let i = 0; i < 40; i++) s3.step(0.1);
+  assert.equal(s3.world.grey.length, 1, 'grey zone appears after 10 s unopposed');
+  assert.equal(s3.apply('a', { type: 'build', def: 'trench', pos: behind }).ok, false, 'no building in contested ground');
+  raider.hp = 0;
+  for (let i = 0; i < 230; i++) s3.step(0.1);
+  assert.equal(s3.world.grey.length, 0, 'zone fades 20 s after the troops are gone');
+  console.log('fortifications + grey zone ok');
+}
