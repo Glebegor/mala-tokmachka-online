@@ -1,0 +1,5 @@
+{
+  "matchSeconds": 1800,
+  "frontPush": 0.0006,
+  "startUnits": ["infantry", "infantry", "infantry", "infantry", "drone"]
+}

@@ -1,0 +1,21 @@
+import { HttpError, Router, config, ok } from '@sw/kit';
+import type { SlotInit } from '@sw/core';
+import type { MatchManager } from '../application/matchManager';
+
+export function gameRoutes(mm: MatchManager) {
+  const internal = (h: Record<string, any>) => {
+    if (h['x-internal-key'] !== config.internalKey) throw new HttpError(403, 'internal only');
+  };
+  return new Router()
+    .post('/matches', (r) => {
+      internal(r.headers);
+      const slots: SlotInit[] = (r.body?.slots ?? []).map((s: any) => ({ id: String(s.id), name: String(s.name), team: Number(s.team) === 1 ? 1 : 0, bot: !!s.bot }));
+      try {
+        return ok({ matchId: mm.create(r.body?.settings ?? {}, slots).id });
+      } catch (e) {
+        throw new HttpError(400, (e as Error).message);
+      }
+    })
+    .get('/mods', () => ok(mm.rules.mods))
+    .get('/health', () => ok());
+}

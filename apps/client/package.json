@@ -1,0 +1,6 @@
+{
+  "name": "@sw/client", "private": true, "version": "0.1.0", "type": "module",
+  "scripts": { "dev": "vite", "build": "vite build" },
+  "dependencies": { "@sw/core": "*", "maplibre-gl": "^5.0.0" },
+  "devDependencies": { "vite": "^6.0.0" }
+}
