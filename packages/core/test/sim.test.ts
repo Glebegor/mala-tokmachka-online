@@ -1,8 +1,9 @@
+import { fileURLToPath } from 'node:url';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
 import { Sim, type SlotInit } from '../src';
 
-const rs = await loadRuleset(new URL('../../../mods', import.meta.url).pathname);
+const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const slots: SlotInit[] = [];
 for (let t = 0; t < 2; t++) for (let i = 0; i < 8; i++) slots.push({ id: `b${t}${i}`, name: `bot${t}${i}`, team: t as 0 | 1, bot: true });
 const sim = new Sim(rs, process.argv[2] ?? 'ukraine', slots);

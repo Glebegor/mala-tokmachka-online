@@ -1,6 +1,7 @@
+import { fileURLToPath } from 'node:url';
 import { loadRuleset } from '../services/game/src/infrastructure/modLoader';
 import { buildFront, distToFrontKm, TerrainGrid } from '../packages/core/src';
-const rs = await loadRuleset(new URL('../mods', import.meta.url).pathname);
+const rs = await loadRuleset(fileURLToPath(new URL('../mods', import.meta.url)));
 for (const m of rs.maps) {
   const f = buildFront(m.front, 9);
   const tg = m.terrain ? new TerrainGrid(m.terrain) : null;
