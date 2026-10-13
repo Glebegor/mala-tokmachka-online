@@ -170,7 +170,33 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders']) map.addSource(id, { type: 'geojson', data: empty() });
+
+      if (m.borders) {
+        (map.getSource('borders') as GeoJSONSource).setData(m.borders);
+      }
+      map.addLayer({
+        id: 'borders-glow', type: 'line', source: 'borders',
+        filter: ['==', ['get', 'type'], 'border'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#5a8cb8',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 8, 5, 12, 7],
+          'line-blur': 2.5,
+          'line-opacity': 0.35,
+        },
+      });
+      map.addLayer({
+        id: 'borders-line', type: 'line', source: 'borders',
+        filter: ['==', ['get', 'type'], 'border'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#8ab5de',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4, 1.2, 8, 2.0, 12, 2.8],
+          'line-dasharray': [4, 3],
+          'line-opacity': 0.85,
+        },
+      });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -222,6 +248,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const el = h('div', { class: 'cp' }, h('i', {}), h('span', {}, cp.name));
         new maplibregl.Marker({ element: el }).setLngLat(cp.pos).addTo(map);
         pMarkers.set(cp.id, el);
+      }
+      if (m.borders?.features) {
+        for (const f of m.borders.features) {
+          if (f.properties?.type === 'country_label') {
+            const el = h('div', { class: 'country-label' }, f.properties.name);
+            new maplibregl.Marker({ element: el }).setLngLat(f.geometry.coordinates).addTo(map);
+          }
+        }
       }
       fx = new ShotFx(map, mapEl, defU, TEAM_COLOR);
       if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap };
