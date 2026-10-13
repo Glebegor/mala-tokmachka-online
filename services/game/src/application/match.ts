@@ -92,9 +92,16 @@ export class Match {
     sim.step(dt);
 
     if (sim.world.tick % snapEvery === 0) {
+      // shots are animation only: thin them out when a big battle would flood the wire
+      let shots = sim.shots;
+      sim.shots = [];
+      if (shots.length > 160) {
+        const keep = 160 / shots.length;
+        shots = shots.filter(() => Math.random() < keep);
+      }
       for (const [pid, conn] of this.conns) {
         const p = sim.player(pid);
-        if (p) conn.send(snapshotFor(sim, pid, p.team));
+        if (p) conn.send(snapshotFor(sim, pid, p.team, shots));
       }
     }
     if (sim.world.winner !== null || sim.world.time >= sim.ruleset.rules.matchSeconds) {

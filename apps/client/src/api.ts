@@ -39,6 +39,7 @@ async function call<T>(path: string, body?: unknown): Promise<T> {
 export const api = {
   login: (name: string, password: string) => call<Session>('/api/auth/login', { name, password }),
   register: (name: string, password: string) => call<Session>('/api/auth/register', { name, password }),
+  maps: () => call<{ id: string; name: string }[]>('/api/lobby/maps'),
   rooms: () => call<RoomInfo[]>('/api/lobby/rooms'),
   createRoom: (name: string, team: 0 | 1) => call<RoomInfo>('/api/lobby/rooms', { name, team }),
   settings: (id: string, patch: Partial<RoomSettings>) => call<RoomInfo>(`/api/lobby/rooms/${id}/settings`, patch),

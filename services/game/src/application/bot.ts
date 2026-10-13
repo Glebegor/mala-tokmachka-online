@@ -1,4 +1,4 @@
-import { type BotDifficulty, distKm, moveToward, offsetKm, sideOf, type LngLat, type Player, type Sim } from '@sw/core';
+import { type BotDifficulty, distKm, moveToward, nearestNode, offsetKm, sideOf, type LngLat, type Player, type Sim } from '@sw/core';
 
 const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'gas_station', 'trench', 'signal_station', 'housing', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
 
@@ -31,6 +31,8 @@ export class Bot {
     if (mine.filter((b) => b.progress < 1).length >= 2) return;
     const hq = mine.find((b) => b.def === 'hq');
     if (!hq) return;
+    const fn = w.front[nearestNode(w.front, hq.pos)];
+    const frontPos: LngLat = [fn.lng, fn.lat];
 
     for (let k = 0; k < BUILD_ORDER.length; k++) {
       const def = BUILD_ORDER[(this.step + k) % BUILD_ORDER.length];
@@ -40,9 +42,9 @@ export class Bot {
       for (let attempt = 0; attempt < 10; attempt++) {
         const ang = Math.random() * Math.PI * 2;
         const r = 2 + Math.random() * 12;
-        // defensive buildings sit closer to the front
-        const pull = d.defense ? (p.team === 0 ? 8 : -8) : 0;
-        const pos = offsetKm(hq.pos, Math.cos(ang) * r + pull, Math.sin(ang) * r);
+        // defensive buildings go up between the HQ and the front
+        const base = d.defense ? moveToward(hq.pos, frontPos, Math.max(0, distKm(hq.pos, frontPos) - 6 - Math.random() * 10)) : hq.pos;
+        const pos = offsetKm(base, Math.cos(ang) * r, Math.sin(ang) * r);
         if (sim.apply(p.id, { type: 'build', def, pos }).ok) {
           this.step = (this.step + k + 1) % BUILD_ORDER.length;
           return;
@@ -79,16 +81,20 @@ export class Bot {
       if (cp) sim.apply(p.id, { type: 'move', units: [u.id], to: offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20) });
     }
 
+    // spend spare money on promotions once the economy is running
+    if ((p.res.money ?? 0) > 1500 && army.length) {
+      sim.apply(p.id, { type: 'promote', units: army.slice(0, 4).map((u) => u.id) });
+    }
+
     const idle = army.filter((u) => !u.target);
     if (!idle.length) return;
     if (army.length >= this.attackSize && enemyPoints.length) {
       const goal = enemyPoints.reduce((a, b) => (distKm(a.pos, anchor) < distKm(b.pos, anchor) ? a : b));
-      sim.apply(p.id, { type: 'move', units: idle.map((u) => u.id), to: goal.pos });
+      sim.apply(p.id, { type: 'move', units: idle.map((u) => u.id), to: goal.pos, cohesion: true });
     } else {
       // rally just behind the front
-      const lat = anchor[1];
-      const front = w.front.reduce((a, b) => (Math.abs(a.lat - lat) < Math.abs(b.lat - lat) ? a : b));
-      const rally = offsetKm([front.lng, front.lat], p.team === 0 ? -6 : 6, 0);
+      const front = w.front[nearestNode(w.front, anchor)];
+      const rally = moveToward([front.lng, front.lat], anchor, 6);
       const far = idle.filter((u) => distKm(u.pos, rally) > 4);
       if (far.length) sim.apply(p.id, { type: 'move', units: far.map((u) => u.id), to: rally });
     }

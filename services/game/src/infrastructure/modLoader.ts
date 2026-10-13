@@ -1,6 +1,6 @@
 import { readdir, readFile } from 'node:fs/promises';
-import { join } from 'node:path';
-import { DEFAULT_RULES, type BuildingDef, type MapDef, type ResourceDef, type Ruleset, type UnitDef } from '@sw/core';
+import { dirname, join } from 'node:path';
+import { DEFAULT_RULES, type BuildingDef, type MapDef, type RankDef, type ResourceDef, type TerrainDef, type Ruleset, type UnitDef } from '@sw/core';
 
 interface ModManifest {
   id: string;
@@ -11,6 +11,8 @@ interface ModManifest {
     resources?: string;
     buildings?: string;
     units?: string;
+    terrain?: string;
+    ranks?: string;
     maps?: string[];
     theme?: string;
     scripts?: string[];
@@ -32,7 +34,7 @@ export async function loadRuleset(modsDir: string, only?: string[]): Promise<Rul
   const dirs = (await readdir(modsDir, { withFileTypes: true })).filter((d) => d.isDirectory()).map((d) => d.name);
   dirs.sort((a, b) => (a === 'base' ? -1 : b === 'base' ? 1 : a.localeCompare(b)));
 
-  const rs: Ruleset = { mods: [], rules: { ...DEFAULT_RULES }, resources: [], buildings: [], units: [], maps: [], themes: [], scripts: [] };
+  const rs: Ruleset = { mods: [], rules: { ...DEFAULT_RULES }, resources: [], buildings: [], units: [], terrain: [], ranks: [], maps: [], themes: [], scripts: [] };
 
   for (const dir of dirs) {
     const root = join(modsDir, dir);
@@ -49,13 +51,25 @@ export async function loadRuleset(modsDir: string, only?: string[]): Promise<Rul
     if (c.resources) mergeById<ResourceDef>(rs.resources, await readJson(join(root, c.resources)));
     if (c.buildings) mergeById<BuildingDef>(rs.buildings, await readJson(join(root, c.buildings)));
     if (c.units) mergeById<UnitDef>(rs.units, await readJson(join(root, c.units)));
-    for (const m of c.maps ?? []) mergeById<MapDef>(rs.maps, [await readJson(join(root, m))]);
+    if (c.terrain) mergeById<TerrainDef>(rs.terrain, await readJson(join(root, c.terrain)));
+    if (c.ranks) mergeById<RankDef>(rs.ranks, await readJson(join(root, c.ranks)));
+    for (const m of c.maps ?? []) mergeById<MapDef>(rs.maps, [await loadMap(join(root, m))]);
     if (c.theme) rs.themes.push({ modId: manifest.id, css: await readFile(join(root, c.theme), 'utf8') });
     for (const s of c.scripts ?? []) rs.scripts.push({ modId: manifest.id, file: s, source: await readFile(join(root, s), 'utf8') });
   }
 
   validate(rs);
   return rs;
+}
+
+/** Maps keep their heavy data (roads, terrain grid) in sibling files referenced by `roadsFile` / `terrainFile`. */
+async function loadMap(file: string): Promise<MapDef> {
+  const raw = await readJson<MapDef & { roadsFile?: string; terrainFile?: string }>(file);
+  const { roadsFile, terrainFile, ...map } = raw;
+  if (roadsFile) map.roads = await readJson(join(dirname(file), roadsFile));
+  if (terrainFile) map.terrain = await readJson(join(dirname(file), terrainFile));
+  if (!Array.isArray(map.occupiedClosure)) throw new Error(`map ${map.id} needs occupiedClosure`);
+  return map;
 }
 
 function validate(rs: Ruleset) {
@@ -69,4 +83,8 @@ function validate(rs: Ruleset) {
   };
   rs.buildings.forEach((b) => (check(b.id, b.cost), check(b.id, b.produces), check(b.id, b.consumes)));
   rs.units.forEach((u) => check(u.id, u.cost));
+  rs.ranks.forEach((r) => check(`rank ${r.id}`, r.cost));
+  for (const map of rs.maps) {
+    for (const t of Object.values(map.terrain?.legend ?? {})) if (!rs.terrain.some((d) => d.id === t)) throw new Error(`map ${map.id} uses unknown terrain ${t}`);
+  }
 }

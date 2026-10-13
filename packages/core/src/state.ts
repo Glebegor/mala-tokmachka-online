@@ -19,6 +19,7 @@ export interface Building {
   pos: LngLat;
   hp: number;
   progress: number; // 0..1, 1 = complete
+  road: boolean; // connected to the road network
 }
 
 export interface Unit {
@@ -30,7 +31,28 @@ export interface Unit {
   hp: number;
   target: LngLat | null;
   cooldown: number;
+  xp: number;
+  rank: number; // index into ruleset.ranks
+  /** Remaining waypoints (server side only). `road` legs use road speed and ignore terrain. */
+  path: Waypoint[];
+  /** Speed cap in km/s when ordered to move in formation, 0 = none. */
+  cap: number;
 }
+
+export interface Waypoint {
+  p: LngLat;
+  road: boolean;
+}
+
+/** A weapon discharge, sent to clients purely for animation. */
+export interface Shot {
+  def: string;
+  team: Team;
+  from: LngLat;
+  to: LngLat;
+}
+
+export type UnitView = Omit<Unit, 'path' | 'cap'>;
 
 export interface TrainItem {
   building: number;
@@ -40,9 +62,9 @@ export interface TrainItem {
 }
 
 export interface FrontNode {
-  lat: number;
   lng: number;
-  v: number; // km/s, +east
+  lat: number;
+  v: number; // km/s along the normal, + = team 0 advancing
 }
 
 export interface CapturePoint {

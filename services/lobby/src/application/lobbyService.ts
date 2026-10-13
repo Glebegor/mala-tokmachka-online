@@ -5,6 +5,7 @@ import { addSlot, fillWithBots, nameBots, newBot, sanitizeSettings, slotsOf, typ
 
 export interface MatchLauncher {
   launch(room: Room): Promise<string>;
+  maps(): Promise<{ id: string; name: string }[]>;
 }
 
 export interface Identity {
@@ -15,6 +16,10 @@ export interface Identity {
 export class LobbyService {
   private rooms = new Map<string, Room>();
   constructor(private launcher: MatchLauncher) {}
+
+  maps() {
+    return this.launcher.maps();
+  }
 
   list() {
     return [...this.rooms.values()];

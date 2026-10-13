@@ -10,6 +10,7 @@ export function lobbyRoutes(lobby: LobbyService, secret: string) {
   const team = (v: unknown): 0 | 1 => (Number(v) === 1 ? 1 : 0);
 
   return new Router()
+    .get('/maps', async (r) => (who(r.headers), ok(await lobby.maps())))
     .get('/rooms', (r) => (who(r.headers), ok(lobby.list())))
     .post('/rooms', (r) => ok(lobby.create(who(r.headers), r.body?.name, r.body?.settings, team(r.body?.team))))
     .post('/rooms/:id/join', (r) => ok(lobby.join(who(r.headers), r.params.id, team(r.body?.team))))

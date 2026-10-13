@@ -1,4 +1,6 @@
 import type { LngLat } from './geo';
+import type { RoadLine } from './roads';
+import type { TerrainGridData } from './terrain';
 
 /** Everything below is data: mods provide it as JSON, the engine never hard-codes content. */
 export type ResourceAmounts = Record<string, number>;
@@ -35,6 +37,10 @@ export interface UnitDef {
   id: string;
   name: string;
   kind: 'ground' | 'air';
+  /** Mobility class looked up in each terrain's `speed` table: foot, tracked, wheeled, air (mods may add more). */
+  mobility?: string;
+  /** NATO APP-6 style icon: infantry, armor, artillery, uav, recon, engineer, antiair, supply. */
+  symbol?: string;
   cost: ResourceAmounts;
   trainTime: number;
   hp: number;
@@ -42,6 +48,31 @@ export interface UnitDef {
   range: number; // km
   damage: number; // dps
   vision: number; // km
+}
+
+export interface TerrainDef {
+  id: string;
+  name: string;
+  color: string;
+  /** Speed multiplier per mobility class when moving off-road; missing classes use `default` or 1. */
+  speed: Record<string, number>;
+  /** Share of incoming damage absorbed by ground units standing here (negative = exposed). */
+  cover: number;
+  /** Multiplier on the distance at which enemies can spot ground units here (<1 = harder to see). */
+  concealment: number;
+  /** How much this terrain slows the front line passing through it, 0..1. */
+  frontResist: number;
+}
+
+/** Veterancy step. Units start at the first rank and climb by fighting (or by paying `cost`). */
+export interface RankDef {
+  id: string;
+  name: string;
+  xp: number; // experience needed to hold this rank
+  damage: number; // multipliers
+  hp: number;
+  range: number;
+  cost: ResourceAmounts; // price of buying the promotion to this rank
 }
 
 export interface CapturePointDef {
@@ -57,8 +88,14 @@ export interface MapDef {
   bounds: [number, number, number, number]; // w s e n
   center: LngLat;
   zoom: number;
-  /** Initial front, north→south. Team 0 holds the west side, team 1 the east side. */
+  /** Initial line of contact. Walking along it from first to last point, team 0 is on the LEFT, team 1 on the right. */
   front: LngLat[];
+  /** Points appended after the last front node to close team 1's territory into a polygon (rendering only). */
+  occupiedClosure: LngLat[];
+  /** Road network (see tools/build-roads.mjs). In map JSON use `roadsFile` instead. */
+  roads?: RoadLine[];
+  /** Terrain grid (see tools/build-terrain.mjs). In map JSON use `terrainFile` instead. */
+  terrain?: TerrainGridData;
   capturePoints: CapturePointDef[];
   spawns: [LngLat[], LngLat[]];
 }
@@ -68,17 +105,22 @@ export interface RulesConfig {
   snapshotRate: number;
   matchSeconds: number;
   startUnits: string[];
-  frontNodes: number;
+  frontNodeSpacingKm: number;
   frontInfluenceKm: number;
   frontPush: number; // km/s per unit of net force
   frontMaxSpeed: number; // km/s
-  frontSmoothing: number; // 0..1 per second
+  frontSmoothing: number; // 0..1, how strongly neighbouring nodes share their speed
   abstractPower: number; // weight of the economy-driven "abstract war"
   energyDeficitMult: number;
   pointScorePerSec: number;
   minBuildDistanceFromFront: number; // km
   minBuildSpacing: number; // km
   fogOfWar: boolean;
+  roadSpeedMult: number; // ground units on roads
+  roadAccessKm: number; // a building this close to a road is "connected"
+  roadOutputMult: number; // output bonus for connected buildings
+  xpPerDamage: number;
+  xpPerKill: number;
 }
 
 export interface ScriptSource {
@@ -93,6 +135,8 @@ export interface Ruleset {
   resources: ResourceDef[];
   buildings: BuildingDef[];
   units: UnitDef[];
+  terrain: TerrainDef[];
+  ranks: RankDef[];
   maps: MapDef[];
   themes: { modId: string; css: string }[];
   scripts: ScriptSource[];
@@ -103,7 +147,7 @@ export const DEFAULT_RULES: RulesConfig = {
   snapshotRate: 5,
   matchSeconds: 1800,
   startUnits: ['infantry', 'infantry', 'infantry', 'infantry'],
-  frontNodes: 56,
+  frontNodeSpacingKm: 9,
   frontInfluenceKm: 28,
   frontPush: 0.0004,
   frontMaxSpeed: 0.05,
@@ -114,4 +158,9 @@ export const DEFAULT_RULES: RulesConfig = {
   minBuildDistanceFromFront: 3,
   minBuildSpacing: 1.2,
   fogOfWar: true,
+  roadSpeedMult: 2.4,
+  roadAccessKm: 5,
+  roadOutputMult: 1.15,
+  xpPerDamage: 0.2,
+  xpPerKill: 15,
 };

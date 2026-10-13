@@ -10,4 +10,8 @@ export class HttpMatchLauncher implements MatchLauncher {
     });
     return out.matchId as string;
   }
+
+  async maps() {
+    return (await callJson(`${config.urls.game}/maps`)) as { id: string; name: string }[];
+  }
 }

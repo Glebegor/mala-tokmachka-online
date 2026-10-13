@@ -17,5 +17,6 @@ export function gameRoutes(mm: MatchManager) {
       }
     })
     .get('/mods', () => ok(mm.rules.mods))
+    .get('/maps', () => ok(mm.rules.maps.map((m) => ({ id: m.id, name: m.name }))))
     .get('/health', () => ok());
 }

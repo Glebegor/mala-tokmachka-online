@@ -116,3 +116,6 @@ select:disabled { opacity: .6; }
 button.sm { padding: 0 6px; }
 button:disabled { opacity: .4; cursor: not-allowed; }
 @media (max-width: 720px) { .room-grid { grid-template-columns: 1fr; } }
+
+input[type='checkbox'] { width: auto; accent-color: var(--accent); }
+.field.check span { flex: 1; }

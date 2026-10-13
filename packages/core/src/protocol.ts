@@ -1,6 +1,6 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { Building, FrontNode, Player, Team, Unit, CapturePoint } from './state';
+import type { Building, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
 
 export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' };
 
@@ -19,8 +19,12 @@ export interface SnapMsg {
   time: number;
   res: Record<string, number>;
   energyNet: number;
+  /** Net production per second, per resource. */
+  rates: Record<string, number>;
   buildings: Building[];
-  units: Unit[];
+  units: UnitView[];
+  /** Shots fired since the previous snapshot (animation only). */
+  shots: Shot[];
   front: FrontNode[];
   points: CapturePoint[];
   scores: [number, number];
@@ -56,7 +60,7 @@ export interface RoomSettings {
 }
 
 export const DEFAULT_SETTINGS: RoomSettings = {
-  mapId: 'zaporizhzhia',
+  mapId: 'ukraine',
   matchMinutes: 30,
   teamSize: 8,
   fillBots: true,
