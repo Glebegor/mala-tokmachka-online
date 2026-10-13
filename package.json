@@ -1,7 +1,7 @@
 {
   "name": "mala-tokmachka-online",
   "private": true,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "workspaces": [
     "packages/*",
     "services/*",
@@ -13,7 +13,8 @@
     "test": "tsx packages/core/test/sim.test.ts",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",
-    "docker:logs": "docker compose logs -f"
+    "docker:logs": "docker compose logs -f",
+    "check:maps": "tsx tools/check-maps.mts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

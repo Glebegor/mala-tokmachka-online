@@ -41,6 +41,10 @@ export interface UnitDef {
   mobility?: string;
   /** NATO APP-6 style icon: infantry, armor, artillery, uav, recon, engineer, antiair, supply. */
   symbol?: string;
+  /** Firing animation: burst (small arms), shell (direct fire), arc (indirect fire), beam (drone strike). */
+  fx?: string;
+  /** Share of shots that visibly miss, 0..1 (animation only, damage is unaffected). */
+  missRate?: number;
   cost: ResourceAmounts;
   trainTime: number;
   hp: number;

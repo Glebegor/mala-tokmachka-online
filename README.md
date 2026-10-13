@@ -1,6 +1,6 @@
 # Mala Tokmachka Online
 
-Minimalist online RTS wargame on a real map of the Zaporizhzhia sector (Ukraine vs Russia, 8v8 with bots).
+Minimalist online RTS wargame on a real map of Ukraine with the full line of contact (Ukraine vs Russia, 8v8 with bots).
 Build civil and war infrastructure, command units by hand, and push a living frontline.
 
 ## Run
@@ -13,21 +13,31 @@ npm run dev        # auth :4001, lobby :4002, game :4003, gateway :8080, client 
 Open http://localhost:5173, register, create a room, start (empty slots are filled with bots).
 The basemap uses CARTO's free dark tiles, so it needs internet access.
 
-`npm test` runs a headless 8v8 bot match against the simulation.
+`npm test` runs a headless 8v8 bot match against the simulation (`npm test -- zaporizhzhia` for the small map).
 
 ## Controls
 
 | Action | Input |
 | --- | --- |
-| Select unit / building | left click |
+| Select unit / formation / building | left click (Shift+click adds) |
 | Box select | Shift + drag |
-| Move | right click |
+| Move (uses roads when faster) | right click |
 | Stop | S |
+| Group / ungroup selection | G / U |
+| Numbered group: assign / select / jump to | Ctrl+1-9 / 1-9 / press again |
+| Terrain overlay | T |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |
+
+Hover the map to see the terrain under the cursor and how it affects each kind of unit.
 
 ## Layout
 
-See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) and [docs/MODDING.md](docs/MODDING.md).
+See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/MODDING.md](docs/MODDING.md) and [docs/MILESTONES.md](docs/MILESTONES.md).
+
+## Map data
+
+Roads and urban areas: Natural Earth (public domain). Forest/water classification and basemap: © OpenStreetMap contributors (ODbL).
+Rebuild with `tools/build-roads.mjs` and `tools/build-terrain.mjs`; validate with `npm run check:maps`.
 
 ## Docker
 

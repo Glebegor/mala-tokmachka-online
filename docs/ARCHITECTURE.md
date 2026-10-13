@@ -21,16 +21,25 @@ Dependencies point inward: interface → application → domain; infrastructure 
 ## Simulation
 
 - 10 Hz tick, 5 Hz snapshots. Clients only send intents (`Command`); the server validates everything.
-- **Frontline**: 56 nodes along the north-south axis; each node's longitude moves from the local force balance
-  (units in range + an abstract economy-driven term, multiplied by trench/bunker defence). Territory, capture points
-  and enemy buildings follow the front, so ground is won or lost without discrete segments.
-- **Economy**: money, energy, people (+ ore, metal, fuel from the base mod). Energy deficit slows production; rail hubs boost nearby output.
-- **Fog of war**: enemy units/buildings are sent only inside friendly vision; signal stations and drones extend it.
+- **Frontline** (`frontline.ts`): a polyline of nodes ~9 km apart. Team 0 is on its left, team 1 on its right. Each tick every
+  node moves along its normal from the local force balance (units in range + an abstract economy term, multiplied by
+  trench/bunker defence, damped by terrain). Neighbours share speed, the line is re-spaced every 5 s, both ends are anchored.
+  Territory, capture points and overrun buildings are derived from which side of the line they are on.
+- **Roads** (`roads.ts`): graph built from the map's polylines with A* routing. A move order plans one route for the group
+  (stragglers plan their own); road legs use `roadSpeedMult` and ignore terrain.
+- **Terrain** (`terrain.ts`): run-length-encoded grid aligned with Web Mercator. Terrain definitions are mod data.
+- **Combat**: nearest enemy in range, one salvo per second; cover (terrain) and fortifications reduce damage.
+  Every salvo is also reported as a `Shot` for client animation. Damage and kills give XP; ranks multiply damage/HP/range.
+- **Economy**: money, energy, people (+ ore, metal, fuel from the base mod). Energy deficit slows production; rail hubs and
+  road access boost output.
+- **Fog of war**: enemy units/buildings are sent only inside friendly vision; forest and city shrink the spotting distance.
 - **Victory**: all points held, enemy HQs destroyed, or most points-time when the clock runs out.
 
 ## Known limits / next steps
 
 - Matches live in memory in one game process; scale out by running more game instances and having lobby pick one.
 - Services talk plain HTTP with a shared internal key; use mTLS or a message bus for real deployments.
-- The front is a function of latitude (it cannot fold back on itself). Replace with polyline nodes + normals for full DeepState-style bulges.
+- The front does not check for self-intersection; extreme pincer moves could cross it over itself.
+- Off-road movement is a straight line (terrain only changes speed); only roads are path-planned.
+- Groups are client-side (not shared with allies, lost on page reload).
 - Capture-the-flag and destruction game modes are not implemented yet.
