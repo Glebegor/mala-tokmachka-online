@@ -1,7 +1,7 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, type LngLat } from './geo';
-import { buildFront, distToFrontKm, normalAt, resample, sideOf } from './frontline';
+import { buildFront, distToFrontKm, normalAt, respace, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import type { Building, Player, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
@@ -42,7 +42,9 @@ export class Sim {
     if (!map) throw new Error(`unknown map ${mapId}`);
     this.map = map;
     this.roads = map.roads?.length ? new RoadNetwork(map.roads) : null;
-    this.terrain = map.terrain ? new TerrainGrid(map.terrain) : null;
+    const barriers: Record<string, number> = {};
+    for (const t of ruleset.terrain) if (t.barrier) barriers[t.id] = t.barrier.minCells;
+    this.terrain = map.terrain ? new TerrainGrid(map.terrain, barriers) : null;
     this.world = this.createWorld(slots);
   }
 
@@ -73,12 +75,16 @@ export class Sim {
     };
     this.world = w;
     const counters: [number, number] = [0, 0];
+    const teamSize = [0, 1].map((t) => players.filter((p) => p.team === t).length);
+    // spawns are authored as mirrored pairs: both teams use the same indices, spread evenly along the front
+    const perTeam = Math.max(teamSize[0], teamSize[1]);
     for (const p of players) {
       const spawns = this.map.spawns[p.team];
       const n = counters[p.team]++;
-      const base = spawns[n % spawns.length];
+      const idx = perTeam <= spawns.length ? Math.floor(((n + 0.5) * spawns.length) / perTeam) : n % spawns.length;
+      const base = spawns[idx];
       // players beyond the authored spawn list share a spawn, nudged aside
-      const lap = Math.floor(n / spawns.length);
+      const lap = perTeam <= spawns.length ? 0 : Math.floor(n / spawns.length);
       const pos: LngLat = [base[0] + lap * 0.09, base[1] + lap * 0.05];
       this.spawnBuilding('hq', p, pos, true);
       r.startUnits.forEach((u, i) => this.spawnUnit(u, p, [pos[0] + 0.035 * Math.cos(i * 1.3), pos[1] + 0.025 * Math.sin(i * 1.3)]));
@@ -90,16 +96,60 @@ export class Sim {
   private spawnBuilding(def: string, p: Player, pos: LngLat, done = false): Building {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
-    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road };
+    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, cooldown: 0, inside: [], course: null };
     this.world.buildings.push(b);
     return b;
   }
 
   spawnUnit(def: string, p: Player, pos: LngLat): Unit {
     const d = this.defs.u.get(def)!;
-    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, path: [], cap: 0 };
+    pos = this.dry(d, pos);
+    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, transport: false, enter: 0, path: [], cap: 0 };
     this.world.units.push(u);
     return u;
+  }
+
+  /** Never drop a ground unit into a river: fall back to dry spots around the intended position. */
+  private dry(d: UnitDef, pos: LngLat): LngLat {
+    if (!this.blockedFor(d) || !this.terrain?.isBarrier(pos)) return pos;
+    for (let k = 1; k <= 32; k++) {
+      const r = 0.02 * Math.ceil(k / 8);
+      const q: LngLat = [pos[0] + r * Math.cos(k * 0.785), pos[1] + r * 0.7 * Math.sin(k * 0.785)];
+      if (!this.terrain.isBarrier(q)) return q;
+    }
+    return pos;
+  }
+
+  /** Everyone inside walks out, e.g. when a course ends or the building is lost (`hpMult` < 1). */
+  private evict(b: Building, hpMult = 1) {
+    b.inside.forEach((u, i) => {
+      const d = this.defs.u.get(u.def)!;
+      u.pos = this.dry(d, [b.pos[0] + 0.022 * Math.cos(i * 1.1 + 0.4), b.pos[1] + 0.016 * Math.sin(i * 1.1 + 0.4)]);
+      u.hp = Math.max(1, u.hp * hpMult);
+      u.path = [];
+      u.target = null;
+      u.enter = 0;
+      u.transport = false;
+      this.world.units.push(u);
+    });
+    b.inside = [];
+    b.course = null;
+  }
+
+  /** Price and duration of a course for the units currently inside. */
+  courseTerms(b: Building): { cost: ResourceAmounts; seconds: number; pupils: number } {
+    const t = this.defs.b.get(b.def)!.training!;
+    const cost: ResourceAmounts = {};
+    let top = 0;
+    let pupils = 0;
+    for (const u of b.inside) {
+      const next = this.ranks[u.rank + 1];
+      if (!next) continue;
+      pupils++;
+      top = Math.max(top, u.rank + 1);
+      for (const [k, v] of Object.entries(next.cost)) cost[k] = (cost[k] ?? 0) + v;
+    }
+    return { cost, seconds: t.baseTime + t.timePerRank * top, pupils };
   }
 
   player(id: string) {
@@ -140,6 +190,7 @@ export class Sim {
         if (dist < 0) return fail('not your territory');
         if (dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
+        if (d.needsWaterWithinKm && !this.barrierNear(cmd.pos, d.needsWaterWithinKm)) return fail('must be built on a river bank');
         if (w.buildings.some((b) => distKm(b.pos, cmd.pos) < r.minBuildSpacing)) return fail('space occupied');
         if (!canAfford(p.res, d.cost)) return fail('not enough resources');
         pay(p.res, d.cost);
@@ -161,32 +212,47 @@ export class Sim {
       case 'move': {
         if (!isFinitePos(cmd.to) || !Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
-        this.orderMove(w.units.filter((u) => set.has(u.id) && u.owner === p.id), cmd.to, !!cmd.cohesion);
-        return ok();
+        const moved = this.orderMove(w.units.filter((u) => set.has(u.id) && u.owner === p.id), cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct');
+        return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
       }
       case 'stop': {
         const set = new Set(cmd.units);
-        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) (u.target = null), (u.path = []), (u.cap = 0);
+        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) (u.target = null), (u.path = []), (u.cap = 0), (u.transport = false), (u.enter = 0);
         return ok();
       }
-      case 'promote': {
+      case 'enter': {
+        const b = w.buildings.find((x) => x.id === cmd.building);
+        const t = b && this.defs.b.get(b.def)!.training;
+        if (!b || !t || b.owner !== p.id || b.progress < 1) return fail('not a training centre of yours');
+        if (b.course) return fail('a course is in progress');
         if (!Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
-        let done = 0;
-        let broke = false;
-        for (const u of w.units) {
-          if (!set.has(u.id) || u.owner !== p.id || u.rank >= this.ranks.length - 1) continue;
-          const next = this.ranks[u.rank + 1];
-          if (!canAfford(p.res, next.cost)) {
-            broke = true;
-            continue;
-          }
-          pay(p.res, next.cost);
-          u.xp = Math.max(u.xp, next.xp);
-          this.rankUp(u);
-          done++;
-        }
-        if (!done) return fail(broke ? 'not enough resources' : 'nothing to promote');
+        const free = t.capacity - b.inside.length - w.units.filter((u) => u.enter === b.id).length;
+        const pupils = w.units
+          .filter((u) => set.has(u.id) && u.owner === p.id && this.defs.u.get(u.def)!.kind !== 'air' && u.rank < this.ranks.length - 1)
+          .slice(0, Math.max(0, free));
+        if (!pupils.length) return fail(free <= 0 ? 'training centre is full' : 'no ground units that can still be trained');
+        if (!this.orderMove(pupils, b.pos, false, false, false)) return fail('no way to the training centre');
+        for (const u of pupils) if (u.path.length) u.enter = b.id;
+        return ok();
+      }
+      case 'course': {
+        const b = w.buildings.find((x) => x.id === cmd.building);
+        const t = b && this.defs.b.get(b.def)!.training;
+        if (!b || !t || b.owner !== p.id) return fail('not a training centre of yours');
+        if (b.course) return fail('a course is already running');
+        const terms = this.courseTerms(b);
+        if (terms.pupils < t.minUnits) return fail(`a course needs at least ${t.minUnits} units inside`);
+        if (!canAfford(p.res, terms.cost)) return fail('not enough resources');
+        pay(p.res, terms.cost);
+        b.course = { remaining: terms.seconds, total: terms.seconds };
+        return ok();
+      }
+      case 'release': {
+        const b = w.buildings.find((x) => x.id === cmd.building);
+        if (!b || b.owner !== p.id || !b.inside.length) return fail('nobody inside');
+        if (b.course) return fail('a course is in progress');
+        this.evict(b);
         return ok();
       }
       case 'demolish': {
@@ -196,41 +262,136 @@ export class Sim {
         if (b.def === 'hq') return fail('cannot demolish HQ');
         const d = this.defs.b.get(b.def)!;
         for (const [k, v] of Object.entries(d.cost)) p.res[k] = (p.res[k] ?? 0) + v * 0.4;
+        this.evict(b);
         w.buildings.splice(i, 1);
         return ok();
       }
     }
   }
 
-  /** Plan routes: ground units take roads when that is quicker, then spread out around the destination. */
-  private orderMove(units: Unit[], to: LngLat, cohesion: boolean) {
-    if (!units.length) return;
-    const mult = this.ruleset.rules.roadSpeedMult;
+  // ---------- movement planning ----------
+  private blockedFor(d: UnitDef): boolean {
+    if (d.kind === 'air') return false;
+    const mob = d.mobility ?? 'foot';
+    return this.ruleset.terrain.some((t) => t.barrier?.mobility.includes(mob));
+  }
+
+  /** Friendly boat/pontoon crossings in service. */
+  private crossings(team: Team): { pos: LngLat; r: number; speed: number }[] {
+    const out: { pos: LngLat; r: number; speed: number }[] = [];
+    for (const b of this.world.buildings) {
+      if (b.team !== team || b.progress < 1) continue;
+      const c = this.defs.b.get(b.def)!.crossing;
+      if (c) out.push({ pos: b.pos, r: c.radiusKm, speed: c.speed });
+    }
+    return out;
+  }
+
+  private barrierNear(p: LngLat, km: number): boolean {
+    if (!this.terrain) return false;
+    for (let a = 0; a < 16; a++) {
+      for (const r of [km * 0.5, km]) {
+        const q: LngLat = [p[0] + (Math.cos((a / 16) * 6.2832) * r) / kmPerDegLng(p[1]), p[1] + (Math.sin((a / 16) * 6.2832) * r) / 111.32];
+        if (this.terrain.isBarrier(q)) return true;
+      }
+    }
+    return false;
+  }
+
+  /** Can a ground unit of this team walk/drive cross-country from a to b without entering a river? */
+  private lineClear(a: LngLat, b: LngLat, cross: { pos: LngLat; r: number }[]): boolean {
+    if (!this.terrain) return true;
+    const steps = Math.max(1, Math.ceil(distKm(a, b) / 0.35));
+    let leaving = this.terrain.isBarrier(a); // a unit already afloat may always make for the bank
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const p: LngLat = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+      if (!this.terrain.isBarrier(p)) leaving = false;
+      else if (!leaving && !cross.some((c) => distKm(c.pos, p) <= c.r)) return false;
+    }
+    return true;
+  }
+
+  /** One stretch without boats: straight if open, by road if that is quicker (or the only way). */
+  private planLeg(from: LngLat, to: LngLat, speed: number, cross: { pos: LngLat; r: number }[], direct: boolean): { wps: Waypoint[]; sec: number } | null {
+    const off = speed * 0.85; // rough cross-country average, terrain is applied for real while moving
+    const clear = (a: LngLat, b: LngLat) => this.lineClear(a, b, cross);
+    const open = clear(from, to);
+    const straight = open ? distKm(from, to) / off : Infinity;
+    if (open && (direct || straight < 60)) return { wps: [{ p: to, road: false }], sec: straight }; // short hops are not worth mounting up for
+    const road = this.roads?.routeTimed(from, to, { roadSpeed: speed * this.ruleset.rules.roadSpeedMult, offSpeed: off, clear, usable: (n) => !this.terrain?.isBarrier(n) }) ?? null;
+    if (road && road.seconds < straight) {
+      const wps: Waypoint[] = road.points.map((p, k) => ({ p, road: k > 0 }));
+      wps.push({ p: to, road: false });
+      return { wps, sec: road.seconds };
+    }
+    return open ? { wps: [{ p: to, road: false }], sec: straight } : null;
+  }
+
+  /** Quickest way for a ground unit: direct, by road (bridges), or via a friendly boat crossing. */
+  private plan(team: Team, from: LngLat, to: LngLat, speed: number, direct: boolean): Waypoint[] | null {
+    const cross = this.crossings(team);
+    let best = this.planLeg(from, to, speed, cross, direct);
+    const span = distKm(from, to);
+    for (const c of cross) {
+      // only crossings roughly on the way are worth trying
+      if (distKm(from, c.pos) + distKm(c.pos, to) > span * 1.8 + 60) continue;
+      const a = this.planLeg(from, c.pos, speed, cross, direct);
+      if (!a) continue;
+      const b = this.planLeg(c.pos, to, speed, cross, direct);
+      if (!b) continue;
+      if (!best || a.sec + b.sec < best.sec) best = { wps: [...a.wps, ...b.wps], sec: a.sec + b.sec };
+    }
+    return best ? best.wps : null;
+  }
+
+  /**
+   * Plan routes for a move order. Ground units travel by road in transport mode when that is quicker, rivers are only
+   * crossed on bridges (roads) or at boat crossings. Returns how many units got a route.
+   */
+  private orderMove(units: Unit[], to: LngLat, cohesion: boolean, queue: boolean, direct: boolean): number {
+    if (!units.length) return 0;
+    const r = this.ruleset.rules;
     const cap = cohesion ? Math.min(...units.map((u) => this.defs.u.get(u.def)!.speed)) : 0;
+    const startOf = (u: Unit): LngLat => (queue && u.path.length ? u.path[u.path.length - 1].p : u.pos);
     const ground = units.filter((u) => this.defs.u.get(u.def)!.kind !== 'air');
-    let shared: LngLat[] = [];
     let centre: LngLat = to;
-    if (ground.length && this.roads) {
-      centre = [ground.reduce((a, u) => a + u.pos[0], 0) / ground.length, ground.reduce((a, u) => a + u.pos[1], 0) / ground.length];
-      shared = this.roads.route(centre, to, mult);
+    let shared: Waypoint[] | null = null;
+    if (ground.length) {
+      centre = [ground.reduce((a, u) => a + startOf(u)[0], 0) / ground.length, ground.reduce((a, u) => a + startOf(u)[1], 0) / ground.length];
+      const slowest = Math.min(...ground.map((u) => this.defs.u.get(u.def)!.speed));
+      shared = this.plan(ground[0].team, centre, to, slowest, direct);
     }
     let own = 0;
+    let moved = 0;
     units.forEach((u, i) => {
-      const ring = Math.ceil(Math.sqrt(i));
-      const dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
       const d = this.defs.u.get(u.def)!;
-      let road: LngLat[] = [];
-      if (d.kind !== 'air' && this.roads) {
-        // stragglers far from the group plan their own way (bounded so one order stays cheap)
-        if (distKm(u.pos, centre) > 20 && own < 16) (road = this.roads.route(u.pos, to, mult)), own++;
-        else road = shared;
+      const from = startOf(u);
+      if (queue && u.path.filter((w) => w.end).length >= r.maxQueuedOrders) return;
+      const ring = Math.ceil(Math.sqrt(i));
+      let dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
+      let leg: Waypoint[] | null;
+      if (d.kind === 'air') {
+        leg = [{ p: dest, road: false }];
+      } else {
+        // never park a unit in the river because of its place in the formation
+        if (this.blockedFor(d) && this.terrain?.isBarrier(dest)) dest = to;
+        // the group shares one plan; stragglers (and units the shared plan cannot reach) plan their own, bounded per order
+        const near = distKm(from, centre) <= 15 && this.lineClear(from, shared?.[0]?.p ?? to, this.crossings(u.team));
+        if (shared && near) leg = shared.map((w) => ({ ...w }));
+        else if (own++ < 24) leg = this.plan(u.team, from, to, d.speed, direct);
+        else leg = null;
+        if (leg) leg[leg.length - 1] = { p: dest, road: false };
       }
-      const path: Waypoint[] = road.map((p, k) => ({ p, road: k > 0 }));
-      path.push({ p: dest, road: false });
-      u.path = path;
+      if (!leg) return;
+      leg[leg.length - 1].end = true;
+      u.enter = 0;
+      u.path = queue ? [...u.path, ...leg] : leg;
       u.target = dest;
       u.cap = cap;
+      moved++;
     });
+    return moved;
   }
 
   private rankUp(u: Unit) {
@@ -252,6 +413,7 @@ export class Sim {
     w.time += dt;
 
     this.construction(dt);
+    this.courses(dt);
     this.economy(dt);
     this.training(dt);
     this.units(dt);
@@ -272,6 +434,38 @@ export class Sim {
       const d = this.defs.b.get(b.def)!;
       b.progress = Math.min(1, b.progress + dt / d.buildTime);
       if (b.progress >= 1) this.hooks.emit('buildingCompleted', { id: b.id, def: b.def, owner: b.owner });
+    }
+  }
+
+  /** Training centres: admit units that have arrived, run courses, graduate the class. */
+  private courses(dt: number) {
+    const w = this.world;
+    for (const u of w.units) {
+      if (!u.enter || u.path.length) continue;
+      const b = w.buildings.find((x) => x.id === u.enter);
+      const t = b && this.defs.b.get(b.def)!.training;
+      u.enter = 0;
+      if (!b || !t || b.course || b.inside.length >= t.capacity || distKm(u.pos, b.pos) > 3) continue;
+      u.hp = Math.max(u.hp, 1);
+      b.inside.push(u);
+    }
+    if (w.buildings.some((b) => b.inside.length)) {
+      const inside = new Set(w.buildings.flatMap((b) => b.inside));
+      if (w.units.some((u) => inside.has(u))) w.units = w.units.filter((u) => !inside.has(u));
+    }
+    for (const b of w.buildings) {
+      if (!b.course) continue;
+      b.course.remaining -= dt;
+      if (b.course.remaining > 0) continue;
+      for (const u of b.inside) {
+        const next = this.ranks[u.rank + 1];
+        if (!next) continue;
+        u.xp = Math.max(u.xp, next.xp);
+        this.rankUp(u);
+        u.hp = this.maxHp(u); // graduates leave rested and at full strength
+      }
+      this.hooks.emit('courseFinished', { id: b.id, owner: b.owner, units: b.inside.length });
+      this.evict(b);
     }
   }
 
@@ -381,13 +575,18 @@ export class Sim {
           if (dist <= best) (best = dist), (tb = e);
         }
       }
-      if ((tu || tb) && u.cooldown === 0) {
+      // a column that runs into the enemy halts and deploys; it drives on once the way is clear
+      const engaged = !!(tu || tb);
+      u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
+      if (engaged && u.cooldown === 0) {
         u.cooldown = 1; // one salvo per second
         const base = d.damage * rank.damage;
         let dealt: number;
         if (tu) {
-          const cover = this.defs.u.get(tu.def)!.kind === 'air' ? 0 : this.terrainAt(tu.pos).cover;
-          dealt = (base * (1 - cover)) / this.holdMult(tu.team, tu.pos);
+          const td = this.defs.u.get(tu.def)!;
+          const air = td.kind === 'air';
+          const cover = air ? 0 : this.terrainAt(tu.pos).cover;
+          dealt = (base * (air ? d.airDamage ?? r.airDamageDefault : 1) * (1 - cover) * (tu.transport ? r.transportDamageMult : 1)) / this.holdMult(tu.team, tu.pos);
           tu.hp -= dealt;
           this.shots.push({ def: u.def, team: u.team, from: u.pos, to: tu.pos });
           if (tu.hp <= 0) u.xp += r.xpPerKill;
@@ -402,7 +601,7 @@ export class Sim {
 
       // movement: explicit orders follow their route; idle units close with enemies they can see
       if (u.path.length) {
-        this.advance(u, d, dt);
+        if (!(engaged && u.path[0].road && d.kind !== 'air')) this.advance(u, d, dt);
       } else if (!tu && !tb) {
         let chase: LngLat | null = null;
         let near = d.vision * 0.7;
@@ -411,8 +610,29 @@ export class Sim {
           const dist = distKm(u.pos, e.pos);
           if (dist < near) (near = dist), (chase = e.pos);
         }
-        if (chase) u.pos = moveToward(u.pos, chase, d.speed * this.terrainSpeed(d, u.pos) * dt);
+        if (chase) this.stepOffRoad(u, d, chase, d.speed * dt);
       }
+    }
+
+    // static weapons (air defence and the like)
+    for (const b of w.buildings) {
+      const a = this.defs.b.get(b.def)!.attack;
+      if (!a || b.progress < 1) continue;
+      b.cooldown = Math.max(0, b.cooldown - dt);
+      if (b.cooldown > 0) continue;
+      let tgt: Unit | null = null;
+      let best = a.range;
+      for (const e of w.units) {
+        if (e.team === b.team || e.hp <= 0) continue;
+        const air = this.defs.u.get(e.def)!.kind === 'air';
+        if ((a.targets === 'air' && !air) || (a.targets === 'ground' && air)) continue;
+        const dist = distKm(b.pos, e.pos);
+        if (dist <= best) (best = dist), (tgt = e);
+      }
+      if (!tgt) continue;
+      b.cooldown = 1;
+      tgt.hp -= a.damage;
+      this.shots.push({ def: b.def, team: b.team, from: b.pos, to: tgt.pos });
     }
     if (this.shots.length > 4000) this.shots.splice(0, this.shots.length - 4000);
 
@@ -423,9 +643,28 @@ export class Sim {
     }
     const deadB = w.buildings.filter((b) => b.hp <= 0);
     if (deadB.length) {
+      deadB.forEach((b) => this.evict(b, 0.5));
       w.buildings = w.buildings.filter((b) => b.hp > 0);
       deadB.forEach((b) => this.hooks.emit('buildingDestroyed', { id: b.id, def: b.def, owner: b.owner }));
     }
+  }
+
+  /**
+   * Cross-country step towards `to` using at most `budgetKm` of open-ground distance (terrain makes it shorter).
+   * Returns false when a river stops the unit.
+   */
+  private stepOffRoad(u: Unit, d: UnitDef, to: LngLat, budgetKm: number): boolean {
+    let mult = this.terrainSpeed(d, u.pos);
+    const blocked = this.blockedFor(d) && this.terrain;
+    if (blocked && this.terrain!.isBarrier(u.pos)) {
+      // afloat: boats set the pace inside a crossing; a unit stranded outside one may still struggle to the bank
+      const c = this.crossings(u.team).find((x) => distKm(x.pos, u.pos) <= x.r);
+      if (c) mult = c.speed;
+    }
+    const next = moveToward(u.pos, to, budgetKm * mult);
+    if (blocked && this.terrain!.isBarrier(next) && !this.terrain!.isBarrier(u.pos) && !this.crossings(u.team).some((x) => distKm(x.pos, next) <= x.r)) return false;
+    u.pos = next;
+    return true;
   }
 
   private advance(u: Unit, d: UnitDef, dt: number) {
@@ -434,18 +673,30 @@ export class Sim {
     let budget = dt;
     for (let guard = 0; budget > 1e-6 && u.path.length && guard < 32; guard++) {
       const wp = u.path[0];
-      const speed = base * (wp.road ? roadMult : this.terrainSpeed(d, u.pos));
       const dist = distKm(u.pos, wp.p);
-      if (speed * budget >= dist) {
-        u.pos = [wp.p[0], wp.p[1]];
-        budget -= dist / speed;
-        u.path.shift();
+      if (wp.road) {
+        const speed = base * roadMult;
+        if (speed * budget >= dist) {
+          u.pos = [wp.p[0], wp.p[1]];
+          budget -= dist / speed;
+          u.path.shift();
+        } else {
+          u.pos = moveToward(u.pos, wp.p, speed * budget);
+          budget = 0;
+        }
       } else {
-        u.pos = moveToward(u.pos, wp.p, speed * budget);
+        const before = u.pos;
+        if (!this.stepOffRoad(u, d, wp.p, base * budget)) {
+          // the crossing it counted on is gone: halt at the bank and drop the orders
+          u.path = [];
+          break;
+        }
         budget = 0;
+        if (distKm(u.pos, wp.p) < 0.02 || (before[0] === u.pos[0] && before[1] === u.pos[1])) u.path.shift();
       }
     }
-    if (!u.path.length) (u.target = null), (u.cap = 0);
+    if (!u.path.length) (u.target = null), (u.cap = 0), (u.transport = false);
+    else u.target = u.path[u.path.length - 1].p;
   }
 
   /** The "abstract war": economy and local force balance push every front node along its normal. */
@@ -497,7 +748,7 @@ export class Sim {
       n[i].lat += (ny * v * dt) / 111.32;
     }
     n[0].v = n[n.length - 1].v = 0;
-    if (w.tick % 50 === 0) w.front = resample(n);
+    if (w.tick % 20 === 0) w.front = respace(n, r.frontNodeSpacingKm);
   }
 
   private territory(dt: number) {
@@ -517,6 +768,7 @@ export class Sim {
       if (sideOf(w.front, w.buildings[i].pos) !== w.buildings[i].team) lost.push(w.buildings[i]);
     }
     if (lost.length) {
+      lost.forEach((b) => this.evict(b, 0.5));
       w.buildings = w.buildings.filter((b) => !lost.includes(b));
       lost.forEach((b) => this.hooks.emit('buildingDestroyed', { id: b.id, def: b.def, owner: b.owner }));
     }

@@ -20,7 +20,17 @@ export interface Building {
   hp: number;
   progress: number; // 0..1, 1 = complete
   road: boolean; // connected to the road network
+  cooldown: number; // static weapons
+  /** Units inside a training centre (server side only; clients get a summary). */
+  inside: Unit[];
+  /** Training course in progress. */
+  course: { remaining: number; total: number } | null;
 }
+
+export type BuildingView = Omit<Building, 'inside'> & {
+  /** Own team only: who is inside. */
+  inside?: { def: string; rank: number }[];
+};
 
 export interface Unit {
   id: number;
@@ -33,6 +43,10 @@ export interface Unit {
   cooldown: number;
   xp: number;
   rank: number; // index into ruleset.ranks
+  /** Driving in column on a road: fast, but cannot fire and takes extra damage. */
+  transport: boolean;
+  /** Id of the building this unit is walking to in order to go inside, 0 = none. */
+  enter: number;
   /** Remaining waypoints (server side only). `road` legs use road speed and ignore terrain. */
   path: Waypoint[];
   /** Speed cap in km/s when ordered to move in formation, 0 = none. */
@@ -42,6 +56,8 @@ export interface Unit {
 export interface Waypoint {
   p: LngLat;
   road: boolean;
+  /** Last waypoint of one move order (orders can be queued). */
+  end?: boolean;
 }
 
 /** A weapon discharge, sent to clients purely for animation. */
@@ -52,7 +68,12 @@ export interface Shot {
   to: LngLat;
 }
 
-export type UnitView = Omit<Unit, 'path' | 'cap'>;
+export type UnitView = Omit<Unit, 'path' | 'cap' | 'enter'> & {
+  /** Own units only: the training centre this unit is walking into. */
+  entering?: number;
+  /** Destinations of the queued move orders, own units only. */
+  route?: LngLat[];
+};
 
 export interface TrainItem {
   building: number;

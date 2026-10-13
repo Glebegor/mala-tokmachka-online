@@ -1,6 +1,6 @@
 import { type BotDifficulty, distKm, moveToward, nearestNode, offsetKm, sideOf, type LngLat, type Player, type Sim } from '@sw/core';
 
-const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'gas_station', 'trench', 'signal_station', 'housing', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
+const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'gas_station', 'trench', 'signal_station', 'housing', 'antiair', 'training_center', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
@@ -81,9 +81,17 @@ export class Bot {
       if (cp) sim.apply(p.id, { type: 'move', units: [u.id], to: offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20) });
     }
 
-    // spend spare money on promotions once the economy is running
-    if ((p.res.money ?? 0) > 1500 && army.length) {
-      sim.apply(p.id, { type: 'promote', units: army.slice(0, 4).map((u) => u.id) });
+    // schooling: with spare money, send a squad that is not on a mission through the training centre
+    for (const b of w.buildings) {
+      if (b.owner !== p.id || b.progress < 1 || b.course) continue;
+      const t = sim.defs.b.get(b.def)!.training;
+      if (!t) continue;
+      if (b.inside.length >= t.minUnits) {
+        if (!sim.apply(p.id, { type: 'course', building: b.id }).ok && w.time % 60 < 3) sim.apply(p.id, { type: 'release', building: b.id });
+      } else if ((p.res.money ?? 0) > 900 && !w.units.some((u) => u.enter === b.id)) {
+        const pupils = army.filter((u) => !u.target && u.rank < sim.ranks.length - 1 && distKm(u.pos, b.pos) < 40).slice(0, 4);
+        if (pupils.length >= t.minUnits - b.inside.length) sim.apply(p.id, { type: 'enter', units: pupils.map((u) => u.id), building: b.id });
+      }
     }
 
     const idle = army.filter((u) => !u.target);

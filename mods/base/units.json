@@ -16,7 +16,9 @@
     "mobility": "foot",
     "symbol": "infantry",
     "fx": "burst",
-    "missRate": 0.45
+    "missRate": 0.45,
+    "airDamage": 0.3,
+    "description": "Cheap all-round riflemen. Best in forest and cities where they get cover; can ford streams. Weak in the open against armour."
   },
   {
     "id": "tank",
@@ -37,7 +39,9 @@
     "mobility": "tracked",
     "symbol": "armor",
     "fx": "shell",
-    "missRate": 0.2
+    "missRate": 0.2,
+    "airDamage": 0.15,
+    "description": "Heavy direct fire and armour. Fast on roads and open fields, bogs down in forest, hills and cities. Needs metal and fuel."
   },
   {
     "id": "artillery",
@@ -57,7 +61,9 @@
     "mobility": "wheeled",
     "symbol": "artillery",
     "fx": "arc",
-    "missRate": 0.35
+    "missRate": 0.35,
+    "airDamage": 0.0,
+    "description": "Long range (8 km) indirect fire, fragile and slow off-road. Keep it behind the line; it cannot hit aircraft."
   },
   {
     "id": "drone",
@@ -77,6 +83,8 @@
     "mobility": "air",
     "symbol": "uav",
     "fx": "beam",
-    "missRate": 0.12
+    "missRate": 0.12,
+    "airDamage": 0.5,
+    "description": "Unarmoured scout that flies over any terrain and sees 18 km. Light strike only. Easy prey for anti-air stations."
   }
 ]

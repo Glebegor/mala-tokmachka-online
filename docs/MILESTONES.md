@@ -19,10 +19,35 @@
 - **Veterancy**: Recruit → Regular → Veteran → Elite → Guards, earned in combat or bought.
 - **Fire animation**: distinct per unit (burst, shell, arc, beam), with cosmetic misses.
 
-## M3 — Depth (next)
+## M3 — Manoeuvre (done, v0.3.0)
+- **Transport mode**: move orders are planned for the shortest travel time. On road legs ground units drive in column
+  (×2.4 speed, wheels under the marker), cannot fire and take +50% damage; a column that meets the enemy halts and deploys.
+- **Rivers**: the major rivers (Dnipro, Donets, Desna, Southern Bug, Dniester, Don…) and the sea are barriers.
+  Ground units cross only on road bridges or at a **Pontoon Crossing** you build on the bank (6 km radius). Small streams stay fordable.
+- **Waypoints**: Shift+right click queues up to 8 legs; Alt+right click moves straight across country without mounting up.
+- **Anti-Air Station**: static air defence (14 km). Ground weapons now do only 0–30% damage to aircraft.
+- **Spawns and balance**: 12 mirrored spawn pairs, every one 60 km from the front on a road; players are spread evenly and
+  face their opposite number. Capture point value is equal per side (31 / 31).
+- **Frontline look**: crisp cased line with sharp corners and a hard-edged contact zone; arrowheads show where and which way
+  it is moving. The line is re-spaced locally, so its corners are no longer rounded off over time.
+- **NATO markers**: standard light fill with black frame and icon.
+
+## M4 — Training, relief, presentation (done, v0.4.0)
+- **Training Centre**: ground units walk inside (off the map). With at least 3 inside you pay for a course; after the wait
+  the class comes out one rank higher and at full strength. Holds 12, two per player. Instant paid promotion is gone:
+  ranks now come from combat (25 XP per kill plus XP for damage) or from courses.
+- **Terrain at twice the resolution** (~0.8 km cells) with two new types from real elevation data: **hills** and **mountains**
+  (see further, some cover, slow or nearly closed to vehicles off-road).
+- **Descriptions** for every building and unit: hover a build or train button for what it does and its numbers.
+- **Map**: near-monochrome dark basemap with real relief shading, hatched occupied territory, vignette.
+- **Attack arrows** in situation-map style: bold tapered arrows across the stretches of front that are moving, animated.
+- **Markers**: echelon on top of the frame, rank chevrons on the right, transport wheels below.
+
+## M5 — Depth (next)
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.
-- Bridges as destructible objects; engineers; river crossings as a real operation.
-- Terrain-aware pathfinding off-road (currently only roads are routed; cross-country legs are straight).
+- Bridges as destructible objects; engineers.
+- Terrain-aware pathfinding off-road (cross-country legs are straight lines; units route around rivers only via roads and crossings).
+- Choosing your spawn in the lobby.
 - Game modes: capture the flag, destruction; ranked matchmaking; spectators and replays.
 - Persistence: Postgres for accounts/match history, reconnect after game-service restart.
 - More units via mods: air defence, mechanized infantry, supply trucks, engineers (icons already exist).

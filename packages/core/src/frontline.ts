@@ -32,6 +32,29 @@ export function resample(nodes: FrontNode[], count = nodes.length): FrontNode[] 
 }
 
 /**
+ * Keep node spacing healthy without moving nodes that are fine: split segments that stretched too far and drop nodes
+ * that bunched up. Unlike a global resample this never rounds off the corners of the line.
+ */
+export function respace(nodes: FrontNode[], spacingKm: number): FrontNode[] {
+  const out: FrontNode[] = [nodes[0]];
+  for (let i = 1; i < nodes.length; i++) {
+    const cur = nodes[i];
+    const last = out[out.length - 1];
+    const next = nodes[i + 1];
+    // drop a node squeezed between two close neighbours
+    if (next && distKm([last.lng, last.lat], [next.lng, next.lat]) < spacingKm) continue;
+    const gap = distKm([last.lng, last.lat], [cur.lng, cur.lat]);
+    const parts = Math.min(8, Math.ceil(gap / (spacingKm * 1.7)));
+    for (let k = 1; k < parts; k++) {
+      const t = k / parts;
+      out.push({ lng: last.lng + (cur.lng - last.lng) * t, lat: last.lat + (cur.lat - last.lat) * t, v: last.v + (cur.v - last.v) * t });
+    }
+    out.push(cur);
+  }
+  return out;
+}
+
+/**
  * Distance to the front in km, signed: positive on team 0's side (left of the line's direction).
  * Where two segments are equally close (their shared vertex) the one whose infinite line is farther decides the side.
  */

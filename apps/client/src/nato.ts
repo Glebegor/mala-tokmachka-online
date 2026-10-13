@@ -1,11 +1,12 @@
 /**
  * NATO APP-6 style unit markers drawn on canvas and registered as map images on demand.
  * Frame shape = affiliation (friendly rectangle, hostile diamond); colour = side; icon = branch;
- * mark above the frame = echelon (size of a group); chevrons below = veterancy rank.
+ * mark on top of the frame = echelon (size of the formation); chevrons to its right = veterancy rank;
+ * wheels below = transport mode.
  */
 export const NATO_PREFIX = 'nato|';
 const SIZE = 64; // css px, rendered at 2x
-const DARK = '#0b0d10';
+const INK = '#0b0d10';
 
 export interface NatoSpec {
   hostile: boolean;
@@ -15,16 +16,17 @@ export interface NatoSpec {
   rank: number;
   selected: boolean;
   own: boolean;
+  transport: boolean;
 }
 
 export function natoId(s: NatoSpec): string {
-  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}`;
+  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}`;
 }
 
 export function parseNatoId(id: string): NatoSpec | null {
   if (!id.startsWith(NATO_PREFIX)) return null;
-  const [, aff, color, symbol, echelon, rank, sel, own] = id.split('|');
-  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1' };
+  const [, aff, color, symbol, echelon, rank, sel, own, tr] = id.split('|');
+  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1' };
 }
 
 /** Echelon mark for a formation of n units. */
@@ -37,79 +39,78 @@ export function echelonFor(n: number): string {
   return '•';
 }
 
+/** Standard pastel fill for a side colour (APP-6 uses light fills with black line work). */
+function pastel(hex: string, mix: number): string {
+  const c = [1, 3, 5].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return `rgb(${c.map((v) => Math.round(v + (255 - v) * mix)).join(',')})`;
+}
+
 export function drawNato(spec: NatoSpec): ImageData {
   const c = document.createElement('canvas');
   c.width = c.height = SIZE * 2;
   const g = c.getContext('2d')!;
   g.scale(2, 2);
-  const cx = 32, cy = 34;
+  const cx = 32, cy = 31;
+  const hw = spec.hostile ? 18 : 20, hh = spec.hostile ? 18 : 13.5;
   const frame = new Path2D();
   if (spec.hostile) {
-    frame.moveTo(cx, cy - 19);
-    frame.lineTo(cx + 19, cy);
-    frame.lineTo(cx, cy + 19);
-    frame.lineTo(cx - 19, cy);
+    frame.moveTo(cx, cy - hh);
+    frame.lineTo(cx + hw, cy);
+    frame.lineTo(cx, cy + hh);
+    frame.lineTo(cx - hw, cy);
     frame.closePath();
   } else {
-    frame.rect(cx - 21, cy - 14, 42, 28);
+    frame.rect(cx - hw, cy - hh, hw * 2, hh * 2);
   }
 
-  if (spec.selected) {
-    g.save();
-    g.strokeStyle = '#ffffff';
-    g.lineWidth = 7;
-    g.lineJoin = 'round';
-    g.stroke(frame);
-    g.restore();
-  }
-  g.fillStyle = DARK;
-  g.fill(frame);
-  g.globalAlpha = spec.own ? 0.42 : 0.24;
-  g.fillStyle = spec.color;
-  g.fill(frame);
-  g.globalAlpha = 1;
+  // selection halo, then a thin light casing so the black frame reads on the dark map
+  g.lineJoin = 'round';
+  g.strokeStyle = spec.selected ? '#ffe45c' : 'rgba(255,255,255,0.55)';
+  g.lineWidth = spec.selected ? 7.5 : 4.2;
+  g.stroke(frame);
 
-  // branch icon, clipped to the frame
+  g.fillStyle = pastel(spec.color, spec.own ? 0.5 : 0.68);
+  g.fill(frame);
+
+  // branch icon in black, clipped to the frame
   g.save();
   g.clip(frame);
-  g.strokeStyle = g.fillStyle = '#f2f5f8';
-  g.lineWidth = 2.4;
+  g.strokeStyle = g.fillStyle = INK;
+  g.lineWidth = 2.2;
   g.lineCap = 'round';
-  const hw = spec.hostile ? 19 : 21, hh = spec.hostile ? 19 : 14;
   const line = (x1: number, y1: number, x2: number, y2: number) => (g.beginPath(), g.moveTo(cx + x1, cy + y1), g.lineTo(cx + x2, cy + y2), g.stroke());
+  const oval = () => (g.beginPath(), g.roundRect(cx - 10.5, cy - 5.2, 21, 10.4, 5.2), g.stroke());
+  // inside a diamond the diagonals run between the mid-points of its sides
+  const dx = spec.hostile ? hw / 2 : hw, dy = spec.hostile ? hh / 2 : hh;
   switch (spec.symbol) {
     case 'infantry':
-      line(-hw, -hh, hw, hh);
-      line(-hw, hh, hw, -hh);
+      line(-dx, -dy, dx, dy);
+      line(-dx, dy, dx, -dy);
       break;
     case 'armor':
-      g.beginPath();
-      g.roundRect(cx - 11, cy - 5.5, 22, 11, 5.5);
-      g.stroke();
+      oval();
       break;
     case 'mechanized':
-      line(-hw, -hh, hw, hh);
-      line(-hw, hh, hw, -hh);
-      g.beginPath();
-      g.roundRect(cx - 11, cy - 5.5, 22, 11, 5.5);
-      g.stroke();
+      line(-dx, -dy, dx, dy);
+      line(-dx, dy, dx, -dy);
+      oval();
       break;
     case 'artillery':
       g.beginPath();
-      g.arc(cx, cy, 5, 0, Math.PI * 2);
+      g.arc(cx, cy, 4.6, 0, Math.PI * 2);
       g.fill();
       break;
     case 'uav':
       g.beginPath();
-      g.moveTo(cx - 13, cy - 4);
-      g.lineTo(cx, cy + 3);
-      g.lineTo(cx + 13, cy - 4);
-      g.lineTo(cx, cy - 0.5);
+      g.moveTo(cx - 12, cy - 4);
+      g.lineTo(cx, cy + 3.2);
+      g.lineTo(cx + 12, cy - 4);
+      g.lineTo(cx, cy - 0.6);
       g.closePath();
       g.fill();
       break;
     case 'recon':
-      line(-hw, hh, hw, -hh);
+      line(-dx, dy, dx, -dy);
       break;
     case 'antiair':
       g.beginPath();
@@ -132,37 +133,56 @@ export function drawNato(spec: NatoSpec): ImageData {
   }
   g.restore();
 
-  g.strokeStyle = spec.color;
-  g.lineWidth = spec.own ? 3 : 2.4;
+  g.strokeStyle = INK;
+  g.lineWidth = spec.own ? 2.6 : 2;
   g.lineJoin = 'miter';
   g.stroke(frame);
 
   if (spec.echelon) {
     g.fillStyle = '#ffffff';
-    g.strokeStyle = DARK;
+    g.strokeStyle = INK;
     g.lineWidth = 3;
-    g.font = '700 13px ui-monospace, Menlo, monospace';
+    g.font = '700 12px ui-monospace, Menlo, monospace';
     g.textAlign = 'center';
     g.textBaseline = 'middle';
-    const y = spec.hostile ? 9 : 12;
+    const y = cy - hh - 7;
     g.strokeText(spec.echelon, cx, y);
     g.fillText(spec.echelon, cx, y);
   }
 
-  // veterancy chevrons
+  let below = cy + hh + (spec.hostile ? 1 : 3.5);
+  // mobility indicator: wheels under the frame while driving in column (transport mode)
+  if (spec.transport) {
+    below += 1.5;
+    for (const ox of [-8, 0, 8]) {
+      g.beginPath();
+      g.arc(cx + ox * (spec.hostile ? 0.6 : 1), below, 2.3, 0, Math.PI * 2);
+      g.fillStyle = '#ffffff';
+      g.fill();
+      g.strokeStyle = INK;
+      g.lineWidth = 1.3;
+      g.stroke();
+    }
+    below += 4.5;
+  }
+
+  // veterancy: chevrons stacked on the right-hand side of the frame
   if (spec.rank > 0) {
     const n = Math.min(spec.rank, 5);
-    const y = spec.hostile ? 58 : 54;
-    g.strokeStyle = '#e8c35a';
-    g.lineWidth = 2;
+    const x = cx + hw + 6.5;
     g.lineCap = 'round';
-    for (let i = 0; i < n; i++) {
-      const x = cx + (i - (n - 1) / 2) * 7;
-      g.beginPath();
-      g.moveTo(x - 3, y + 2);
-      g.lineTo(x, y - 2);
-      g.lineTo(x + 3, y + 2);
-      g.stroke();
+    g.lineJoin = 'round';
+    for (const [color, width] of [[INK, 3.6], ['#ffd84a', 1.9]] as const) {
+      g.strokeStyle = color;
+      g.lineWidth = width;
+      for (let i = 0; i < n; i++) {
+        const y = cy + ((n - 1) / 2 - i) * 5.4;
+        g.beginPath();
+        g.moveTo(x - 3.2, y + 1.8);
+        g.lineTo(x, y - 1.8);
+        g.lineTo(x + 3.2, y + 1.8);
+        g.stroke();
+      }
     }
   }
   return g.getImageData(0, 0, SIZE * 2, SIZE * 2);

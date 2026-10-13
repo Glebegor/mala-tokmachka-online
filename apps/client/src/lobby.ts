@@ -17,7 +17,7 @@ function toggle(label: string, value: boolean, disabled: boolean, onChange: (v: 
   return h('label', { class: 'field check' }, el, h('span', {}, label));
 }
 
-export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; onMatch(matchId: string): void }) {
+export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string; onLogout(): void; onMatch(matchId: string): void }) {
   clear(app);
   let stopped = false;
   let maps: { id: string; name: string }[] = [];
@@ -75,6 +75,21 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
     if (editing && !force) return;
     const rooms = await api.rooms();
     const mine = rooms.find((r) => r.slots.some((x) => x.id === s.user.id));
+    if (mine?.status === 'playing' && mine.matchId && mine.matchId === cb.leftMatch) {
+      // the player pressed Leave: stay in the lobby and let them choose
+      clear(body);
+      body.append(
+        h('div', { class: 'card' },
+          h('h2', {}, 'Match in progress'),
+          h('p', { class: 'muted' }, `${mine.name} is still running. Your units hold their positions while you are away.`),
+          h('div', { class: 'row' },
+            h('button', { class: 'primary', onClick: () => ((stopped = true), cb.onMatch(mine.matchId!)) }, 'Rejoin match'),
+            h('button', { onClick: () => guard(() => api.leave(mine.id)) }, 'Abandon match'),
+          ),
+        ),
+      );
+      return;
+    }
     if (mine?.status === 'playing' && mine.matchId) {
       stopped = true;
       return cb.onMatch(mine.matchId);
