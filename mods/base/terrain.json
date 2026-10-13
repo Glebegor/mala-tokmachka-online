@@ -17,7 +17,7 @@
   {
     "id": "forest",
     "name": "Forest",
-    "color": "#3f8f4a",
+    "color": "#2e8f4e",
     "description": "Slow for vehicles. Good cover and concealment, short sight lines.",
     "speed": {
       "foot": 0.7,
@@ -32,7 +32,7 @@
   {
     "id": "city",
     "name": "Urban area",
-    "color": "#c9584f",
+    "color": "#e0564c",
     "description": "Best cover. Hard to spot defenders, hard to push the front through.",
     "speed": {
       "foot": 0.85,
@@ -47,7 +47,7 @@
   {
     "id": "water",
     "name": "Water",
-    "color": "#4a7fd0",
+    "color": "#3d82e0",
     "description": "Streams can be forded slowly. Rivers and the sea need a bridge or a pontoon crossing.",
     "speed": {
       "foot": 0.25,
@@ -59,7 +59,7 @@
     "frontResist": 0.65,
     "vision": 1.0,
     "barrier": {
-      "minCells": 200,
+      "minCells": 1500,
       "mobility": [
         "foot",
         "tracked",
@@ -70,7 +70,7 @@
   {
     "id": "hill",
     "name": "Hills",
-    "color": "#c79a55",
+    "color": "#c9984f",
     "description": "High ground: see 25% further, some cover. Vehicles slow down.",
     "speed": {
       "foot": 0.85,
@@ -85,7 +85,7 @@
   {
     "id": "mountain",
     "name": "Mountains",
-    "color": "#7a5a44",
+    "color": "#7d5a43",
     "description": "Very slow, nearly closed to vehicles off the roads. See 45% further, strong cover, the front barely moves here.",
     "speed": {
       "foot": 0.5,

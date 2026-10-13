@@ -8,3 +8,11 @@ sw.on('pointCaptured', (e) => {
 sw.on('buildingCompleted', (e) => {
   if (e.def === 'mine') sw.giveResource(e.owner, 'ore', 20); // signing bonus
 });
+
+sw.on('cauldronFormed', (e) => {
+  sw.toast('Cauldron! ' + e.units + ' ' + (e.team === 0 ? 'Ukrainian' : 'Russian') + ' units are encircled (' + e.areaKm2 + ' km²)');
+});
+
+sw.on('cauldronDestroyed', (e) => {
+  sw.toast('Cauldron destroyed: ' + e.units + ' ' + (e.team === 0 ? 'Ukrainian' : 'Russian') + ' units lost');
+});

@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  distKm, distToFrontKm, offsetKm, RoadNetwork, TerrainGrid,
+  distKm, distToFrontKm, offsetKm, pointInRing, RoadNetwork, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -118,9 +118,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
   const pMarkers = new Map<string, HTMLElement>();
   let shown: FrontNode[] = [];
-
-  /** Dev-only switches used by the browser tests. */
-  const debug: { frontV?: (i: number) => number } = {};
 
   function hatchImage(): ImageData {
     const c = document.createElement('canvas');
@@ -254,11 +251,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
-        map.addLayer({ id: 'terrain', type: 'raster', source: 'terrain', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.5, 'raster-resampling': 'nearest', 'raster-fade-duration': 0 } });
+        map.addLayer({ id: 'terrain', type: 'raster', source: 'terrain', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.72, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } });
       }
       (map.getSource('roads') as GeoJSONSource).setData({
         type: 'FeatureCollection',
@@ -281,6 +278,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
       map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
+      // cauldrons: yellow broken ring around the cut-off ground
+      map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
+      map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
       // occupied ground also gets fine diagonal hatching, like on printed situation maps
       map.addImage('hatch', hatchImage(), { pixelRatio: 2 });
       map.addLayer({ id: 'occupied-hatch', type: 'fill', source: 'occupied', paint: { 'fill-pattern': 'hatch', 'fill-opacity': 0.5 } }, 'front-zone');
@@ -305,9 +305,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         new maplibregl.Marker({ element: el }).setLngLat(cp.pos).addTo(map);
         pMarkers.set(cp.id, el);
       }
-      arrows = new FrontArrows(map, mapEl, TEAM_COLOR);
+      arrows = new FrontArrows(map, mapEl, TEAM_COLOR, () => snap?.front ?? []);
       fx = new ShotFx(map, mapEl, (def) => defU.get(def) ?? defB.get(def)?.attack, TEAM_COLOR);
-      if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap, debug };
+      if (import.meta.env.DEV) (window as any).__sw = { map, fx, arrows, snap: () => snap, fakePockets: [] };
       mapReady = true;
       if (snap) render();
       requestAnimationFrame(animate);
@@ -461,18 +461,37 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   // ---------- terrain ----------
+  /**
+   * Terrain overlay as one image. The grid can be far wider than a GPU texture, so it is drawn at up to 4096 px across:
+   * each pixel shows the most significant terrain of the cells it covers (water and towns win over fields).
+   */
   function terrainImage(): string {
     const t = terrain!;
+    const { cols, rows } = t.data;
+    const f = Math.max(1, Math.ceil(cols / 4096));
     const c = document.createElement('canvas');
-    c.width = t.data.cols;
-    c.height = t.data.rows;
+    c.width = Math.floor(cols / f);
+    c.height = Math.floor(rows / f);
     const g = c.getContext('2d')!;
     const img = g.createImageData(c.width, c.height);
-    const palette = t.ids.map((id) => {
+    const weight: Record<string, number> = { water: 6, city: 5, mountain: 4, forest: 3, hill: 2 };
+    const alpha: Record<string, number> = { water: 150, city: 200, mountain: 185, forest: 175, hill: 125 };
+    const look = t.ids.map((id, i) => {
       const col = init!.ruleset.terrain.find((d) => d.id === id)?.color ?? '#000000';
-      return [parseInt(col.slice(1, 3), 16), parseInt(col.slice(3, 5), 16), parseInt(col.slice(5, 7), 16), id === t.ids[0] ? 0 : 255];
+      return { rgba: [parseInt(col.slice(1, 3), 16), parseInt(col.slice(3, 5), 16), parseInt(col.slice(5, 7), 16), i === 0 ? 0 : alpha[id] ?? 160], w: i === 0 ? 0 : weight[id] ?? 1 };
     });
-    for (let i = 0; i < t.cells.length; i++) img.data.set(palette[t.cells[i]], i * 4);
+    for (let y = 0; y < c.height; y++) {
+      for (let x = 0; x < c.width; x++) {
+        let best = 0;
+        for (let dy = 0; dy < f; dy++) {
+          for (let dx = 0; dx < f; dx++) {
+            const k = t.kindAt((y * f + dy) * cols + x * f + dx);
+            if (look[k].w > look[best].w) best = k;
+          }
+        }
+        img.data.set(look[best].rgba, (y * c.width + x) * 4);
+      }
+    }
     g.putImageData(img, 0, 0);
     return c.toDataURL('image/png');
   }
@@ -518,6 +537,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!init || !snap) return 'not ready';
     const r = init.ruleset.rules;
     const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
+    const pocket = snap.pockets.find((k) => pointInRing(k.nodes, p));
+    if (pocket) return pocket.team === init.team ? 'this ground is encircled' : 'not your territory';
     if (d < 0) return 'not your territory';
     if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     if (terrain?.at(p) === 'water') return 'cannot build on water';
@@ -644,21 +665,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           if (inside.length) side.append(h('div', { class: 'row pupils' }, ...inside.map((u) => unitIcon(defU.get(u.def)!, u.rank))));
           if (b.course) {
             const done = 1 - b.course.remaining / b.course.total;
-            side.append(h('div', { class: 'stat' }, `Course in progress: ${b.course.remaining}s left`), h('div', { class: 'bar' }, h('i', { style: { width: `${Math.round(done * 100)}%`, background: 'var(--accent)' } })));
+            side.append(h('div', { class: 'stat' }, `Course in progress: ${b.course.remaining}s left · paid as it runs, pauses if money runs out`), h('div', { class: 'bar' }, h('i', { style: { width: `${Math.round(done * 100)}%`, background: 'var(--accent)' } })));
           } else {
-            const cost: Record<string, number> = {};
+            const rules = init.ruleset.rules;
             let top = 0;
+            let perSec = 0;
             for (const u of inside) {
-              const next = rk[u.rank + 1];
-              if (!next) continue;
+              if (!rk[u.rank + 1]) continue;
               top = Math.max(top, u.rank + 1);
-              for (const [k, v] of Object.entries(next.cost)) cost[k] = (cost[k] ?? 0) + v;
+              perSec += (rules.courseCostPerTick + rules.courseCostPerRank * u.rank) * rules.tickRate;
             }
             const ready = inside.length >= t.minUnits;
+            const secs = t.baseTime + t.timePerRank * top;
             side.append(
               h('button', { class: 'bld', disabled: !ready || undefined, onClick: () => send({ type: 'course', building: b.id }) },
                 h('span', { class: 'ico' }, '⚑'),
-                h('span', { class: 'meta' }, h('b', {}, ready ? `Start course · ${t.baseTime + t.timePerRank * top}s` : `Needs ${t.minUnits - inside.length} more unit${t.minUnits - inside.length === 1 ? '' : 's'}`), ready ? costHtml(cost, snap.res) : h('small', {}, `at least ${t.minUnits} to run a course`))),
+                h('span', { class: 'meta' },
+                  h('b', {}, ready ? `Start course · ${secs}s` : `Needs ${t.minUnits - inside.length} more unit${t.minUnits - inside.length === 1 ? '' : 's'}`),
+                  h('small', {}, ready ? `${perSec.toFixed(1)} money/s while it runs (about ${Math.round(perSec * secs)} in total)` : `at least ${t.minUnits} to run a course`))),
             );
             if (inside.length) side.append(h('button', { onClick: () => send({ type: 'release', building: b.id }) }, 'Send everyone out'));
             side.append(h('div', { class: 'muted' }, 'Select ground units and right click this building to send them in. Graduates come out one rank higher at full strength.'));
@@ -699,6 +723,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           ...unitFacts(d).map((f) => h('div', { class: 'fact' }, f)),
         );
         if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Heading to the training centre'));
+        if (u.encircled) side.append(h('div', { class: 'stat', style: { color: '#ffd84a' } }, 'Encircled: cut off from supply, losing strength. Break out or be relieved.'));
         if (u.transport) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Transport mode: on the road, cannot fire'));
       } else {
         const by = new Map<string, UnitView[]>();
@@ -738,11 +763,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   // ---------- snapshot → view ----------
   let lastPalette = 0;
   function onSnapshot(s: SnapMsg) {
+    if (import.meta.env.DEV) s.pockets.push(...((window as any).__sw?.fakePockets ?? [])); // browser tests draw cauldrons this way
     snap = s;
     if (shown.length !== s.front.length) shown = s.front.map((n) => ({ ...n }));
     pruneGroups();
     for (const id of selUnits) if (!s.units.some((u) => u.id === id)) selUnits.delete(id);
     fx?.add(s.shots);
+    arrows?.feed(s.shots);
     renderRes();
     renderScore();
     // side panel and palette hold buttons: rebuild them at most once a second so clicks are never lost
@@ -775,7 +802,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const d = defU.get(u.def);
         const own = u.owner === me;
         const sel = selUnits.has(u.id);
-        const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport });
+        const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled });
         return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), icon, z: sel ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: u.pos } };
       }),
     });
@@ -908,14 +935,21 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       n.lat += dy * 0.18;
       n.v = t.v;
     });
+    const pocketKey = snap.pockets.map((k) => `${k.id}:${k.nodes.length}:${k.nodes[0].lng}`).join(',');
+    if (pocketKey !== lastPockets) (lastPockets = pocketKey), (moved = true);
     if (!moved && frontDrawn) return;
     frontDrawn = true;
     const line: LngLat[] = shown.map((n) => [n.lng, n.lat]);
-    (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } as any);
-    (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...line, ...init.map.occupiedClosure, line[0]]] } } as any);
-    arrows?.update(debug.frontV ? shown.map((n, i) => ({ ...n, v: debug.frontV!(i) })) : shown, init.ruleset.rules.frontMaxSpeed);
+    // cauldrons: rings of team 0 ground inside the occupied area are holes in it; rings of team 1 ground are extra patches
+    const ring = (k: SnapMsg['pockets'][number]): LngLat[] => [...k.nodes.map((n): LngLat => [n.lng, n.lat]), [k.nodes[0].lng, k.nodes[0].lat]];
+    const holes = snap.pockets.filter((k) => k.team === 0).map(ring);
+    const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
+    (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: [line, ...holes, ...patches] } } as any);
+    (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes], ...patches.map((p) => [p])] } } as any);
+    (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
   }
   let frontDrawn = false;
+  let lastPockets = '';
 
   const ping = setInterval(() => (closed ? clearInterval(ping) : ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ping' } satisfies ClientMsg))), 15000);
 }

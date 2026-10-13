@@ -1,15 +1,16 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, type LngLat } from './geo';
-import { buildFront, distToFrontKm, normalAt, respace, sideOf } from './frontline';
+import { buildFront, distToFrontKm, findPinch, normalOf, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
-import type { Building, Player, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
+import type { Building, FrontNode, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
 }
 const NO_HOOKS: Hooks = { emit() {} };
+const MAP_CACHE = new WeakMap<MapDef, { roads: RoadNetwork | null; terrain: TerrainGrid | null }>();
 const NO_RANK: RankDef = { id: 'none', name: '', xp: 0, damage: 1, hp: 1, range: 1, cost: {} };
 const OPEN_GROUND: TerrainDef = { id: 'open', name: 'Open', color: '#000', speed: {}, cover: 0, concealment: 1, frontResist: 0 };
 
@@ -41,10 +42,16 @@ export class Sim {
     const map = ruleset.maps.find((m) => m.id === mapId);
     if (!map) throw new Error(`unknown map ${mapId}`);
     this.map = map;
-    this.roads = map.roads?.length ? new RoadNetwork(map.roads) : null;
-    const barriers: Record<string, number> = {};
-    for (const t of ruleset.terrain) if (t.barrier) barriers[t.id] = t.barrier.minCells;
-    this.terrain = map.terrain ? new TerrainGrid(map.terrain, barriers) : null;
+    // road graph and terrain grid are immutable and expensive to build: share them between matches on the same map
+    let shared = MAP_CACHE.get(map);
+    if (!shared) {
+      const barriers: Record<string, number> = {};
+      for (const t of ruleset.terrain) if (t.barrier) barriers[t.id] = t.barrier.minCells;
+      shared = { roads: map.roads?.length ? new RoadNetwork(map.roads) : null, terrain: map.terrain ? new TerrainGrid(map.terrain, barriers) : null };
+      MAP_CACHE.set(map, shared);
+    }
+    this.roads = shared.roads;
+    this.terrain = shared.terrain;
     this.world = this.createWorld(slots);
   }
 
@@ -66,6 +73,7 @@ export class Sim {
       units: [],
       queue: [],
       front: buildFront(this.map.front, r.frontNodeSpacingKm),
+      pockets: [],
       points: this.map.capturePoints.map((p) => ({ id: p.id, owner: 0 as Team })),
       scores: [0, 0],
       winner: null,
@@ -89,7 +97,7 @@ export class Sim {
       this.spawnBuilding('hq', p, pos, true);
       r.startUnits.forEach((u, i) => this.spawnUnit(u, p, [pos[0] + 0.035 * Math.cos(i * 1.3), pos[1] + 0.025 * Math.sin(i * 1.3)]));
     }
-    this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = sideOf(w.front, cp.pos)));
+    this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = this.side(cp.pos)));
     return w;
   }
 
@@ -104,7 +112,7 @@ export class Sim {
   spawnUnit(def: string, p: Player, pos: LngLat): Unit {
     const d = this.defs.u.get(def)!;
     pos = this.dry(d, pos);
-    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, transport: false, enter: 0, path: [], cap: 0 };
+    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, transport: false, encircled: false, enter: 0, path: [], cap: 0 };
     this.world.units.push(u);
     return u;
   }
@@ -136,20 +144,26 @@ export class Sim {
     b.course = null;
   }
 
-  /** Price and duration of a course for the units currently inside. */
-  courseTerms(b: Building): { cost: ResourceAmounts; seconds: number; pupils: number } {
+  /** Duration of a course for the units currently inside, and what it costs per second while it runs. */
+  courseTerms(b: Building): { perSecond: number; seconds: number; pupils: number } {
     const t = this.defs.b.get(b.def)!.training!;
-    const cost: ResourceAmounts = {};
+    const r = this.ruleset.rules;
     let top = 0;
     let pupils = 0;
+    let perTick = 0;
     for (const u of b.inside) {
-      const next = this.ranks[u.rank + 1];
-      if (!next) continue;
+      if (!this.ranks[u.rank + 1]) continue;
       pupils++;
       top = Math.max(top, u.rank + 1);
-      for (const [k, v] of Object.entries(next.cost)) cost[k] = (cost[k] ?? 0) + v;
+      perTick += r.courseCostPerTick + r.courseCostPerRank * u.rank;
     }
-    return { cost, seconds: t.baseTime + t.timePerRank * top, pupils };
+    return { perSecond: perTick * r.tickRate, seconds: t.baseTime + t.timePerRank * top, pupils };
+  }
+
+  /** Which team holds the ground here: cauldrons first, then the main front. */
+  side(p: LngLat): Team {
+    const pocket = this.world.pockets.length ? pocketAt(this.world.pockets, p) : null;
+    return pocket ? pocket.team : sideOf(this.world.front, p);
   }
 
   player(id: string) {
@@ -187,6 +201,8 @@ export class Sim {
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         const dist = distToFrontKm(w.front, cmd.pos) * (p.team === 0 ? 1 : -1);
+        const pocket = w.pockets.length ? pocketAt(w.pockets, cmd.pos) : null;
+        if (pocket) return fail(pocket.team === p.team ? 'this ground is encircled' : 'not your territory');
         if (dist < 0) return fail('not your territory');
         if (dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
@@ -243,8 +259,7 @@ export class Sim {
         if (b.course) return fail('a course is already running');
         const terms = this.courseTerms(b);
         if (terms.pupils < t.minUnits) return fail(`a course needs at least ${t.minUnits} units inside`);
-        if (!canAfford(p.res, terms.cost)) return fail('not enough resources');
-        pay(p.res, terms.cost);
+        if ((p.res.money ?? 0) < terms.perSecond) return fail('not enough money to start a course');
         b.course = { remaining: terms.seconds, total: terms.seconds };
         return ok();
       }
@@ -301,7 +316,7 @@ export class Sim {
   /** Can a ground unit of this team walk/drive cross-country from a to b without entering a river? */
   private lineClear(a: LngLat, b: LngLat, cross: { pos: LngLat; r: number }[]): boolean {
     if (!this.terrain) return true;
-    const steps = Math.max(1, Math.ceil(distKm(a, b) / 0.35));
+    const steps = Math.max(1, Math.ceil(distKm(a, b) / 0.15));
     let leaving = this.terrain.isBarrier(a); // a unit already afloat may always make for the bank
     for (let i = 1; i <= steps; i++) {
       const t = i / steps;
@@ -455,6 +470,11 @@ export class Sim {
     }
     for (const b of w.buildings) {
       if (!b.course) continue;
+      // tuition is paid as the course runs; with an empty treasury the class waits
+      const owner = this.player(b.owner);
+      const fee = this.courseTerms(b).perSecond * dt;
+      if (!owner || (owner.res.money ?? 0) < fee) continue;
+      owner.res.money -= fee;
       b.course.remaining -= dt;
       if (b.course.remaining > 0) continue;
       for (const u of b.inside) {
@@ -556,6 +576,9 @@ export class Sim {
     for (const u of w.units) {
       const d = this.defs.u.get(u.def)!;
       const rank = this.ranks[u.rank];
+      // cut off in a cauldron: no supply, strength drains away
+      u.encircled = d.kind !== 'air' && w.pockets.some((p) => p.team === u.team && pointInRing(p.nodes, u.pos));
+      if (u.encircled) u.hp -= this.maxHp(u) * r.encircledAttrition * dt;
       const range = d.range * rank.range;
       u.cooldown = Math.max(0, u.cooldown - dt);
 
@@ -580,7 +603,7 @@ export class Sim {
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
       if (engaged && u.cooldown === 0) {
         u.cooldown = 1; // one salvo per second
-        const base = d.damage * rank.damage;
+        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1);
         let dealt: number;
         if (tu) {
           const td = this.defs.u.get(tu.def)!;
@@ -704,7 +727,6 @@ export class Sim {
     const w = this.world;
     const r = this.ruleset.rules;
     const R = r.frontInfluenceKm;
-    const n = w.front;
 
     const abstract: [number, number] = [0, 0];
     for (const p of w.players) {
@@ -713,20 +735,20 @@ export class Sim {
       abstract[p.team] += (4 + Math.sqrt(p.res.people ?? 0) + Math.sqrt(p.res.metal ?? 0)) * r.abstractPower;
     }
     // the abstract term is spread per 100 km of front so that map size does not change its weight
-    const perNode = [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];
+    const perNode: [number, number] = [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];
     const defended = w.buildings.filter((b) => b.progress >= 1 && this.defs.b.get(b.def)!.defense);
     const degR = R / 111 + 0.05;
 
-    const raw = n.map((node) => {
+    const speedAt = (node: FrontNode, base: [number, number]): number => {
       const pos: LngLat = [node.lng, node.lat];
-      const force: [number, number] = [perNode[0], perNode[1]];
+      const force: [number, number] = [base[0], base[1]];
       const degRx = degR / Math.max(0.3, Math.cos((node.lat * Math.PI) / 180));
       for (const u of w.units) {
         if (Math.abs(u.pos[1] - node.lat) > degR || Math.abs(u.pos[0] - node.lng) > degRx) continue;
         const d = distKm(u.pos, pos);
         if (d > R) continue;
         const ud = this.defs.u.get(u.def)!;
-        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.hp / this.maxHp(u)) * (1 - d / R);
+        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R);
       }
       const hold: [number, number] = [1, 1];
       for (const b of defended) {
@@ -735,27 +757,91 @@ export class Sim {
       }
       const resist = this.terrainAt(pos).frontResist;
       return clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
-    });
+    };
 
-    // neighbours share speed so the line bends instead of spiking; both ends stay anchored
+    // neighbours share speed so the line bends instead of spiking
     const s = clamp(r.frontSmoothing, 0, 1);
-    for (let i = 1; i < n.length - 1; i++) {
-      const v = raw[i] * (1 - s) + ((raw[i - 1] + raw[i + 1]) / 2) * s;
-      n[i].v = v;
-      if (v === 0) continue;
-      const [nx, ny] = normalAt(n, i);
-      n[i].lng += (nx * v * dt) / kmPerDegLng(n[i].lat);
-      n[i].lat += (ny * v * dt) / 111.32;
+    const move = (n: FrontNode[], closed: boolean, base: [number, number]) => {
+      const len = n.length;
+      const raw = n.map((node) => speedAt(node, base));
+      for (let i = closed ? 0 : 1; i < (closed ? len : len - 1); i++) {
+        const pi = (i - 1 + len) % len;
+        const ni = (i + 1) % len;
+        const v = raw[i] * (1 - s) + ((raw[pi] + raw[ni]) / 2) * s;
+        n[i].v = v;
+        if (v === 0) continue;
+        const [nx, ny] = normalOf(n[pi], n[i], n[ni]);
+        n[i].lng += (nx * v * dt) / kmPerDegLng(n[i].lat);
+        n[i].lat += (ny * v * dt) / 111.32;
+      }
+      if (!closed) n[0].v = n[len - 1].v = 0; // both ends of the main line stay anchored
+    };
+
+    move(w.front, false, perNode);
+    for (const pocket of w.pockets) {
+      // a cauldron gets nothing from its side's economy; the besiegers squeeze with extra weight
+      const base: [number, number] = pocket.team === 0 ? [0, perNode[1] * 1.5] : [perNode[0] * 1.5, 0];
+      move(pocket.nodes, true, base);
     }
-    n[0].v = n[n.length - 1].v = 0;
-    if (w.tick % 20 === 0) w.front = respace(n, r.frontNodeSpacingKm);
+
+    if (w.tick % 5 === 0) this.pinch();
+    if (w.tick % 10 === 0) this.collapsePockets();
+    if (w.tick % 20 === 0) {
+      w.front = respace(w.front, r.frontNodeSpacingKm);
+      for (const p of w.pockets) {
+        const ring = respace([...p.nodes, p.nodes[0]], r.frontNodeSpacingKm * 0.6);
+        ring.pop();
+        if (ring.length >= 3) p.nodes = ring;
+      }
+    }
+  }
+
+  /** When the jaws of a pincer meet, the loop of front between them is cut off and becomes a cauldron. */
+  private pinch() {
+    const w = this.world;
+    const r = this.ruleset.rules;
+    const hit = findPinch(w.front, r.pinchKm, 5);
+    if (!hit) return;
+    const loop = w.front.slice(hit.from, hit.to + 1);
+    w.front = [...w.front.slice(0, hit.from), ...w.front.slice(hit.to + 1)];
+    const area = ringAreaKm2(loop);
+    // too small to matter: the kink is simply straightened out
+    if (Math.abs(area) < r.pocketMinAreaKm2 * 1.5 || loop.length < 4 || w.pockets.length >= 8) return;
+    // the loop keeps the line's direction, so team 0 is still on its left: counter-clockwise means team 0 is inside
+    const team: Team = area > 0 ? 0 : 1;
+    const pocket: Pocket = { id: w.nextId++, team, nodes: loop.map((n) => ({ ...n, v: 0 })) };
+    w.pockets.push(pocket);
+    const trapped = w.units.filter((u) => u.team === team && pointInRing(pocket.nodes, u.pos)).length;
+    this.hooks.emit('cauldronFormed', { id: pocket.id, team, units: trapped, areaKm2: Math.round(Math.abs(area)) });
+  }
+
+  /** A cauldron squeezed too small (or emptied of defenders) collapses: whoever is still inside is lost. */
+  private collapsePockets() {
+    const w = this.world;
+    const r = this.ruleset.rules;
+    for (const pocket of [...w.pockets]) {
+      const inside = w.units.filter((u) => u.team === pocket.team && this.defs.u.get(u.def)!.kind !== 'air' && pointInRing(pocket.nodes, u.pos));
+      const holds = w.buildings.some((b) => b.team === pocket.team && pointInRing(pocket.nodes, b.pos));
+      const area = Math.abs(ringAreaKm2(pocket.nodes));
+      if (area >= r.pocketMinAreaKm2 && pocket.nodes.length >= 4 && (inside.length || holds)) continue;
+      w.pockets = w.pockets.filter((p) => p !== pocket);
+      for (const u of inside) u.hp = 0; // they surrender
+      const victor = (1 - pocket.team) as Team;
+      w.scores[victor] += inside.length * r.cauldronScore;
+      this.hooks.emit('cauldronDestroyed', { id: pocket.id, team: pocket.team, units: inside.length });
+    }
+    if (w.units.some((u) => u.hp <= 0)) {
+      const dead = w.units.filter((u) => u.hp <= 0);
+      w.units = w.units.filter((u) => u.hp > 0);
+      dead.forEach((u) => this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner }));
+    }
   }
 
   private territory(dt: number) {
     const w = this.world;
     const r = this.ruleset.rules;
     this.map.capturePoints.forEach((cp, i) => {
-      const side = sideOf(w.front, cp.pos);
+      const side = this.side(cp.pos);
       if (w.points[i].owner !== side) {
         w.points[i].owner = side;
         this.hooks.emit('pointCaptured', { id: cp.id, team: side });
@@ -765,7 +851,7 @@ export class Sim {
     // anything the front rolled over is lost (checked a few buildings per tick to spread the cost)
     const lost: Building[] = [];
     for (let i = w.tick % 5; i < w.buildings.length; i += 5) {
-      if (sideOf(w.front, w.buildings[i].pos) !== w.buildings[i].team) lost.push(w.buildings[i]);
+      if (this.side(w.buildings[i].pos) !== w.buildings[i].team) lost.push(w.buildings[i]);
     }
     if (lost.length) {
       lost.forEach((b) => this.evict(b, 0.5));

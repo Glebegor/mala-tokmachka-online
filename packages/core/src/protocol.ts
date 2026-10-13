@@ -26,6 +26,8 @@ export interface SnapMsg {
   /** Shots fired since the previous snapshot (animation only). */
   shots: Shot[];
   front: FrontNode[];
+  /** Cauldrons: closed rings around cut-off territory. */
+  pockets: { id: number; team: Team; nodes: { lng: number; lat: number }[] }[];
   points: CapturePoint[];
   scores: [number, number];
   queue: { building: number; unit: string; remaining: number }[];

@@ -17,16 +17,18 @@ export interface NatoSpec {
   selected: boolean;
   own: boolean;
   transport: boolean;
+  /** Cut off in a cauldron. */
+  encircled?: boolean;
 }
 
 export function natoId(s: NatoSpec): string {
-  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}`;
+  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}|${s.encircled ? 1 : 0}`;
 }
 
 export function parseNatoId(id: string): NatoSpec | null {
   if (!id.startsWith(NATO_PREFIX)) return null;
-  const [, aff, color, symbol, echelon, rank, sel, own, tr] = id.split('|');
-  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1' };
+  const [, aff, color, symbol, echelon, rank, sel, own, tr, enc] = id.split('|');
+  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1', encircled: enc === '1' };
 }
 
 /** Echelon mark for a formation of n units. */
@@ -164,6 +166,21 @@ export function drawNato(spec: NatoSpec): ImageData {
       g.stroke();
     }
     below += 4.5;
+  }
+
+  // encircled: broken ring around the marker
+  if (spec.encircled) {
+    g.save();
+    g.setLineDash([4, 3]);
+    g.lineWidth = 2;
+    for (const [color, width] of [[INK, 3.6], ['#ffd84a', 1.8]] as const) {
+      g.strokeStyle = color;
+      g.lineWidth = width;
+      g.beginPath();
+      g.ellipse(cx, cy, hw + 6, hh + 7, 0, 0, Math.PI * 2);
+      g.stroke();
+    }
+    g.restore();
   }
 
   // veterancy: chevrons stacked on the right-hand side of the frame

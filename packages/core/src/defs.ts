@@ -144,6 +144,13 @@ export interface RulesConfig {
   airDamageDefault: number; // ground weapons against aircraft
   transportDamageMult: number; // damage taken while driving in column on a road
   maxQueuedOrders: number;
+  pinchKm: number; // jaws closer than this cut the loop between them off as a cauldron
+  pocketMinAreaKm2: number; // a cauldron squeezed below this collapses
+  encircledDamageMult: number;
+  encircledAttrition: number; // share of max HP lost per second inside a cauldron
+  cauldronScore: number; // score per unit destroyed when a cauldron collapses
+  courseCostPerTick: number; // money per unit per simulation tick while a course runs
+  courseCostPerRank: number; // added per rank the unit already holds
 }
 
 export interface ScriptSource {
@@ -172,8 +179,8 @@ export const DEFAULT_RULES: RulesConfig = {
   startUnits: ['infantry', 'infantry', 'infantry', 'infantry'],
   frontNodeSpacingKm: 9,
   frontInfluenceKm: 28,
-  frontPush: 0.0004,
-  frontMaxSpeed: 0.05,
+  frontPush: 0.0024,
+  frontMaxSpeed: 0.11,
   frontSmoothing: 0.2,
   abstractPower: 1,
   energyDeficitMult: 0.4,
@@ -189,4 +196,11 @@ export const DEFAULT_RULES: RulesConfig = {
   airDamageDefault: 0.25,
   transportDamageMult: 1.5,
   maxQueuedOrders: 8,
+  pinchKm: 3.5,
+  pocketMinAreaKm2: 40,
+  encircledDamageMult: 0.6,
+  encircledAttrition: 0.004,
+  cauldronScore: 40,
+  courseCostPerTick: 0.1,
+  courseCostPerRank: 0.05,
 };

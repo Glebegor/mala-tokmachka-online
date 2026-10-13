@@ -42,9 +42,10 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       })),
     units: w.units
       .filter((u) => u.team === team || seen(u.pos, sim.defs.u.get(u.def)!.kind === 'air' ? 1 : sim.terrainAt(u.pos).concealment))
-      .map((u) => ({ id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp), target: u.team === team ? u.target : null, cooldown: 0, xp: Math.round(u.xp), rank: u.rank, transport: u.transport, entering: u.owner === playerId && u.enter ? u.enter : undefined, route: u.owner === playerId && u.path.length ? u.path.filter((w) => w.end).map((w) => p4(w.p)) : undefined })),
+      .map((u) => ({ id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp), target: u.team === team ? u.target : null, cooldown: 0, xp: Math.round(u.xp), rank: u.rank, transport: u.transport, encircled: u.encircled, entering: u.owner === playerId && u.enter ? u.enter : undefined, route: u.owner === playerId && u.path.length ? u.path.filter((w) => w.end).map((w) => p4(w.p)) : undefined })),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),
+    pockets: w.pockets.map((p) => ({ id: p.id, team: p.team, nodes: p.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat) })) })),
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
     queue: w.queue.filter((q) => q.owner === playerId).map((q) => ({ building: q.building, unit: q.unit, remaining: Math.round(q.remaining) })),

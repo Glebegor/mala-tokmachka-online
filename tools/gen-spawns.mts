@@ -9,7 +9,7 @@ const map = rs.maps.find((m) => m.id === mapId)!;
 const count = Number(countArg), setback = Number(setbackArg);
 const front = buildFront(map.front, 4);
 const roads = map.roads ? new RoadNetwork(map.roads) : null;
-const terrain = map.terrain ? new TerrainGrid(map.terrain, { water: 200 }) : null;
+const terrain = map.terrain ? new TerrainGrid(map.terrain, { water: 1500 }) : null;
 const lo = Number(fromArg ?? 0.1), hi = Number(toArg ?? 0.95);
 
 /** Best spot for one side: on a road, dry, and as close as possible to the wanted setback. */
