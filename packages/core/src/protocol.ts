@@ -2,7 +2,8 @@ import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
 import type { BuildingView, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
 
-export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' };
+/** `ready`: the client has drawn the map; the start countdown waits for it. */
+export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' } | { t: 'ready' };
 
 export interface InitMsg {
   t: 'init';
@@ -17,6 +18,8 @@ export interface InitMsg {
 export interface SnapMsg {
   t: 'snap';
   time: number;
+  /** Seconds until the match starts (3, 2, 1), 0 once it is running, -1 while waiting for players to load. */
+  countdown: number;
   res: Record<string, number>;
   energyNet: number;
   /** Net production per second, per resource. */
@@ -26,6 +29,8 @@ export interface SnapMsg {
   /** Shots fired since the previous snapshot (animation only). */
   shots: Shot[];
   front: FrontNode[];
+  /** Grey zones: contested patches behind the front. */
+  grey: { team: Team; pos: [number, number]; r: number }[];
   /** Cauldrons: closed rings around cut-off territory. */
   pockets: { id: number; team: Team; nodes: { lng: number; lat: number }[] }[];
   points: CapturePoint[];
@@ -65,7 +70,7 @@ export const DEFAULT_SETTINGS: RoomSettings = {
   mapId: 'ukraine',
   matchMinutes: 30,
   teamSize: 8,
-  fillBots: true,
+  fillBots: false,
   botDifficulty: 'normal',
   startResources: 'normal',
   frontSpeed: 1,

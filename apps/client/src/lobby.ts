@@ -1,6 +1,7 @@
 import type { BotDifficulty, RoomInfo, RoomSettings } from '@sw/core';
 import { api, type Session } from './api';
 import { clear, h } from './dom';
+import { showProfile } from './profile';
 
 type Opt<T> = { v: T; label: string };
 
@@ -22,6 +23,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
   let stopped = false;
   let maps: { id: string; name: string }[] = [];
   void api.maps().then((m) => (maps = m)).catch(() => {});
+  let viewingProfile = false;
   let editing = false; // pause polling re-render while a control has focus
   const body = h('div', { class: 'lobby-body' });
   const msg = h('div', { class: 'error' });
@@ -71,7 +73,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
   };
 
   async function refresh(force = false) {
-    if (stopped) return;
+    if (stopped || viewingProfile) return;
     if (editing && !force) return;
     const rooms = await api.rooms();
     const mine = rooms.find((r) => r.slots.some((x) => x.id === s.user.id));
@@ -104,7 +106,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
             h('div', { class: 'teams' }, teamColumn(mine, 0, isHost), teamColumn(mine, 1, isHost)),
             settingsPanel(mine, isHost),
           ),
-          h('p', { class: 'muted' }, mine.settings.fillBots ? `Empty slots are filled with ${mine.settings.botDifficulty} bots at start.` : 'Only players and bots you add will play (each side gets at least one bot).'),
+          h('p', { class: 'muted' }, mine.settings.fillBots ? `Empty slots are filled with ${mine.settings.botDifficulty} bots at start.` : 'No bots are added automatically: only the players and the bots listed above will play.'),
           h('div', { class: 'row' },
             isHost ? h('button', { class: 'primary', onClick: () => guard(() => api.start(mine.id)) }, 'Start match') : h('span', { class: 'muted' }, 'Waiting for host…'),
             h('button', { onClick: () => guard(() => api.leave(mine.id)) }, 'Leave'),
@@ -132,7 +134,15 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
     h('div', { class: 'lobby' },
       h('div', { class: 'row between topbar' },
         h('div', { class: 'logo small' }, 'MALA TOKMACHKA', h('span', {}, 'ONLINE')),
-        h('div', { class: 'row' }, h('span', { class: 'muted' }, s.user.name), h('button', { onClick: () => ((stopped = true), cb.onLogout()) }, 'Sign out')),
+        h('div', { class: 'row' },
+          h('button', { title: 'Your statistics', onClick: () => {
+            viewingProfile = true;
+            void showProfile(body, s, () => {
+              viewingProfile = false;
+              void refresh(true);
+            });
+          } }, `${s.user.name} · Profile`),
+          h('button', { onClick: () => ((stopped = true), cb.onLogout()) }, 'Sign out')),
       ),
       body, msg,
     ),

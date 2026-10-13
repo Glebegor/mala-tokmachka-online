@@ -12,6 +12,8 @@ export type Command =
   | { type: 'course'; building: number }
   /** Let everyone inside walk out (not during a course). */
   | { type: 'release'; building: number }
-  | { type: 'demolish'; building: number };
+  | { type: 'demolish'; building: number }
+  /** Buy the next level of a building that has `levels` (trenches, bunkers). */
+  | { type: 'upgrade'; building: number };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

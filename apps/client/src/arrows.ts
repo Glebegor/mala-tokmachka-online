@@ -26,6 +26,7 @@ export class FrontArrows {
   private shots: { t: number; s: Shot }[] = [];
   private raf = 0;
   private lastBuild = 0;
+  private lastDraw = 0;
 
   constructor(private map: maplibregl.Map, parent: HTMLElement, private colors: string[], private front: () => FrontNode[]) {
     this.canvas = document.createElement('canvas');
@@ -123,12 +124,15 @@ export class FrontArrows {
     if (canvas.width !== w * dpr || canvas.height !== h * dpr) (canvas.width = w * dpr), (canvas.height = h * dpr);
     g.setTransform(dpr, 0, 0, dpr, 0, 0);
     g.clearRect(0, 0, w, h);
-    if (!this.arrows.size) return;
     const now = performance.now() / 1000;
+    const dt = Math.min(0.5, now - (this.lastDraw || now));
+    this.lastDraw = now;
+    if (!this.arrows.size) return;
 
     for (const [id, a] of this.arrows) {
-      a.alpha += ((a.live ? 1 : 0) - a.alpha) * 0.08;
-      if (!a.live && a.alpha < 0.03) {
+      // fade in over ~0.4 s and out over ~1 s, whatever the frame rate
+      a.alpha = a.live ? Math.min(1, a.alpha + dt * 2.5) : Math.max(0, a.alpha - dt);
+      if (!a.live && a.alpha <= 0) {
         this.arrows.delete(id);
         continue;
       }

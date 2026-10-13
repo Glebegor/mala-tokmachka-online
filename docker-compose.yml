@@ -9,6 +9,7 @@ x-backend: &backend
     AUTH_URL: http://auth:4001
     LOBBY_URL: http://lobby:4002
     GAME_URL: http://game:4003
+    PROFILE_URL: http://profile:4004
 
 services:
   auth:
@@ -27,10 +28,15 @@ services:
     volumes:
       - ./mods:/app/mods:ro   # drop mods here, restart the game service
 
+  profile:
+    <<: *backend
+    build: { context: ., args: { SERVICE: profile } }
+    volumes: [profile-data:/data]
+
   gateway:
     <<: *backend
     build: { context: ., args: { SERVICE: gateway } }
-    depends_on: [auth, lobby, game]
+    depends_on: [auth, lobby, game, profile]
 
   client:
     build: { context: ., dockerfile: apps/client/Dockerfile }
@@ -39,3 +45,4 @@ services:
 
 volumes:
   auth-data:
+  profile-data:

@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 import { DEFAULT_SETTINGS, type RoomSettings, type Ruleset, type SlotInit } from '@sw/core';
-import { Match } from './match';
+import { Match, type MatchReporter } from './match';
 
 const START_MULT = { low: 0.5, normal: 1, high: 2.5 } as const;
 
@@ -21,7 +21,7 @@ export function applySettings(base: Ruleset, s: RoomSettings): Ruleset {
 
 export class MatchManager {
   private matches = new Map<string, Match>();
-  constructor(private ruleset: Ruleset) {}
+  constructor(private ruleset: Ruleset, private reporter?: MatchReporter) {}
 
   create(input: Partial<RoomSettings>, slots: SlotInit[]) {
     const settings: RoomSettings = { ...DEFAULT_SETTINGS, ...input };
@@ -29,6 +29,7 @@ export class MatchManager {
     if (!slots.length || slots.length > 16) throw new Error('bad slots');
     const id = randomUUID().slice(0, 8);
     const m = new Match(id, applySettings(this.ruleset, settings), settings.mapId, slots, settings.botDifficulty);
+    if (this.reporter) m.setReporter(this.reporter);
     m.onClose = () => this.matches.delete(id);
     this.matches.set(id, m);
     return m;
