@@ -20,6 +20,8 @@ function toggle(label: string, value: boolean, disabled: boolean, onChange: (v: 
 export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; onMatch(matchId: string): void }) {
   clear(app);
   let stopped = false;
+  let maps: { id: string; name: string }[] = [];
+  void api.maps().then((m) => (maps = m)).catch(() => {});
   let editing = false; // pause polling re-render while a control has focus
   const body = h('div', { class: 'lobby-body' });
   const msg = h('div', { class: 'error' });
@@ -39,6 +41,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
     const set = (patch: Partial<RoomSettings>) => guard(() => api.settings(room.id, patch));
     return h('div', { class: 'settings' },
       h('h3', {}, 'Match settings', isHost ? null : h('span', { class: 'muted' }, ' (host only)')),
+      select('Map', st.mapId, (maps.length ? maps : [{ id: st.mapId, name: st.mapId }]).map((m) => ({ v: m.id, label: m.name })), !isHost, (v) => set({ mapId: v })),
       select('Duration', st.matchMinutes, [10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` })), !isHost, (v) => set({ matchMinutes: v })),
       select('Team size', st.teamSize, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ v: n, label: `${n} v ${n}` })), !isHost, (v) => set({ teamSize: v })),
       toggle('Fill empty slots with bots', st.fillBots, !isHost, (v) => set({ fillBots: v })),
@@ -81,7 +84,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
       const isHost = mine.host === s.user.id;
       body.append(
         h('div', { class: 'card' },
-          h('div', { class: 'row between' }, h('h2', {}, mine.name), h('span', { class: 'muted' }, `map: ${mine.settings.mapId}`)),
+          h('div', { class: 'row between' }, h('h2', {}, mine.name), h('span', { class: 'muted' }, maps.find((m) => m.id === mine.settings.mapId)?.name ?? mine.settings.mapId)),
           h('div', { class: 'room-grid' },
             h('div', { class: 'teams' }, teamColumn(mine, 0, isHost), teamColumn(mine, 1, isHost)),
             settingsPanel(mine, isHost),

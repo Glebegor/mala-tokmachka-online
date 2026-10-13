@@ -1,0 +1,7 @@
+[
+  { "id": "recruit", "name": "Recruit", "xp": 0,   "damage": 1.0,  "hp": 1.0,  "range": 1.0,  "cost": {} },
+  { "id": "regular", "name": "Regular", "xp": 60,  "damage": 1.12, "hp": 1.1,  "range": 1.0,  "cost": { "money": 80 } },
+  { "id": "veteran", "name": "Veteran", "xp": 180, "damage": 1.28, "hp": 1.22, "range": 1.05, "cost": { "money": 180 } },
+  { "id": "elite",   "name": "Elite",   "xp": 420, "damage": 1.5,  "hp": 1.4,  "range": 1.12, "cost": { "money": 400, "metal": 10 } },
+  { "id": "guards",  "name": "Guards",  "xp": 900, "damage": 1.75, "hp": 1.6,  "range": 1.2,  "cost": { "money": 900, "metal": 30 } }
+]

@@ -8,11 +8,28 @@ import type { Session } from './api';
 import { clear, h } from './dom';
 import { iconHtml } from './icons';
 
-const STYLE = 'https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json';
+/** OpenStreetMap raster basemap, toned down so the front and units stay readable. */
+const STYLE: maplibregl.StyleSpecification = {
+  version: 8,
+  sources: {
+    osm: {
+      type: 'raster',
+      tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+      tileSize: 256,
+      maxzoom: 19,
+      attribution: '© <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+    },
+  },
+  layers: [
+    { id: 'bg', type: 'background', paint: { 'background-color': '#0b0d10' } },
+    { id: 'osm', type: 'raster', source: 'osm', paint: { 'raster-saturation': -0.55, 'raster-brightness-max': 0.6, 'raster-contrast': 0.1 } },
+  ],
+};
 const TEAM_COLOR = ['#3d8bff', '#ff4d4d'];
 const TEAM_NAME = ['UKRAINE', 'RUSSIA'];
 const UNIT_GLYPH: Record<string, string> = { infantry: '•', tank: '■', artillery: '▲', drone: '◇' };
 
+const HINT = 'Left click: select · Shift+drag: box select · Right click: move · Scroll: zoom';
 type Fc = { type: 'FeatureCollection'; features: any[] };
 const empty = (): Fc => ({ type: 'FeatureCollection', features: [] });
 
@@ -22,8 +39,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   let init: InitMsg | null = null;
   let snap: SnapMsg | null = null;
-  let prevRes: { t: number; res: Record<string, number> } | null = null;
-  const rate: Record<string, number> = {};
   let map: maplibregl.Map;
   let mapReady = false;
 
@@ -68,7 +83,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         document.getElementById('mod-theme')!.textContent = msg.ruleset.themes.map((t) => t.css).join('\n');
         buildMap();
         buildPalette();
-        hint.textContent = 'Left click: select · Shift+drag: box select · Right click: move · Scroll: zoom';
+        hint.textContent = HINT;
         break;
       case 'snap':
         onSnapshot(msg);
@@ -219,6 +234,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   // ---------- placement ----------
   function cancelPlacing() {
     placing = null;
+    hint.textContent = HINT;
     mapEl.classList.remove('placing');
     (map.getSource('ghost') as GeoJSONSource | undefined)?.setData(empty());
     buildPalette();
@@ -288,7 +304,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     clear(resBar);
     for (const r of init.ruleset.resources) {
       const v = snap.res[r.id] ?? 0;
-      const d = r.id === 'energy' ? snap.energyNet : rate[r.id] ?? 0;
+      const d = snap.rates[r.id] ?? 0;
       const ico = h('span', { class: 'rico' });
       ico.innerHTML = iconHtml(r.icon, r.color);
       resBar.append(
@@ -357,14 +373,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   // ---------- snapshot → view ----------
   function onSnapshot(s: SnapMsg) {
-    const now = performance.now();
-    if (prevRes && now - prevRes.t > 800) {
-      const dt = (now - prevRes.t) / 1000;
-      for (const k of Object.keys(s.res)) rate[k] = ((s.res[k] - (prevRes.res[k] ?? 0)) / dt) * 0.5 + (rate[k] ?? 0) * 0.5;
-      prevRes = { t: now, res: { ...s.res } };
-    } else if (!prevRes) {
-      prevRes = { t: now, res: { ...s.res } };
-    }
     snap = s;
     if (!shown.length) shown = s.front.map((n) => ({ ...n }));
     renderRes();

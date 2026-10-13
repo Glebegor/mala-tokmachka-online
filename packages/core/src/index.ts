@@ -6,3 +6,5 @@ export * from './protocol';
 export * from './frontline';
 export * from './sim';
 export * from './visibility';
+export * from './roads';
+export * from './terrain';

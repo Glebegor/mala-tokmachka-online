@@ -1,5 +1,6 @@
 {
   "matchSeconds": 1800,
   "frontPush": 0.0006,
+  "frontNodeSpacingKm": 9,
   "startUnits": ["infantry", "infantry", "infantry", "infantry", "drone"]
 }
