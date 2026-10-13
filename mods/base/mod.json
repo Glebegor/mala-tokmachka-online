@@ -1,0 +1,15 @@
+{
+  "id": "base",
+  "name": "Base Game — Zaporizhzhia Sector",
+  "version": "0.1.0",
+  "author": "state-war",
+  "content": {
+    "rules": "rules.json",
+    "resources": "resources.json",
+    "buildings": "buildings.json",
+    "units": "units.json",
+    "maps": ["maps/zaporizhzhia.json"],
+    "theme": "theme.css",
+    "scripts": ["scripts/events.js"]
+  }
+}

@@ -1,0 +1,41 @@
+# docker compose up --build   →   http://localhost:5173
+x-backend: &backend
+  build:
+    context: .
+  restart: unless-stopped
+  environment: &env
+    SW_SECRET: ${SW_SECRET:-dev-secret-change-me}
+    SW_INTERNAL_KEY: ${SW_INTERNAL_KEY:-dev-internal-key}
+    AUTH_URL: http://auth:4001
+    LOBBY_URL: http://lobby:4002
+    GAME_URL: http://game:4003
+
+services:
+  auth:
+    <<: *backend
+    build: { context: ., args: { SERVICE: auth } }
+    volumes: [auth-data:/data]
+
+  lobby:
+    <<: *backend
+    build: { context: ., args: { SERVICE: lobby } }
+    depends_on: [game]
+
+  game:
+    <<: *backend
+    build: { context: ., args: { SERVICE: game } }
+    volumes:
+      - ./mods:/app/mods:ro   # drop mods here, restart the game service
+
+  gateway:
+    <<: *backend
+    build: { context: ., args: { SERVICE: gateway } }
+    depends_on: [auth, lobby, game]
+
+  client:
+    build: { context: ., dockerfile: apps/client/Dockerfile }
+    ports: ["5173:80"]
+    depends_on: [gateway]
+
+volumes:
+  auth-data:

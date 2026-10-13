@@ -1,0 +1,8 @@
+[
+  { "id": "money", "icon": "coin",  "name": "Money",  "color": "#e8c35a", "start": 900, "cap": 99999 },
+  { "id": "energy", "icon": "bolt", "name": "Energy", "color": "#5ad1e8", "start": 60,  "cap": 600 },
+  { "id": "people", "icon": "person", "name": "People", "color": "#9be85a", "start": 40,  "cap": 500 },
+  { "id": "ore", "icon": "rock",    "name": "Ore",    "color": "#c58a5a", "start": 0,   "cap": 500 },
+  { "id": "metal", "icon": "ingot",  "name": "Metal",  "color": "#b7c0cc", "start": 40,  "cap": 500 },
+  { "id": "fuel", "icon": "drop",   "name": "Fuel",   "color": "#e8745a", "start": 40,  "cap": 500 }
+]

@@ -1,0 +1,12 @@
+/* Mods may override any of these CSS variables to reskin the UI. */
+:root {
+  --bg: #0b0d10;
+  --panel: rgba(14, 17, 21, 0.86);
+  --line: #232a33;
+  --text: #cfd6df;
+  --muted: #6b7684;
+  --team0: #3d8bff;
+  --team1: #ff4d4d;
+  --accent: #e8c35a;
+  --ok: #5ae88a;
+}

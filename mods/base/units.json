@@ -1,0 +1,10 @@
+[
+  { "id": "infantry", "name": "Infantry", "kind": "ground",
+    "cost": { "money": 60, "people": 5 }, "trainTime": 8, "hp": 100, "speed": 0.15, "range": 1.0, "damage": 10, "vision": 4 },
+  { "id": "tank", "name": "Tank", "kind": "ground",
+    "cost": { "money": 350, "metal": 40, "fuel": 20, "people": 4 }, "trainTime": 20, "hp": 400, "speed": 0.3, "range": 2.5, "damage": 45, "vision": 5 },
+  { "id": "artillery", "name": "Artillery", "kind": "ground",
+    "cost": { "money": 400, "metal": 60, "people": 5 }, "trainTime": 24, "hp": 150, "speed": 0.12, "range": 8, "damage": 30, "vision": 3 },
+  { "id": "drone", "name": "Recon Drone", "kind": "air",
+    "cost": { "money": 150, "metal": 5, "fuel": 5 }, "trainTime": 10, "hp": 40, "speed": 0.6, "range": 0.8, "damage": 4, "vision": 18 }
+]
