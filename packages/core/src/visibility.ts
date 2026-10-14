@@ -40,7 +40,14 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       storage: b.team === team ? b.storage : undefined,
     })),
     units: w.units
-      .filter((u) => !u.embarkedIn && (u.team === team || seen(u.pos, sim.defs.u.get(u.def)!.kind === 'air' ? 1 : sim.terrainAt(u.pos).concealment)))
+      .filter((u) => {
+        if (u.embarkedIn) return false;
+        if (u.team === team) return true;
+        const ud = sim.defs.u.get(u.def)!;
+        const unitStealth = ud.stealth ?? (ud.kind === 'air' ? 1.0 : ud.mobility === 'foot' ? 1.0 : 1.35);
+        const terrainConceal = ud.kind === 'air' ? 1.0 : sim.terrainAt(u.pos).concealment;
+        return seen(u.pos, terrainConceal * unitStealth);
+      })
       .map((u) => ({
         id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp),
         target: u.team === team ? u.target : null,

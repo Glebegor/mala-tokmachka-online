@@ -19,6 +19,67 @@
     "missRate": 0.45
   },
   {
+    "id": "infantry_recon",
+    "name": "Разведка",
+    "kind": "ground",
+    "cost": {
+      "money": 80,
+      "people": 4
+    },
+    "trainTime": 6,
+    "hp": 70,
+    "speed": 0.030,
+    "range": 1.1,
+    "damage": 8,
+    "vision": 12,
+    "stealth": 0.35,
+    "mobility": "foot",
+    "symbol": "recon",
+    "fx": "burst",
+    "missRate": 0.35
+  },
+  {
+    "id": "infantry_assault",
+    "name": "Штурмовики",
+    "kind": "ground",
+    "cost": {
+      "money": 130,
+      "people": 10
+    },
+    "trainTime": 12,
+    "hp": 150,
+    "speed": 0.020,
+    "range": 0.9,
+    "damage": 26,
+    "vision": 4,
+    "stealth": 1.0,
+    "mobility": "foot",
+    "symbol": "assault",
+    "fx": "burst",
+    "missRate": 0.30
+  },
+  {
+    "id": "infantry_at",
+    "name": "ПТ-расчет",
+    "kind": "ground",
+    "cost": {
+      "money": 110,
+      "metal": 10,
+      "people": 2
+    },
+    "trainTime": 8,
+    "hp": 70,
+    "speed": 0.0275,
+    "range": 2.2,
+    "damage": 36,
+    "vision": 5,
+    "stealth": 0.85,
+    "mobility": "foot",
+    "symbol": "antitank",
+    "fx": "burst",
+    "missRate": 0.25
+  },
+  {
     "id": "pickup",
     "name": "Пикап",
     "kind": "ground",

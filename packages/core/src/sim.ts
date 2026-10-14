@@ -161,7 +161,7 @@ export class Sim {
       // players beyond the authored spawn list share a spawn, nudged aside
       const lap = Math.floor(n / spawns.length);
       const pos: LngLat = [base[0] + lap * 0.09, base[1] + lap * 0.05];
-      this.spawnBuilding('hq', p, pos, true);
+      this.spawnBuilding(this.defs.b.has('military_base') ? 'military_base' : 'hq', p, pos, true);
       r.startUnits.forEach((u, i) => this.spawnUnit(u, p, [pos[0] + 0.035 * Math.cos(i * 1.3), pos[1] + 0.025 * Math.sin(i * 1.3)]));
     }
     this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = sideOf(w.front, cp.pos)));
@@ -418,7 +418,7 @@ export class Sim {
         const i = w.buildings.findIndex((x) => x.id === cmd.building && x.owner === p.id);
         if (i < 0) return fail('not found');
         const b = w.buildings[i];
-        if (b.def === 'hq') return fail('cannot demolish HQ');
+        if (b.def === 'hq' || b.def === 'military_base') return fail('cannot demolish military base');
         const d = this.defs.b.get(b.def)!;
         for (const [k, v] of Object.entries(d.cost)) p.res[k] = (p.res[k] ?? 0) + v * 0.4;
         w.buildings.splice(i, 1);
@@ -519,7 +519,7 @@ export class Sim {
           let bestStation: LngLat | null = null;
           let bestDist = 1e9;
           for (const b of w.buildings) {
-            if ((b.def === 'gas_station' || b.def === 'hq') && b.owner === p.id && b.progress >= 1) {
+            if ((b.def === 'gas_station' || b.def === 'military_base' || b.def === 'hq') && b.owner === p.id && b.progress >= 1) {
               const d = distKm(u.pos, b.pos);
               if (d < bestDist) { bestDist = d; bestStation = b.pos; }
             }
@@ -900,7 +900,7 @@ export class Sim {
           // 3. Fallback: HQ emergency refuel
           if (!refueled) {
             for (const b of w.buildings) {
-              if (b.def === 'hq' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+              if ((b.def === 'military_base' || b.def === 'hq') && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
                 const avail = b.storage?.fuel ?? 0;
                 if (avail > 0) {
                   const needed = u.maxFuel - u.fuel;
@@ -1166,71 +1166,123 @@ export class Sim {
     }
     const sprintMult = u.sprint && u.def !== 'drone' ? 2.0 : 1.0;
     const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * sprintMult;
-    const roadMult = d.kind === 'air' ? 1 : this.ruleset.rules.roadSpeedMult;
     let budget = dt;
     let totalMovedKm = 0;
-    for (let guard = 0; budget > 1e-6 && u.path.length && guard < 32; guard++) {
-      const wp = u.path[0];
-      const speed = base * (wp.road ? roadMult : this.terrainSpeed(d, u.pos));
+    if (d.kind === 'air') {
+      // Aircraft / Drone physics: continuous forward flight with realistic angular turn rate
+      const speed = base;
       if (speed <= 0) {
         u.path = [];
         u.target = null;
-        break;
+      } else {
+        const isStrike = isStrikeDrone(d);
+        while (budget > 1e-6 && u.path.length) {
+          const wp = u.path[0];
+          const dist = distKm(u.pos, wp.p);
+          const dx = (wp.p[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
+          const dy = (wp.p[1] - u.pos[1]) * 111.32;
+          let targetBearing = u.bearing ?? 0;
+          if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+            targetBearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+          }
+          if (u.bearing === undefined) {
+            u.bearing = targetBearing;
+          }
+
+          // Realistic angular turn rate: 30 deg/s allows smooth banking turn arcs with radius ~100m
+          let diff = ((targetBearing - u.bearing + 540) % 360) - 180;
+          const maxTurn = 30 * budget;
+          const turn = Math.max(-maxTurn, Math.min(maxTurn, diff));
+          u.bearing = (u.bearing + turn + 360) % 360;
+
+          // Aircraft moves forward along its current bearing
+          const rad = (u.bearing * Math.PI) / 180;
+          const stepDist = speed * budget;
+          const nextPos = offsetKm(u.pos, Math.sin(rad) * stepDist, Math.cos(rad) * stepDist);
+          u.pos = nextPos;
+          totalMovedKm += stepDist;
+          budget = 0;
+
+          // Waypoint capture condition:
+          const newDist = distKm(u.pos, wp.p);
+          const reachRadius = isStrike && u.path.length === 1 ? Math.max(0.25, speed * 1.5) : Math.max(0.6, speed * 2.5);
+          const newDx = (wp.p[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
+          const newDy = (wp.p[1] - u.pos[1]) * 111.32;
+          const newTargetBearing = (Math.atan2(newDx, newDy) * 180) / Math.PI;
+          const newDiff = Math.abs(((newTargetBearing - u.bearing + 540) % 360) - 180);
+          const passed = newDist <= 0.8 && newDiff > 90;
+
+          if (newDist <= reachRadius || passed) {
+            const reachedWp = u.path.shift()!;
+            if (isRecon && u.isLoitering) {
+              u.path.push(reachedWp);
+            }
+            if (isRecon && !u.path.length) {
+              if (!u.loiterCenter) u.loiterCenter = [u.pos[0], u.pos[1]];
+              if (!u.loiterRadius) u.loiterRadius = 4.0;
+              u.isLoitering = true;
+              const rKm = u.loiterRadius;
+              const startAng = (u.bearing !== undefined ? u.bearing : 0) * (Math.PI / 180);
+              const numPts = 32;
+              const orbit: Waypoint[] = [];
+              for (let i = 1; i <= numPts; i++) {
+                const ang = startAng + (i / numPts) * (Math.PI * 2);
+                const wpPos = offsetKm(u.loiterCenter, rKm * Math.cos(ang), rKm * Math.sin(ang));
+                orbit.push({ p: wpPos, road: false });
+              }
+              u.path = orbit;
+              u.target = orbit[0].p;
+            } else if (u.path.length > 0) {
+              u.target = u.path[0].p;
+            }
+          }
+        }
       }
-      const dist = distKm(u.pos, wp.p);
-      const nextPos: LngLat = speed * budget >= dist ? [wp.p[0], wp.p[1]] : moveToward(u.pos, wp.p, speed * budget);
-      if (d.kind !== 'air' && !this.isPlayableGround(nextPos, wp.road)) {
-        u.path = [];
-        u.target = null;
-        break;
-      }
-      if (d.symbol === 'artillery' || d.minRange) {
-        // Artillery must NEVER cross the frontline
-        const distFront = distToFrontKm(this.world.front, nextPos) * (u.team === 0 ? 1 : -1);
-        if (distFront < 0.5) {
+    } else {
+      const roadMult = this.ruleset.rules.roadSpeedMult;
+      for (let guard = 0; budget > 1e-6 && u.path.length && guard < 32; guard++) {
+        const wp = u.path[0];
+        const speed = base * (wp.road ? roadMult : this.terrainSpeed(d, u.pos));
+        if (speed <= 0) {
           u.path = [];
           u.target = null;
           break;
         }
-      }
-      const dx = (nextPos[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
-      const dy = (nextPos[1] - u.pos[1]) * 111.32;
-      if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
-        u.bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
-      }
-      if (speed * budget >= dist) {
-        totalMovedKm += dist;
-        u.pos = nextPos;
-        budget -= dist / speed;
-        const reachedWp = u.path.shift()!;
-        if (isRecon && u.isLoitering) {
-          // Endless circular orbit: cycle reached waypoint to end of path
-          u.path.push(reachedWp);
+        const dist = distKm(u.pos, wp.p);
+        const nextPos: LngLat = speed * budget >= dist ? [wp.p[0], wp.p[1]] : moveToward(u.pos, wp.p, speed * budget);
+        if (!this.isPlayableGround(nextPos, wp.road)) {
+          u.path = [];
+          u.target = null;
+          break;
         }
-        if (isRecon && !u.path.length) {
-          // Reached loiter center or path exhausted: start circular orbit!
-          if (!u.loiterCenter) u.loiterCenter = [u.pos[0], u.pos[1]];
-          if (!u.loiterRadius) u.loiterRadius = 4.0;
-          u.isLoitering = true;
-          const rKm = u.loiterRadius;
-          const startAng = (u.bearing !== undefined ? u.bearing : 0) * (Math.PI / 180);
-          const numPts = 32;
-          const orbit: Waypoint[] = [];
-          for (let i = 1; i <= numPts; i++) {
-            const ang = startAng + (i / numPts) * (Math.PI * 2);
-            const wpPos = offsetKm(u.loiterCenter, rKm * Math.cos(ang), rKm * Math.sin(ang));
-            orbit.push({ p: wpPos, road: false });
+        if (d.symbol === 'artillery' || d.minRange) {
+          // Artillery must NEVER cross the frontline
+          const distFront = distToFrontKm(this.world.front, nextPos) * (u.team === 0 ? 1 : -1);
+          if (distFront < 0.5) {
+            u.path = [];
+            u.target = null;
+            break;
           }
-          u.path = orbit;
-          u.target = orbit[0].p;
-        } else if (u.path.length > 0) {
-          u.target = u.path[0].p;
         }
-      } else {
-        const moved = speed * budget;
-        totalMovedKm += moved;
-        u.pos = nextPos;
-        budget = 0;
+        const dx = (nextPos[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
+        const dy = (nextPos[1] - u.pos[1]) * 111.32;
+        if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+          u.bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+        }
+        if (speed * budget >= dist) {
+          totalMovedKm += dist;
+          u.pos = nextPos;
+          budget -= dist / speed;
+          u.path.shift();
+          if (u.path.length > 0) {
+            u.target = u.path[0].p;
+          }
+        } else {
+          const moved = speed * budget;
+          totalMovedKm += moved;
+          u.pos = nextPos;
+          budget = 0;
+        }
       }
     }
     if (u.fuel !== undefined && totalMovedKm > 0) {
@@ -1391,7 +1443,7 @@ export class Sim {
 
     const abstract: [number, number] = [0, 0];
     for (const p of w.players) {
-      const hqs = w.buildings.some((b) => b.owner === p.id && b.def === 'hq' && b.progress >= 1);
+      const hqs = w.buildings.some((b) => b.owner === p.id && (b.def === 'military_base' || b.def === 'hq') && b.progress >= 1);
       if (!hqs) continue;
       abstract[p.team] += (4 + Math.sqrt(p.res.people ?? 0) + Math.sqrt(p.res.metal ?? 0)) * r.abstractPower;
     }
@@ -1506,8 +1558,8 @@ export class Sim {
     if (pts.every((p) => p.owner === 1)) return this.win(1, 'all points captured');
     for (const t of [0, 1] as Team[]) {
       const had = w.players.some((p) => p.team === t);
-      const hq = w.buildings.some((b) => b.team === t && b.def === 'hq');
-      if (had && !hq && w.time > 5) return this.win((1 - t) as Team, 'headquarters destroyed');
+      const hq = w.buildings.some((b) => b.team === t && (b.def === 'military_base' || b.def === 'hq'));
+      if (had && !hq && w.time > 5) return this.win((1 - t) as Team, 'military base destroyed');
     }
   }
 

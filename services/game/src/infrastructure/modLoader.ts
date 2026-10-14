@@ -76,7 +76,7 @@ async function loadMap(file: string): Promise<MapDef> {
 }
 
 function validate(rs: Ruleset) {
-  if (!rs.buildings.some((b) => b.id === 'hq')) throw new Error('ruleset needs a building with id "hq"');
+  if (!rs.buildings.some((b) => b.id === 'military_base' || b.id === 'hq')) throw new Error('ruleset needs a building with id "military_base" or "hq"');
   if (!rs.maps.length) throw new Error('ruleset has no maps');
   const units = new Set(rs.units.map((u) => u.id));
   for (const b of rs.buildings) for (const u of b.trains ?? []) if (!units.has(u)) throw new Error(`building ${b.id} trains unknown unit ${u}`);

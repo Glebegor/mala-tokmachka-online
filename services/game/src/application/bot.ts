@@ -29,7 +29,7 @@ export class Bot {
     const w = sim.world;
     const mine = w.buildings.filter((b) => b.owner === p.id);
     if (mine.filter((b) => b.progress < 1).length >= 2) return;
-    const hq = mine.find((b) => b.def === 'hq');
+    const hq = mine.find((b) => b.def === 'military_base' || b.def === 'hq');
     if (!hq) return;
     const fn = w.front[nearestNode(w.front, hq.pos)];
     const frontPos: LngLat = [fn.lng, fn.lat];
@@ -91,7 +91,7 @@ export class Bot {
     }
 
     const enemyPoints = sim.map.capturePoints.filter((cp) => sideOf(w.front, cp.pos) !== p.team);
-    const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
+    const hq = w.buildings.find((b) => b.owner === p.id && (b.def === 'military_base' || b.def === 'hq'));
     const anchor: LngLat = hq?.pos ?? sim.map.center;
 
     // air units / drones scout or attack
