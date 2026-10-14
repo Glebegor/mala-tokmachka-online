@@ -62,6 +62,7 @@ export interface UnitDef {
   turnSpeed?: number; // deg/sec (for smooth drone/vehicle rotation)
   minRange?: number; // km (minimum firing range, e.g. for artillery dead zone)
   antiAir?: boolean; // true if unit can target and shoot down air units/drones
+  stealth?: number; // Spotting distance multiplier (<1 = stealthy/harder to see, >1 = loud/easier to detect)
 }
 
 export interface TerrainDef {

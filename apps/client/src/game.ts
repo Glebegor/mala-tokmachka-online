@@ -87,6 +87,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     closed = true;
     try { ws.close(); } catch {}
     fx?.destroy();
+    fogCanvas?.remove();
     window.removeEventListener('keydown', onKey);
     window.removeEventListener('mousemove', onBoxMove);
     window.removeEventListener('mouseup', onBoxUp);
@@ -117,6 +118,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
   const pMarkers = new Map<string, HTMLElement>();
   let shown: FrontNode[] = [];
+  let gameOver = false;
   const unitPos = new Map<number, { lng: number; lat: number }>();
   const curPos = (u: UnitView): LngLat => {
     const p = unitPos.get(u.id);
@@ -149,6 +151,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         toast(msg.reason, true);
         break;
       case 'end': {
+        gameOver = true;
+        renderFog();
         const mine = init?.team === msg.winner;
         app.append(
           h('div', { class: 'overlay' },
@@ -615,6 +619,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           }
         }
       }
+      fogCanvas = document.createElement('canvas');
+      fogCanvas.className = 'fog';
+      mapEl.append(fogCanvas);
+
+      map.on('move', renderFog);
+      map.on('resize', renderFog);
+
       fx = new ShotFx(map, mapEl, defU, TEAM_COLOR);
       if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap };
       mapReady = true;
@@ -1899,13 +1910,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     for (const u of snap.units) {
       if (!selUnits.has(u.id)) continue;
       const p = curPos(u);
-      if (u.loiterCenter && u.loiterRadius) {
-        features.push({
-          type: 'Feature',
-          properties: {},
-          geometry: { type: 'LineString', coordinates: makeCircleCoords(u.loiterCenter, u.loiterRadius) },
-        });
-      }
       if (u.bombardTarget) {
         features.push({
           type: 'Feature',
@@ -1939,6 +1943,85 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       type: 'FeatureCollection',
       features,
     });
+  }
+
+  let fogCanvas: HTMLCanvasElement | null = null;
+
+  function renderFog() {
+    if (!fogCanvas || !snap || !init || !mapReady) return;
+    const g = fogCanvas.getContext('2d');
+    if (!g) return;
+    const dpr = window.devicePixelRatio || 1;
+    const w = fogCanvas.clientWidth;
+    const h = fogCanvas.clientHeight;
+    if (w === 0 || h === 0) return;
+    if (fogCanvas.width !== w * dpr || fogCanvas.height !== h * dpr) {
+      fogCanvas.width = w * dpr;
+      fogCanvas.height = h * dpr;
+    }
+    g.setTransform(dpr, 0, 0, dpr, 0, 0);
+    g.clearRect(0, 0, w, h);
+
+    const myTeam = init.team;
+    if (myTeam !== 0 && myTeam !== 1) return; // Spectator: clear map
+    if (gameOver) return; // Victory: full visibility
+
+    // Tactical dark shroud across the map
+    g.globalCompositeOperation = 'source-over';
+    g.fillStyle = 'rgba(8, 14, 26, 0.65)';
+    g.fillRect(0, 0, w, h);
+
+    // Punch soft-feathered vision holes using destination-out
+    g.globalCompositeOperation = 'destination-out';
+
+    const punch = (pos: LngLat, visionKm: number) => {
+      const center = map.project(pos);
+      const edge = map.project(offsetKm(pos, visionKm, 0));
+      const rPx = Math.hypot(edge.x - center.x, edge.y - center.y);
+      if (rPx <= 0) return;
+      if (center.x < -rPx || center.x > w + rPx || center.y < -rPx || center.y > h + rPx) return;
+
+      const grad = g.createRadialGradient(center.x, center.y, rPx * 0.70, center.x, center.y, rPx);
+      grad.addColorStop(0, 'rgba(0, 0, 0, 1.0)');
+      grad.addColorStop(1, 'rgba(0, 0, 0, 0.0)');
+      g.fillStyle = grad;
+      g.beginPath();
+      g.arc(center.x, center.y, rPx, 0, Math.PI * 2);
+      g.fill();
+    };
+
+    // 1. Friendly units
+    for (const u of snap.units) {
+      if (u.team !== myTeam) continue;
+      const d = defU.get(u.def);
+      const vis = d?.vision ?? 6;
+      punch(curPos(u), vis);
+    }
+
+    // 2. Friendly buildings
+    for (const b of snap.buildings) {
+      if (b.team !== myTeam || b.progress < 1) continue;
+      const d = defB.get(b.def);
+      const vis = d?.vision ?? 8;
+      punch(b.pos, vis);
+    }
+
+    // 3. Friendly capture points
+    if (init.map?.capturePoints) {
+      init.map.capturePoints.forEach((cp, i) => {
+        const ptState = snap?.points[i];
+        if (ptState && ptState.owner === myTeam) {
+          punch(cp.pos, 7.5);
+        }
+      });
+    }
+
+    // 4. Team initial spawns
+    if (init.map?.spawns?.[myTeam]) {
+      for (const sp of init.map.spawns[myTeam]) {
+        punch(sp, 10);
+      }
+    }
   }
 
   function renderMap() {
@@ -2046,7 +2129,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (map.getSource('recon-orbits')) {
       const orbitFeatures: any[] = [];
       for (const u of snap.units) {
-        if (u.team === myTeam && u.loiterCenter && u.loiterRadius) {
+        if (u.team === myTeam && u.loiterCenter && u.loiterRadius && selUnits.has(u.id)) {
           orbitFeatures.push({
             type: 'Feature',
             properties: { id: u.id },
@@ -2201,6 +2284,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.title = `${nameSpan?.textContent ?? p.id} · ${Math.round(p.hp)} / ${p.maxHp} HP`;
       }
     });
+    renderFog();
   }
 
   // ---------- animation loop (60 FPS interpolation between 5 Hz snapshots) ----------
@@ -2291,6 +2375,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (unitsMoved || dronesRotating) {
       renderUnitsLayer();
       if (selUnits.size > 0) renderSelLines();
+      if (unitsMoved) renderFog();
     }
   }
 
