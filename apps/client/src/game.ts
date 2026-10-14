@@ -1041,7 +1041,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const maxHp = (u: UnitView) => (defU.get(u.def)?.hp ?? 1) * (ranks()[u.rank]?.hp ?? 1);
 
   function computeEtaSeconds(u: UnitView, d: UnitDef): number | null {
-    if (!u.path || u.path.length === 0) return null;
+    if (!u.path || u.path.length === 0 || u.isLoitering) return null;
     const sprintMult = u.sprint && u.def !== 'drone' ? 2.0 : 1.0;
     const baseSpeed = d.speed * sprintMult;
     if (baseSpeed <= 0) return null;
@@ -1070,9 +1070,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return `${h}ч ${remM}м`;
   }
 
+  function isReconDrone(d: UnitDef | undefined): boolean {
+    if (!d) return false;
+    return d.droneType === 'recon' || d.id === 'drone' || (d.kind === 'air' && d.droneType !== 'strike');
+  }
+
+  function isStrikeDrone(d: UnitDef | undefined): boolean {
+    if (!d) return false;
+    return d.droneType === 'strike';
+  }
+
   function allowedStorageResources(d: BuildingDef): string[] {
     if (d.id === 'gas_station') return ['fuel'];
     if (d.id === 'oil_refinery') return ['fuel'];
+    if (d.id === 'airfield') return ['fuel'];
     if (d.id === 'mine') return ['ore'];
     if (d.id === 'warehouse') return ['metal', 'fuel', 'ore'];
 
@@ -1131,8 +1142,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const allowedRes = allowedStorageResources(d);
         if (allowedRes.length > 0) {
           const isGasStation = b.def === 'gas_station';
+          const isAirfield = b.def === 'airfield';
           const title = isGasStation
             ? 'Резервуар АЗС (до 20,000 л топлива):'
+            : isAirfield
+            ? 'Резервуар авиатоплива (до 20,000 л):'
             : d.id === 'mine'
             ? 'Склад руды (до 30,000):'
             : d.id === 'oil_refinery'
@@ -1148,8 +1162,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const items: HTMLElement[] = [];
           for (const k of allowedRes) {
             const meta = resMeta[k] ?? { name: k, icon: '📦' };
-            const isFuelOnGasStation = isGasStation && k === 'fuel';
-            const valText = `${Math.floor(stor[k] ?? 0)}${isFuelOnGasStation ? ' / 20k' : ''}`;
+            const isSpecialFuel = (isGasStation || isAirfield) && k === 'fuel';
+            const valText = `${Math.floor(stor[k] ?? 0)}${isSpecialFuel ? ' / 20k' : ''}`;
             items.push(h('div', { class: 'storage-item' }, h('span', {}, `${meta.icon} ${meta.name}`), h('b', {}, valText)));
           }
 
@@ -1326,6 +1340,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const destPrefix = first.route.state === 'to_to' ? 'До разгрузки: ~' : 'До погрузки: ~';
         etaBadgeText = `⏱ ${destPrefix}${formatEta(etaSec)}${resLabel}`;
       }
+    } else if (first.isLoitering) {
+      etaBadgeText = `🔄 Патрулирование (круг 4 км)`;
     } else if (etaSec !== null) {
       etaBadgeText = `⏱ Прибытие: ~${formatEta(etaSec)}`;
     }
@@ -1424,18 +1440,51 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const avgFuel = selectedList.filter((u) => u.fuel !== undefined).reduce((acc, u) => acc + (u.fuel ?? 0), 0);
       const avgMaxFuel = selectedList.filter((u) => u.maxFuel !== undefined).reduce((acc, u) => acc + (u.maxFuel ?? 100), 0) || 100;
       const fuelPct = Math.round((avgFuel / avgMaxFuel) * 100);
+
+      const hasOnlyStrikeDrones = selectedList.every((u) => {
+        const ud = defU.get(u.def);
+        return isStrikeDrone(ud);
+      });
+      const hasReconDrones = selectedList.some((u) => {
+        const ud = defU.get(u.def);
+        return isReconDrone(ud);
+      });
+
+      const meterTitle = hasOnlyStrikeDrones
+        ? 'Запас топлива дрона-камикадзе (одноразовый полет)'
+        : hasReconDrones
+        ? 'Запас топлива БПЛА (дозаправка только на аэродромах)'
+        : 'Запас топлива техники (пополняется на АЗС или от бензовоза)';
+
+      const refuelTitle = hasReconDrones
+        ? 'Полететь на ближайший аэродром для дозаправки'
+        : 'Поехать на ближайшую АЗС или топливозаправщик';
+
+      const refuelBtn = !hasOnlyStrikeDrones
+        ? h('button', {
+            class: 'hud-btn sm',
+            title: refuelTitle,
+            onClick: () => {
+              if (hasReconDrones && selectedList.every((u) => isReconDrone(defU.get(u.def)))) {
+                const hasAirfield = snap?.buildings.some((b) => b.def === 'airfield' && b.owner === me && b.progress >= 1);
+                if (!hasAirfield) {
+                  toast('Нет доступного аэродрома для дозаправки БПЛА! Постройте аэродром.', true);
+                  return;
+                }
+              }
+              send({ type: 'refuel', units: [...selUnits] });
+            },
+          }, 'Заправиться')
+        : null;
+
       fuelSec = h('div', { class: 'hud-sec' },
-        h('div', { class: 'meter-wrap', title: 'Запас топлива техники (пополняется на АЗС)' },
-          h('div', { class: 'meter-label' }, h('span', {}, '⛽ Топливо'), h('span', {}, fuelTimeText ? `${fuelTimeText} (${fuelPct}%)` : `${fuelPct}%`)),
+        h('div', { class: 'meter-wrap', title: meterTitle },
+          h('div', { class: 'meter-label' }, h('span', {}, '⛽ Топливо'), h('span', {}, `${fuelPct}%`)),
           h('div', { class: 'meter-bar' },
             h('div', { class: 'meter-fill fuel', style: { width: `${Math.max(0, Math.min(100, fuelPct))}%` } })
           )
         ),
-        h('button', {
-          class: 'hud-btn sm',
-          title: 'Поехать на ближайшую АЗС или топливозаправщик',
-          onClick: () => send({ type: 'refuel', units: [...selUnits] })
-        }, 'Заправиться')
+        refuelBtn
       );
     }
 
