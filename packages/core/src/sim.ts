@@ -338,7 +338,7 @@ export class Sim {
           const cityPt = w.points.find((pt) => pt.id === cityCp.id);
           if (cityPt && cityPt.owner !== p.team) return fail('город должен контролироваться вашей стороной');
           const cityHouses = w.buildings.filter((b) => b.def === 'housing' && this.isPosInCity(b.pos, cityCp));
-          if (cityHouses.length >= 20) return fail('достигнут лимит: максимум 20 жилых домов в городе');
+          if (cityHouses.length >= 10) return fail('достигнут лимит: максимум 10 жилых домов в городе');
         }
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
@@ -748,6 +748,7 @@ export class Sim {
     const mults = new Map<number, number>();
     for (const b of done) mults.set(b.id, this.outputMult(b));
 
+    // Initialize all player income tracking maps and calculate energy net
     for (const p of w.players) {
       const mine = done.filter((b) => b.owner === p.id);
       let net = 0;
@@ -757,8 +758,13 @@ export class Sim {
       }
       p.res.energy = clamp((p.res.energy ?? 0) + net * dt, 0, caps.get('energy') ?? 1e9);
       this.energyNet.set(p.id, net);
-      const inc: Record<string, number> = { energy: net };
-      this.income.set(p.id, inc);
+      this.income.set(p.id, { energy: net, money: 0 });
+    }
+
+    for (const p of w.players) {
+      const mine = done.filter((b) => b.owner === p.id);
+      const inc = this.income.get(p.id)!;
+      const net = this.energyNet.get(p.id) ?? 0;
       const eff = p.res.energy > 0 || net >= 0 ? 1 : this.ruleset.rules.energyDeficitMult;
 
       for (const b of mine) {
@@ -783,7 +789,20 @@ export class Sim {
         }
         for (const [k, v] of Object.entries(d.produces)) {
           if (k === 'energy') continue;
-          if (k === 'money' || k === 'people') {
+          if (k === 'money') {
+            // Profit (money) is divided equally among all players on this team
+            const teammates = w.players.filter((x) => x.team === p.team);
+            const n = teammates.length || 1;
+            const rateShare = (v * m) / n;
+            const amountShare = (v * m * dt) / n;
+            for (const tp of teammates) {
+              tp.res.money = Math.min(caps.get('money') ?? 1e9, (tp.res.money ?? 0) + amountShare);
+              const tpInc = this.income.get(tp.id);
+              if (tpInc) tpInc.money = (tpInc.money ?? 0) + rateShare;
+            }
+            continue;
+          }
+          if (k === 'people') {
             p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v * m * dt);
             inc[k] = (inc[k] ?? 0) + v * m;
             continue;
