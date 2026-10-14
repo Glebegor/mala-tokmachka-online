@@ -62,13 +62,14 @@ export async function loadRuleset(modsDir: string, only?: string[]): Promise<Rul
   return rs;
 }
 
-/** Maps keep their heavy data (roads, terrain grid, borders) in sibling files referenced by `roadsFile` / `terrainFile` / `bordersFile`. */
+/** Maps keep their heavy data (roads, terrain grid, borders, fuel) in sibling files referenced by `roadsFile` / `terrainFile` / `bordersFile` / `fuelFile`. */
 async function loadMap(file: string): Promise<MapDef> {
-  const raw = await readJson<MapDef & { roadsFile?: string; terrainFile?: string; bordersFile?: string }>(file);
-  const { roadsFile, terrainFile, bordersFile, ...map } = raw;
+  const raw = await readJson<MapDef & { roadsFile?: string; terrainFile?: string; bordersFile?: string; fuelFile?: string }>(file);
+  const { roadsFile, terrainFile, bordersFile, fuelFile, ...map } = raw;
   if (roadsFile) map.roads = await readJson(join(dirname(file), roadsFile));
   if (terrainFile) map.terrain = await readJson(join(dirname(file), terrainFile));
   if (bordersFile) map.borders = await readJson(join(dirname(file), bordersFile));
+  if (fuelFile) map.fuel = await readJson(join(dirname(file), fuelFile));
   if (!Array.isArray(map.occupiedClosure)) throw new Error(`map ${map.id} needs occupiedClosure`);
   return map;
 }

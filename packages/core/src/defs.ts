@@ -31,6 +31,7 @@ export interface BuildingDef {
   defense?: { radiusKm: number; mult: number };
   trains?: string[];
   maxPerPlayer?: number;
+  storageCap?: number;
 }
 
 export interface UnitDef {
@@ -52,6 +53,10 @@ export interface UnitDef {
   range: number; // km
   damage: number; // dps
   vision: number; // km
+  cargoCap?: number;
+  passengerCap?: number;
+  fuelOnly?: boolean;
+  maxFuel?: number;
 }
 
 export interface TerrainDef {
@@ -104,6 +109,9 @@ export interface MapDef {
   terrain?: TerrainGridData;
   /** State borders and country labels GeoJSON. In map JSON use `bordersFile` instead. */
   borders?: any;
+  /** Fuel stations GeoJSON. In map JSON use `fuelFile` instead. */
+  fuel?: any;
+  fuelFile?: string;
   capturePoints: CapturePointDef[];
   spawns: [LngLat[], LngLat[]];
 }

@@ -58,7 +58,11 @@ export function distToFrontKm(front: FrontNode[], p: LngLat): number {
       if (d2 < best - 1e-9 || (Math.abs(d2 - best) <= 1e-9 && perp > bestPerp)) {
         best = d2;
         bestPerp = perp;
-        side = cross >= 0 ? 1 : -1;
+        if (i === 1 && t === 0 && p[0] < front[0].lng) {
+          side = 1;
+        } else {
+          side = cross >= 0 ? 1 : -1;
+        }
       }
     }
     ax = bx;
