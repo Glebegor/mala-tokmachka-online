@@ -112,6 +112,9 @@ export interface MapDef {
   /** Fuel stations GeoJSON. In map JSON use `fuelFile` instead. */
   fuel?: any;
   fuelFile?: string;
+  /** Real OpenStreetMap city boundaries GeoJSON. In map JSON use `citiesFile` instead. */
+  cities?: any;
+  citiesFile?: string;
   capturePoints: CapturePointDef[];
   spawns: [LngLat[], LngLat[]];
 }
