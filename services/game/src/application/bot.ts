@@ -108,7 +108,7 @@ export class Bot {
       const needTrucks = w.buildings.some((x) => x.team === p.team && x.def === 'machine_factory' && x.progress >= 1) && count('truck') < 2;
       if (needTrucks && (p.res.money ?? 0) < 500) continue;
       const drones = w.units.filter((u) => u.owner === p.id && u.def === 'drone').length;
-      const pool = ['infantry', 'infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
+      const pool = ['infantry', 'infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'manpads', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
       const pick = pool[Math.floor(Math.random() * pool.length)];
       if (pick) sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
     }

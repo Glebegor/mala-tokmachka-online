@@ -278,3 +278,4 @@ small.warn { color: #f59e0b; }
 .bm.training .qbar { display: block; }
 .bm .qbar i { display: block; height: 100%; width: calc(var(--q, 0) * 100%); background: var(--accent); transition: width .25s linear; }
 .bm[data-q]:not([data-q=''])::after { content: '×' attr(data-q); position: absolute; left: -9px; top: -8px; padding: 0 3px; border-radius: 7px; background: #0b0d10; border: 1px solid var(--accent); color: var(--accent); font-size: 9px; font-weight: 700; line-height: 12px; }
+.meter-fill.ammo { background: #e39b4f; }

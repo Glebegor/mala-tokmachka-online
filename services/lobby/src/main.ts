@@ -3,4 +3,7 @@ import { LobbyService } from './application/lobbyService';
 import { HttpMatchLauncher } from './infrastructure/gameClient';
 import { lobbyRoutes } from './interface/http';
 
-serve(lobbyRoutes(new LobbyService(new HttpMatchLauncher()), config.secret), config.ports.lobby, 'lobby');
+const lobby = new LobbyService(new HttpMatchLauncher());
+serve(lobbyRoutes(lobby, config.secret), config.ports.lobby, 'lobby');
+// drop rooms whose match is over or was closed because everyone left
+setInterval(() => void lobby.sweep(), 5000);

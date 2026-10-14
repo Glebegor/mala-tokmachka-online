@@ -53,7 +53,16 @@ assert.ok(squad.every((u) => u.rank === 1 && sim.world.units.includes(u)), 'ever
 // add back what the economy earned meanwhile; what is left over is the tuition
 const paid = money - me.res.money + (terms.seconds + 2) * (sim.income.get('a')?.money ?? 0);
 assert.ok(Math.abs(paid - terms.perSecond * terms.seconds) < 6, `tuition was paid as it ran (${paid.toFixed(0)})`);
-console.log(`training ok: 4 units, ${terms.seconds}s, ${terms.perSecond}/s while running, ~${paid.toFixed(0)} money in total`);
+assert.equal(terms.seconds, 75, 'a course to Regular takes 75 s');
+// above Recruit a course needs combat: a kill since the last course
+const fresh = sim.apply('a', { type: 'enter', units: squad.map((u) => u.id), building: tc.id });
+assert.equal(fresh.ok, false, 'regulars without a kill are turned away');
+assert.match(fresh.ok ? '' : fresh.reason, /kill/);
+squad[1].combat = 1;
+assert.ok(sim.apply('a', { type: 'enter', units: squad.map((u) => u.id), building: tc.id }).ok, 'one with a kill may go');
+assert.deepEqual(sim.world.units.filter((u) => u.enter === tc.id).map((u) => u.id), [squad[1].id], 'only that one');
+assert.ok(sim.ranks[2].damage >= 1.4, 'veterans hit much harder');
+console.log(`training ok: 4 units, ${terms.seconds}s, ${terms.perSecond}/s while running, ~${paid.toFixed(0)} money in total; rank 2+ needs a kill`);
 
 // --- waypoints ---
 const scout = squad[0];

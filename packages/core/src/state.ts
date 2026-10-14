@@ -37,8 +37,8 @@ export interface Building {
 }
 
 export type BuildingView = Omit<Building, 'inside'> & {
-  /** Own team only: who is inside. */
-  inside?: { def: string; rank: number }[];
+  /** Own team only: who is inside, and whether each one can take the next course. */
+  inside?: { def: string; rank: number; ready: boolean }[];
 };
 
 export interface UnitCargo {
@@ -55,6 +55,8 @@ export interface Haul {
   resType?: string;
   state?: 'to_from' | 'loading' | 'to_to' | 'unloading';
   timer?: number;
+  /** At the source with nothing to load yet. */
+  waiting?: boolean;
 }
 
 export interface SmokeCloud {
@@ -75,6 +77,8 @@ export interface Unit {
   cooldown: number;
   xp: number;
   rank: number; // index into ruleset.ranks
+  /** Enemy units destroyed since its last course: above the first rank a course needs at least one. */
+  combat?: number;
   /** Driving in column on a road: fast, but cannot fire and takes extra damage. */
   transport: boolean;
   /** Cut off inside a cauldron: weaker and bleeding strength until relieved or destroyed. */
@@ -84,6 +88,8 @@ export interface Unit {
   fireMode?: 'auto' | 'return' | 'hold';
   fuel?: number;
   maxFuel?: number;
+  /** Rounds left (see UnitDef.maxAmmo). */
+  ammo?: number;
   cargo?: UnitCargo;
   haul?: Haul;
   embarkedIn?: number; // the transport this unit rides in
@@ -113,7 +119,7 @@ export interface Unit {
 export type UnitStatus = [id: string, value: number];
 
 /** Which status ids are debuffs. */
-export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel']);
+export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo']);
 
 export interface Waypoint {
   p: LngLat;
@@ -173,12 +179,16 @@ export interface GreyZone {
   ttl: number; // seconds left unless refreshed
 }
 
-/** Grid cell (see LIBERATED_CELL) of ground that just changed hands: grey until the new owner's troops have held it. */
+/**
+ * Grid cell (see LIBERATED_CELL) of ground that changed hands, as on DeepState: grey (contested) until no enemy ground
+ * troops have been near it for a while; then Ukrainian gains turn blue (liberated) and Russian ones plain occupied.
+ */
 export interface LiberatedCell {
   ix: number;
   iy: number;
   team: Team; // the side that took it
-  held: number; // seconds the new owner's ground troops have spent on it
+  quiet: number; // seconds without enemy ground troops nearby
+  free: boolean; // settled and shown as liberated (team 0 only)
 }
 
 /** Size of a liberated-ground cell in degrees (about 1.5 km). */

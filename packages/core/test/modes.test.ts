@@ -226,7 +226,7 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   console.log('training queue ok');
 }
 
-// --- liberated ground stays grey until the new owner's troops have held it for 30 s ---
+// --- ground that changes hands is grey until no enemy has been near it for 30 s; then Ukrainian gains turn blue ---
 {
   const sim = fresh();
   const [p0] = acrossTheLine(sim);
@@ -234,27 +234,33 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   const push = Array.from({ length: 30 }, (_, i) => sim.spawnUnit('tank', a, offsetKm(p0, (i % 6) * 0.3, Math.floor(i / 6) * 0.3)));
   for (const t of push) (t.fireMode = 'hold'), (t.fuel = undefined);
   run(sim, 60);
-  const mine = sim.world.liberated.filter((c) => c.team === 0);
-  assert.ok(mine.length > 0, `the ground the line passed over is contested (${mine.length} cells)`);
   const C = { lng: 0.02, lat: 0.0135 };
   const centre = (c: { ix: number; iy: number }): LngLat => [(c.ix + 0.5) * C.lng, (c.iy + 0.5) * C.lat];
-  const far = mine.find((c) => push.every((t) => distKm(t.pos, centre(c)) > 4)) ?? mine[0];
-  assert.equal(sim.side(centre(far)), 0, 'it is on our side of the line now');
-  assert.equal(sim.apply('a', { type: 'build', def: 'trench', pos: centre(far) }).ok, false, 'no building on contested ground');
-  // a squad parks on one cell; everything else is left alone
-  const target = mine[mine.length - 1];
-  for (const t of push) t.hp = 0;
-  run(sim, 0.2);
-  const squad = sim.spawnUnit('infantry', a, centre(target));
-  squad.fireMode = 'hold';
   const key = (c: { ix: number; iy: number }) => `${c.ix},${c.iy}`;
-  run(sim, 15);
-  assert.ok(sim.world.liberated.some((c) => key(c) === key(target)), 'still grey after 15 s');
-  run(sim, 17);
-  assert.ok(!sim.world.liberated.some((c) => key(c) === key(target)), 'settled after 30 s with troops on it');
-  const untouched = mine.filter((c) => distKm(centre(c), squad.pos) > 4);
-  assert.ok(untouched.length && untouched.every((c) => sim.world.liberated.some((x) => key(x) === key(c))), 'ground nobody holds stays grey');
-  console.log(`liberated ground ok: ${mine.length} cells, settled only where troops stood`);
+  const cell = (c: { ix: number; iy: number }) => sim.world.liberated.find((x) => key(x) === key(c));
+  const grey = sim.world.liberated.filter((c) => c.team === 0 && !c.free);
+  assert.ok(grey.length > 10, `the ground the line passed over is grey (${grey.length} cells)`);
+  assert.equal(sim.side(centre(grey[0])), 0, 'it is on our side of the line now');
+  assert.equal(sim.apply('a', { type: 'build', def: 'trench', pos: centre(grey[0]) }).ok, false, 'no building on grey ground');
+  for (const t of push) t.hp = 0; // stop pushing
+  run(sim, 0.2);
+  // an enemy squad sits next to one cell; another cell far from it has nobody near
+  const watched = grey.reduce((x, y) => (sim.world.units.length && distKm(centre(y), p0) < distKm(centre(x), p0) ? y : x));
+  // a freshly taken cell (its quiet clock has only just started)
+  const lonely = grey.filter((c) => distKm(centre(c), centre(watched)) > 12).sort((x, y) => x.quiet - y.quiet)[0];
+  assert.ok(lonely, 'two cells far apart');
+  const foe = sim.spawnUnit('infantry', sim.player('b')!, offsetKm(centre(watched), 0.5, 0));
+  (foe.fireMode = 'hold'), (foe.hp = 1e6);
+  const q0 = lonely!.quiet;
+  assert.ok(q0 <= 6, `fresh cell (${q0} s quiet)`);
+  run(sim, 12);
+  assert.ok(cell(lonely!) && !cell(lonely!)!.free, 'still grey after 12 s');
+  run(sim, 24 - q0);
+  assert.ok(cell(lonely!)?.free, 'blue (liberated) after 30 s with no enemy near');
+  assert.ok(!cell(watched)?.free, 'but grey (or lost) where the enemy is still around');
+  const built = sim.apply('a', { type: 'build', def: 'trench', pos: centre(lonely!) });
+  assert.ok(built.ok || !/grey/.test(built.reason), `liberated ground is not grey any more (${built.ok ? 'built' : built.reason})`);
+  console.log(`ground changing hands ok: ${grey.length} grey cells, liberated where the enemy stayed away`);
 }
 
 // --- fuel: vehicles burn it quickly; one vehicle can drive over and hand fuel to another (an ally's too) ---
@@ -305,20 +311,35 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   run(sim, 6); // nobody keeps the zone up: it fades
   assert.ok(!sim.world.buildings.includes(depot), 'and is lost with it');
 
-  // the supplied bonus: shots draw ammo, a dry depot gives nothing
+  // rounds: every shot uses one, an empty unit cannot fire, a stocked depot nearby refills it from its store
   const hq = hqOf(sim, 'a');
-  const d2 = { ...hq, id: sim.world.nextId++, def: 'ammo_depot', hp: 350, pos: offsetKm(p0, (p0[0] - p1[0]) * 300, (p0[1] - p1[1]) * 200), storage: { ammo: 50 }, inside: [], course: null, upgrade: null };
+  const d2 = { ...hq, id: sim.world.nextId++, def: 'ammo_depot', hp: 350, pos: offsetKm(p0, (p0[0] - p1[0]) * 1500, (p0[1] - p1[1]) * 1000), storage: { ammo: 0 }, inside: [], course: null, upgrade: null };
   sim.world.buildings.push(d2);
   assert.equal(sim.side(d2.pos), 0, 'depot behind our line');
   const ua = sim.spawnUnit('infantry', a, p0);
-  sim.spawnUnit('infantry', sim.player('b')!, p1);
-  run(sim, 0.5);
-  assert.ok(ua.status.some(([id, v]) => id === 'supplied' && v === 1.3), 'supplied: +30% damage');
+  const ru = sim.spawnUnit('infantry', sim.player('b')!, p1);
+  (ru.fireMode = 'hold'), (ru.hp = 1e6);
+  assert.equal(ua.ammo, 150, 'infantry starts with 150 rounds');
   run(sim, 5);
-  assert.ok(d2.storage.ammo < 50, `shots draw ammo (${d2.storage.ammo} left)`);
-  d2.storage.ammo = 0;
-  run(sim, 0.5);
-  assert.ok(!ua.status.some(([id]) => id === 'supplied'), 'an empty depot gives nothing');
+  assert.ok(ua.ammo! <= 146, `each shot uses a round (${ua.ammo} left)`);
+  ua.ammo = 0;
+  const hp0 = ru.hp;
+  run(sim, 4);
+  assert.equal(ru.hp, hp0, 'no rounds, no shooting');
+  assert.ok(ua.status.some(([id]) => id === 'noammo'), 'flagged out of ammo');
+  d2.storage.ammo = 1000;
+  run(sim, 3.2);
+  assert.ok(ua.ammo! > 0, `refilled at the depot (${ua.ammo})`);
+  assert.ok(d2.storage.ammo < 1000, 'from its store');
+  run(sim, 3);
+  assert.ok(ru.hp < hp0, 'and fires again');
+  const tank = sim.spawnUnit('tank', a, offsetKm(d2.pos, 1, 0));
+  tank.ammo = 0;
+  (tank.fireMode = 'hold'), (ua.fireMode = 'hold'), (ua.ammo = 150); // only the tank draws from the depot now
+  const before = d2.storage.ammo;
+  for (let i = 0; i < 20 && !tank.ammo; i++) sim.step(0.1); // the first refill (once a second)
+  assert.ok(tank.ammo! > 0);
+  assert.equal(before - d2.storage.ammo, tank.ammo! * 4, 'a tank shell costs 4 ammo');
 
   // a truck hauls ammo from the factory to the depot
   const fac = { ...hq, id: sim.world.nextId++, def: 'ammo_factory', hp: 900, pos: offsetKm(d2.pos, -8, 0), storage: { ammo: 2000, metal: 500 }, inside: [], course: null, upgrade: null };
@@ -328,4 +349,60 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   run(sim, 120);
   assert.ok(d2.storage.ammo > 500, `ammo delivered (${Math.round(d2.storage.ammo)})`);
   console.log('ammo ok');
+}
+
+// --- only anti-air weapons engage aircraft: infantry ignores drones, a MANPADS team shoots them and nothing else ---
+{
+  const sim = fresh();
+  const [p0, p1] = acrossTheLine(sim);
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const orion = sim.spawnUnit('drone_orion', b, p0);
+  const strike = sim.spawnUnit('drone_shahed', b, offsetKm(p0, 0.3, 0));
+  const inf = sim.spawnUnit('infantry', a, offsetKm(p0, 0.2, 0.2));
+  const tank = sim.spawnUnit('tank', a, offsetKm(p0, -0.2, 0.2));
+  run(sim, 4);
+  assert.equal(orion.hp, sim.defs.u.get('drone_orion')!.hp, 'infantry and tanks do not shoot recon drones');
+  assert.equal(strike.hp, sim.defs.u.get('drone_shahed')!.hp, 'nor strike drones');
+  assert.equal(inf.ammo, 150, 'no rounds wasted on them');
+  const enemyInf = sim.spawnUnit('infantry', b, p1);
+  enemyInf.fireMode = 'hold';
+  const team = sim.spawnUnit('manpads', a, offsetKm(p0, 0, 0.3));
+  const hp0 = enemyInf.hp;
+  inf.fireMode = tank.fireMode = 'hold';
+  run(sim, 6);
+  assert.ok(!sim.world.units.includes(orion) || orion.hp < sim.defs.u.get('drone_orion')!.hp, 'MANPADS hits the recon drone');
+  assert.ok(!sim.world.units.includes(strike) || strike.hp < sim.defs.u.get('drone_shahed')!.hp, 'and the strike drone');
+  assert.equal(enemyInf.hp, hp0, 'but never shoots ground troops');
+  assert.ok(team.ammo! < 6, `missiles used (${team.ammo} left)`);
+  console.log('anti-air ok');
+}
+
+// --- delivery routes: only goods the destination takes, smart "any", wait at an empty source ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const mk = (def: string, dx: number, storage: Record<string, number>) => {
+    const b = { ...hq, id: sim.world.nextId++, def, hp: 500, pos: offsetKm(hq.pos, dx, -4), storage, inside: [], course: null, upgrade: null };
+    sim.world.buildings.push(b);
+    return b;
+  };
+  const mine = mk('mine', 2, { ore: 0 });
+  const works = mk('metalworks', 6, { ore: 0, metal: 800 });
+  const truck = sim.spawnUnit('truck', a, mine.pos);
+  assert.equal(sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: mine.id, toBuilding: hq.id, resType: 'ore' }).ok, false, 'the base takes no ore');
+  assert.ok(sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: works.id, toBuilding: hq.id }).ok, 'metal from the works to the base');
+  for (let i = 0; i < 600 && !(truck.cargo!.res.metal ?? 0); i++) sim.step(0.1);
+  assert.ok((truck.cargo!.res.metal ?? 0) > 700, `"any" picked the metal (${Math.round(truck.cargo!.res.metal ?? 0)})`);
+  const store = mk('warehouse', 10, { ore: 0, metal: 0, fuel: 0, ammo: 0 }); // makes nothing itself
+  const t2 = sim.spawnUnit('truck', a, store.pos);
+  assert.ok(sim.apply('a', { type: 'setRoute', unit: t2.id, fromBuilding: store.id, toBuilding: works.id, resType: 'ore' }).ok);
+  run(sim, 12);
+  assert.equal(t2.haul?.state, 'loading', 'an empty source: it waits');
+  assert.ok(t2.haul?.waiting && distKm(t2.pos, store.pos) < 3.5, 'right there');
+  store.storage.ore = 400;
+  run(sim, 6);
+  assert.notEqual(t2.haul?.state, 'loading', 'loads as soon as there is ore and drives off');
+  assert.equal(store.storage.ore, 0, 'took all of it');
+  console.log('delivery routes ok');
 }

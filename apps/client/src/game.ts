@@ -10,8 +10,9 @@ import { ShotFx } from './fx';
 import { iconHtml, STATUS, statusIconHtml } from './icons';
 import { FogOverlay } from './fog';
 import { renderUnitHud, type Pickers } from './unitHud';
-import { drawNato, echelonFor, natoId, parseNatoId, REL_COLOR, type Relation } from './nato';
+import { ALLY_COLOR, drawNato, echelonFor, NATION_COLOR, natoId, parseNatoId, type Relation } from './nato';
 import { aircraftSprite } from './sprites';
+import { cellsToMultiPolygon } from './contours';
 import { ProductionDock, QueueList, type QueueContext } from './queue';
 
 /**
@@ -167,7 +168,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     setTimeout(() => el.remove(), 4200);
   };
 
-  /** Own units are blue, allies green, the enemy red (markers and aircraft sprites). */
+  /** Your own units in your nation's colour (Ukraine blue, Russia red), allies green, the enemy in theirs. */
+  const relColor = (rel: Relation): string => (rel === 'ally' ? ALLY_COLOR : NATION_COLOR[rel === 'own' ? init?.team ?? 0 : 1 - (init?.team ?? 0)]);
   const relOf = (u: { owner: string; team: number }): Relation => (u.owner === me ? 'own' : u.team === init?.team ? 'ally' : 'enemy');
   /** Mobility indicator under a vehicle's marker ('' for troops on foot and aircraft). */
   const mobilityOf = (d: UnitDef | undefined) => (d && d.kind === 'ground' && d.mobility && d.mobility !== 'foot' ? d.mobility : '');
@@ -211,7 +213,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.levels) f.push(`Upgradable to level ${d.levels.length + 1}: ${d.levels.map((l) => `+${Math.round((l.defenseMult ?? 0) * 100)}%`).join(', ')}`);
     if (d.attack) f.push(`Hits ${d.attack.targets} targets: ${d.attack.damage} dmg/s, ${d.attack.range} km`);
     if (d.crossing) f.push(`River crossing within ${d.crossing.radiusKm} km`);
-    if (d.supply) f.push(`Units within ${d.supply.radiusKm} km deal +${Math.round((d.supply.damageMult - 1) * 100)}% damage while it holds ammo (${d.supply.perShot} per shot)`);
+    if (d.supply) f.push(`Refills ammunition of your units within ${d.supply.radiusKm} km (${d.supply.rounds} rounds a second each)`);
     if (d.buildInGrey) f.push('Can be built inside your grey zones, even behind the enemy line');
     if (d.training) f.push(`Courses for ${d.training.minUnits}–${d.training.capacity} units, ${d.training.baseTime + d.training.timePerRank}s and up`);
     if (d.trains?.length) f.push(`Trains ${d.trains.filter((u) => !defU.get(u)?.side || defU.get(u)?.side === (init?.team === 0 ? 'ua' : 'ru')).map((u) => defU.get(u)?.name ?? u).join(', ')}`);
@@ -227,6 +229,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const extra: string[] = [];
     if (u.minRange) extra.push(`Indirect fire ${u.minRange}–${u.range} km, needs a spotter`);
     if (u.cargoCap) extra.push(`${u.fuelOnly ? 'Fuel tank' : 'Cargo'} ${u.cargoCap}${u.passengerCap ? ` · carries ${u.passengerCap} infantry` : ''}`);
+    if (u.maxAmmo) extra.push(`Ammo ${u.maxAmmo} rounds (${u.ammoCost ?? 1} ammo each to refill); cannot fire when empty`);
     if (u.maxFuel) extra.push(`Fuel tank ${u.maxFuel}${u.droneType === 'strike' ? ' (one way)' : ''}`);
     if (u.missile) extra.push(`${u.missile === 'ballistic' ? 'Ballistic' : 'Cruise'} missile: about ${Math.round((u.maxFuel ?? 0) / 0.08).toLocaleString('en-US')} km range, ${Math.round((u.interceptChance ?? 1) * 100)}% of anti-air shots hit it`);
     if (u.droneType) extra.push(u.droneType === 'strike' ? `Explodes on its target (${u.damage} damage, ${u.blastKm ?? 1.8} km blast)` : 'Circles its area, refuels at an airfield');
@@ -363,7 +366,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       // aircraft sprites tinted by relation, and strike smoke
       if (e.id.startsWith('drone|')) {
         const [, def, rel, sel] = e.id.split('|');
-        void aircraftSprite(def, REL_COLOR[rel as Relation] ?? REL_COLOR.enemy, sel === '1').then((c) => {
+        void aircraftSprite(def, relColor((['own', 'ally', 'enemy'].includes(rel) ? rel : 'enemy') as Relation), sel === '1').then((c) => {
           if (!map.hasImage(e.id)) map.addImage(e.id, c.getContext('2d')!.getImageData(0, 0, c.width, c.height), { pixelRatio: 2 });
         });
         return;
@@ -375,7 +378,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -411,15 +414,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (f.properties?.type !== 'country_label') continue;
         new maplibregl.Marker({ element: h('div', { class: 'country-label' }, f.properties.name) }).setLngLat(f.geometry.coordinates).addTo(map);
       }
-      // blue zone: ground held by team 0, the mirror image of the red occupied zone
-      map.addLayer({ id: 'held-fill', type: 'fill', source: 'held', paint: { 'fill-color': TEAM_COLOR[0], 'fill-opacity': 0.09, 'fill-antialias': false } });
       // front: flat occupied tint, a hard-edged contact zone, and a crisp cased line with sharp corners (no blur, no rounding)
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#e5383b', 'fill-opacity': 0.12, 'fill-antialias': false } });
       map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
       map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
-      // liberated ground the new owner has not yet held for long: grey over the blue or red
-      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#c3c8cf', 'fill-opacity': 0.6, 'fill-antialias': false } }, 'front-zone');
+      // DeepState-style areas: grey where ground just changed hands and the enemy is still about, blue where Ukraine liberated it
+      map.addLayer({ id: 'freed-fill', type: 'fill', source: 'freed', paint: { 'fill-color': '#3d8bff', 'fill-opacity': 0.24 } }, 'front-zone');
+      map.addLayer({ id: 'freed-line', type: 'line', source: 'freed', paint: { 'line-color': '#5c9dff', 'line-width': 1.1, 'line-opacity': 0.85 } }, 'front-zone');
+      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#b3b8bf', 'fill-opacity': 0.55 } }, 'front-zone');
+      map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#e3e7ec', 'line-width': 1.1, 'line-opacity': 0.8, 'line-dasharray': [3, 2] } }, 'front-zone');
       // grey zone: contested ground behind the line
       map.addLayer({ id: 'grey-fill', type: 'fill', source: 'grey', paint: { 'fill-color': '#b9bfc8', 'fill-opacity': 0.34 } });
       map.addLayer({ id: 'grey-line', type: 'line', source: 'grey', paint: { 'line-color': '#e3e7ec', 'line-width': 1.2, 'line-opacity': 0.7, 'line-dasharray': [2, 2] } });
@@ -857,7 +861,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const d = Math.abs(distToFrontKm(snap.front, p));
       const pocket = snap.pockets.find((k) => pointInRing(k.nodes, p));
       if (pocket) return pocket.team === init.team ? 'this ground is encircled' : 'not your territory';
-      if (snap.grey.some((z) => distKm(z.pos, p) <= z.r) || contestedAt(p) !== undefined) return def.buildInGrey ? 'only your side’s grey zones' : 'contested ground (grey zone)';
+      const lib = contestedAt(p);
+      if (snap.grey.some((z) => distKm(z.pos, p) <= z.r) || lib === 0 || lib === 1) return def.buildInGrey ? 'only your side’s grey zones' : 'contested ground (grey zone)';
       if (sideAt(p) !== init.team) return 'not your territory';
       if (def.id !== 'housing' && d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     }
@@ -1026,7 +1031,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const rk = ranks();
           const coming = snap.units.filter((u) => u.entering === b.id).length;
           side.append(h('div', { class: 'stat' }, `Inside: ${inside.length}/${t.capacity}${coming ? ` · ${coming} on the way` : ''}`));
-          if (inside.length) side.append(h('div', { class: 'row pupils' }, ...inside.map((u) => unitIcon(defU.get(u.def)!, u.rank))));
+          if (inside.length) {
+            // dimmed: inside, but needs a kill since its last course before it can rank up again
+            side.append(h('div', { class: 'row pupils' }, ...inside.map((u) => {
+              const ic = unitIcon(defU.get(u.def)!, u.rank);
+              if (!u.ready) (ic.style.opacity = '0.35'), (ic.title = 'Needs at least one kill since its last course');
+              return ic;
+            })));
+            const waiting = inside.filter((u) => !u.ready).length;
+            if (waiting) side.append(h('div', { class: 'stat warn' }, `${waiting} cannot rank up yet: above Recruit a unit needs at least one kill since its last course`));
+          }
           if (b.course) {
             const done = 1 - b.course.remaining / b.course.total;
             side.append(h('div', { class: 'stat' }, `Course in progress: ${b.course.remaining}s left · paid as it runs, pauses if money runs out`), h('div', { class: 'bar' }, h('i', { style: { width: `${Math.round(done * 100)}%`, background: 'var(--accent)' } })));
@@ -1034,18 +1048,21 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             const rules = init.ruleset.rules;
             let top = 0;
             let perSec = 0;
+            let able = 0;
             for (const u of inside) {
-              if (!rk[u.rank + 1]) continue;
+              if (!u.ready) continue;
+              able++;
               top = Math.max(top, u.rank + 1);
               perSec += (rules.courseCostPerTick + rules.courseCostPerRank * u.rank) * rules.tickRate;
             }
-            const ready = inside.length >= t.minUnits;
-            const secs = t.baseTime + t.timePerRank * top;
+            const ready = able >= t.minUnits;
+            // the same time the server will use (sandbox runs courses faster)
+            const secs = Math.round((t.baseTime + t.timePerRank * top) * rules.buildTimeMult);
             side.append(
               h('button', { class: 'bld', disabled: !ready || undefined, onClick: () => send({ type: 'course', building: b.id }) },
                 h('span', { class: 'ico' }, '⚑'),
                 h('span', { class: 'meta' },
-                  h('b', {}, ready ? `Start course · ${secs}s` : `Needs ${t.minUnits - inside.length} more unit${t.minUnits - inside.length === 1 ? '' : 's'}`),
+                  h('b', {}, ready ? `Start course · ${secs}s → ${rk[top]?.name ?? ''}` : `Needs ${t.minUnits - able} more unit${t.minUnits - able === 1 ? '' : 's'} that can rank up`),
                   h('small', {}, ready ? `${perSec.toFixed(1)} money/s while it runs (about ${Math.round(perSec * secs)} in total)` : `at least ${t.minUnits} to run a course`))),
             );
             if (inside.length) side.append(h('button', { onClick: () => send({ type: 'release', building: b.id }) }, 'Send everyone out'));
@@ -1108,10 +1125,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const u = mine[0];
         const d = defU.get(u.def)!;
         const next = rk[u.rank + 1];
+        const courseNote = next && d.kind !== 'air' ? (u.rank === 0 ? 'Can take a course at a Training Centre' : (u.combat ?? 0) > 0 ? `${u.combat} kill${u.combat === 1 ? '' : 's'} since its last course: can take the next one` : 'Needs a kill before its next course') : '';
         side.append(
           h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, rk[u.rank]?.name ?? ''))),
           h('div', { class: 'stat' }, `HP ${u.hp}/${Math.round(maxHp(u))}`),
           h('div', { class: 'stat' }, next ? `XP ${u.xp}/${next.xp} → ${next.name}` : `XP ${u.xp} · top rank`),
+          h('div', { class: 'stat muted' }, courseNote),
           h('div', { class: 'stat muted' }, `damage ×${rk[u.rank]?.damage ?? 1} · range ×${rk[u.rank]?.range ?? 1}`),
           h('div', { class: 'muted' }, d.description ?? ''),
           ...unitFacts(d).map((f) => h('div', { class: 'fact' }, f)),
@@ -1177,11 +1196,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function unitIcon(d: UnitDef, rank: number) {
     if (d.kind === 'air') {
       const c = h('canvas', { class: 'nato-ico drone-ico', width: 128, height: 128, title: d.name });
-      void aircraftSprite(d.id, REL_COLOR.own, false).then((img) => c.getContext('2d')!.drawImage(img, 0, 0, 128, 128));
+      void aircraftSprite(d.id, relColor('own'), false).then((img) => c.getContext('2d')!.drawImage(img, 0, 0, 128, 128));
       return c;
     }
     const c = h('canvas', { class: 'nato-ico', width: 128, height: 128 });
-    c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: REL_COLOR.own, symbol: d.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank, selected: false, own: true, transport: false }), 0, 0);
+    c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: relColor('own'), symbol: d.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank, selected: false, own: true, transport: false }), 0, 0);
     return c;
   }
 
@@ -1262,7 +1281,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const symbol = kinds.size === 1 ? [...kinds][0] : kinds.has('armor') && kinds.has('infantry') ? 'mechanized' : [...kinds].sort((a, b) => us.filter((u) => defU.get(u.def)?.symbol === b).length - us.filter((u) => defU.get(u.def)?.symbol === a).length)[0];
       const sel = us.every((u) => selUnits.has(u.id)) && selUnits.size === us.length;
       const rank = Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length);
-      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, icon: natoId({ hostile: false, color: REL_COLOR.own, symbol, mobility: sharedMobility(us), echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
+      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, icon: natoId({ hostile: false, color: relColor('own'), symbol, mobility: sharedMobility(us), echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
     }
     // zoomed out, everything else is merged into formation markers per ~30 km cell (mine / allied / hostile kept apart)
     const cells = new Map<string, UnitView[]>();
@@ -1280,7 +1299,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const sel = own && us.every((u) => selUnits.has(u.id));
       formations.push({
         type: 'Feature',
-        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, icon: natoId({ hostile: us[0].team !== myTeam, color: REL_COLOR[relOf(us[0])], symbol, mobility: sharedMobility(us), echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
+        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, icon: natoId({ hostile: us[0].team !== myTeam, color: relColor(relOf(us[0])), symbol, mobility: sharedMobility(us), echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
         geometry: { type: 'Point', coordinates: centroid(us) },
       });
     }
@@ -1395,14 +1414,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (libDirty) {
       // liberated ground still contested: grey cells (rows of them merged into rectangles)
       libDirty = false;
+      // traced into smooth outlines: grey = contested after a side took it, blue = liberated by Ukraine
       const { lng: cw, lat: ch } = LIBERATED_CELL;
-      const features: any[] = [];
+      const grey: [number, number][] = [], free: [number, number][] = [];
       for (let k = 0; k < libRuns.length; k += 4) {
-        const [iy, team, ix, n] = [libRuns[k], libRuns[k + 1], libRuns[k + 2], libRuns[k + 3]];
-        const x0 = ix * cw, x1 = (ix + n) * cw, y0 = iy * ch, y1 = (iy + 1) * ch;
-        features.push({ type: 'Feature', properties: { team }, geometry: { type: 'Polygon', coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]] } });
+        const [iy, kind, ix, n] = [libRuns[k], libRuns[k + 1], libRuns[k + 2], libRuns[k + 3]];
+        for (let i = 0; i < n; i++) (kind === 2 ? free : grey).push([ix + i, iy]);
       }
-      (map.getSource('liberated') as GeoJSONSource).setData({ type: 'FeatureCollection', features } as any);
+      const shape = (cells: [number, number][]) => ({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: cellsToMultiPolygon(cells, cw, ch) } });
+      (map.getSource('liberated') as GeoJSONSource).setData(shape(grey) as any);
+      (map.getSource('freed') as GeoJSONSource).setData(shape(free) as any);
     }
     const greyKey = snap.grey.map((z) => `${z.pos[0]},${z.pos[1]}`).join('|');
     if (greyKey !== lastGrey) {
@@ -1455,7 +1476,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           // a strike drone shrinks as it dives on the last 18 km
           if (isStrikeDrone(d) && u.target) scale = Math.min(1, 0.45 + 0.55 * (distKm(pos, u.target) / 18));
         } else {
-          icon = natoId({ hostile: u.team !== myTeam, color: REL_COLOR[relOf(u)], symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
+          icon = natoId({ hostile: u.team !== myTeam, color: relColor(relOf(u)), symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
         }
         return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), air, icon, bearing, scale, z: sel ? 4 : air ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: pos } };
     });
@@ -1535,9 +1556,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
     (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: [line, ...holes, ...patches] } } as any);
     (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes, ...mapHoles], ...patches.map((p) => [p])] } } as any);
-    // everything outside the occupied area (inside a box well beyond the map) is the blue zone
-    const world: LngLat[] = [[5, 30], [65, 30], [65, 65], [5, 65], [5, 30]];
-    (map.getSource('held') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[world, [...line, ...init.map.occupiedClosure, line[0]], ...patches], ...holes.map((p) => [p])] } } as any);
     (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
   }
   let frontDrawn = false;

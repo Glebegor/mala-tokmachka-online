@@ -14,6 +14,7 @@ export interface MatchReporter {
 
 const COUNTDOWN_MS = 3000;
 const LOAD_TIMEOUT_MS = 25000; // start anyway if a client never reports that its map is drawn
+const EMPTY_CLOSE_MS = 60000; // a match nobody is connected to for this long is removed (time enough to reload or rejoin)
 
 export class Match {
   readonly sim: Sim;
@@ -21,6 +22,7 @@ export class Match {
   private bots: Bot[];
   private timer: NodeJS.Timeout;
   private ended = false;
+  private closed = false;
   private msgBudget = new Map<string, { t: number; n: number }>();
   private idleTicks = 0;
   onClose: () => void = () => {};
@@ -28,6 +30,8 @@ export class Match {
   private phase: 'loading' | 'countdown' | 'running' = 'loading';
   private ready = new Set<string>();
   private createdAt = Date.now();
+  /** When the last player disconnected (0 while someone is connected). */
+  private emptySince = Date.now();
   private startAt = 0;
   private reporter: MatchReporter | null = null;
   /** Version of the contested ground each player last received (it is only resent when it changes). */
@@ -99,6 +103,7 @@ export class Match {
   connect(playerId: string, conn: Connection) {
     this.conns.get(playerId)?.close();
     this.conns.set(playerId, conn);
+    this.emptySince = 0;
     const me = this.sim.player(playerId)!;
     const { scripts: _s, maps: _m, ...pub } = this.ruleset;
     const init: InitMsg = {
@@ -117,6 +122,7 @@ export class Match {
 
   disconnect(playerId: string, conn: Connection) {
     if (this.conns.get(playerId) === conn) this.conns.delete(playerId);
+    if (!this.conns.size) this.emptySince = Date.now();
   }
 
   handle(playerId: string, msg: ClientMsg) {
@@ -147,6 +153,11 @@ export class Match {
 
   private tick(dt: number, snapEvery: number) {
     const sim = this.sim;
+    // everyone has left: the match is removed (bots alone do not keep it alive)
+    if (!this.conns.size && this.emptySince && Date.now() - this.emptySince > EMPTY_CLOSE_MS) {
+      console.log(`[game] match ${this.id}: no players for ${EMPTY_CLOSE_MS / 1000} s, closing`);
+      return this.close();
+    }
     if (this.phase !== 'running') {
       // before the start nothing moves, but players still get snapshots so they can find their base
       this.advancePhase();
@@ -193,6 +204,8 @@ export class Match {
   }
 
   close() {
+    if (this.closed) return;
+    this.closed = true;
     clearInterval(this.timer);
     for (const c of this.conns.values()) c.close();
     this.conns.clear();

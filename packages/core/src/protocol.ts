@@ -34,7 +34,8 @@ export interface SnapMsg {
   /** Grey zones: contested patches behind the front. */
   grey: { team: Team; pos: [number, number]; r: number }[];
   /**
-   * Liberated ground still contested, as runs of grid cells (see LIBERATED_CELL): [iy, team that took it, first ix, count, …].
+   * Ground that changed hands, as runs of grid cells (see LIBERATED_CELL): [iy, kind, first ix, count, …] where kind is
+   * 0 or 1 = grey, contested after that team took it; 2 = liberated by Ukraine (blue).
    * Only sent when it changed (and in the first snapshot); missing = unchanged.
    */
   liberated?: number[];

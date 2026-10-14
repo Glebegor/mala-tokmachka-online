@@ -72,7 +72,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
   }
   if (first.haul) {
     const res = first.haul.resType ? ` [${RES_LABEL[first.haul.resType] ?? first.haul.resType}]` : '';
-    if (first.haul.state === 'loading') lines.push(`Loading${res} (${Math.ceil(first.haul.timer ?? 5)}s)`);
+    if (first.haul.state === 'loading') lines.push(first.haul.waiting ? `Waiting for goods to load${res}` : `Loading${res} (${Math.ceil(first.haul.timer ?? 5)}s)`);
     else if (first.haul.state === 'unloading') lines.push(`Unloading${res} (${Math.ceil(first.haul.timer ?? 4)}s)`);
     else {
       const eta = etaSeconds(first, d0, c.roadMult, c.pos(first));
@@ -123,6 +123,14 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     if (tired.length) el.append(meter('Stamina', tired.reduce((a, u) => a + (u.stamina ?? 100), 0) / tired.length, 'stamina'));
   }
 
+  // 4b. ammunition
+  const armed = list.filter((u) => u.ammo !== undefined && c.defU.get(u.def)!.maxAmmo);
+  if (armed.length) {
+    const have = armed.reduce((a, u) => a + (u.ammo ?? 0), 0);
+    const max = armed.reduce((a, u) => a + (c.defU.get(u.def)!.maxAmmo ?? 0), 0);
+    el.append(h('div', { class: 'hud-sec', title: 'Rounds left; refill near an ammo depot or your base' }, meter(single ? `Ammo ${have}/${max}` : 'Ammo', (have / Math.max(1, max)) * 100, 'ammo')));
+  }
+
   // 5. fuel gauge and refuelling
   if (fuelled.length) {
     const pct = (fuelled.reduce((a, u) => a + (u.fuel ?? 0), 0) / Math.max(1, fuelled.reduce((a, u) => a + (u.maxFuel ?? 100), 0))) * 100;
@@ -153,12 +161,15 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     let control: HTMLElement;
     if (c.pick.route?.unitId === first.id) {
       const from = c.pick.route.fromBuilding ? c.snap.buildings.find((b) => b.id === c.pick.route!.fromBuilding) : null;
-      const opts = d0.fuelOnly ? [] : ['ore', 'metal', 'ammo', 'any'];
-      if (from && opts.length && !c.pick.route.resType) c.pick.route.resType = opts[0];
+      // the goods the loading site actually keeps (fuel is for tankers); "any" lets the truck take what the destination wants
+      const stock = from?.storage ?? {};
+      const opts = d0.fuelOnly ? [] : [...Object.keys(stock).filter((k) => k !== 'fuel'), 'any'];
+      if (from && opts.length && !c.pick.route.resType) c.pick.route.resType = 'any';
       control = h('div', { class: 'route-box' },
         h('b', {}, from ? 'Step 2 of 2: click where to unload' : 'Step 1 of 2: click where to load'),
         from && opts.length ? h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Carry:'), ...opts.map((o) =>
-          h('button', { class: 'hud-btn sm' + (c.pick.route!.resType === o ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (c.pick.route!.resType = o), c.rerender()) }, RES_LABEL[o]))) : null,
+          h('button', { class: 'hud-btn sm' + (c.pick.route!.resType === o ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (c.pick.route!.resType = o), c.rerender()) },
+            o === 'any' ? RES_LABEL.any : `${RES_LABEL[o] ?? o} ${Math.floor(stock[o] ?? 0)}`))) : null,
         h('button', { class: 'hud-btn sm warn', onClick: () => ((c.pick.route = null), c.rerender()) }, 'Cancel (Esc)'));
     } else if (first.haul) {
       const name = (id: number) => c.defB.get(c.snap.buildings.find((b) => b.id === id)?.def ?? '')?.name ?? 'site';
