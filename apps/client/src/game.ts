@@ -990,7 +990,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const cityPt = snap.points.find((pt) => pt.id === cityCp.id);
       if (cityPt && cityPt.owner !== init.team) return 'Город должен контролироваться вашей стороной!';
       const cityHouses = snap.buildings.filter((b) => b.def === 'housing' && isPosInCity(b.pos, cityCp, cityPolys));
-      if (cityHouses.length >= 20) return 'В этом городе уже построен максимум (20) домов!';
+      if (cityHouses.length >= 10) return 'В этом городе уже построен максимум (10) домов!';
       if (snap.buildings.some((b) => b.def === 'housing' && distKm(b.pos, p) < 0.08)) return 'Слишком близко к другому дому (мин 80м)';
     } else {
       if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
@@ -1023,7 +1023,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const cityCp = init.map.capturePoints.find((cp) => isPosInCity(p, cp, cityPolys));
       if (cityCp && snap) {
         const count = snap.buildings.filter((b) => b.def === 'housing' && isPosInCity(b.pos, cityCp, cityPolys)).length;
-        specialBonus = ` · 🏙 ${cityCp.name}: ${count}/20 жилых домов`;
+        specialBonus = ` · 🏙 ${cityCp.name}: ${count}/10 жилых домов`;
       }
     }
     hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''}${specialBonus} (Shift keeps placing, Esc cancels)`;
@@ -1206,7 +1206,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const cityCp = init.map.capturePoints.find((cp) => isPosInCity(b.pos, cp, cityPolys));
           const cityName = cityCp?.name ?? 'Город';
           const housesCount = cityCp ? snap.buildings.filter((x) => x.def === 'housing' && isPosInCity(x.pos, cityCp, cityPolys)).length : 0;
-          side.append(h('div', { class: 'stat', style: { color: '#e2e8f0' } }, `🏙 ${cityName}: ${housesCount} / 20 жилых домов`));
+          side.append(h('div', { class: 'stat', style: { color: '#e2e8f0' } }, `🏙 ${cityName}: ${housesCount} / 10 жилых домов`));
         }
         if (b.def === 'oil_refinery' && isKremenchukRefinery(b.pos)) {
           side.append(h('div', { class: 'stat', style: { color: '#06b6d4', fontWeight: 'bold' } }, '★ Бонус Кременчугского НПЗ: x1.5 к производству топлива!'));
