@@ -89,6 +89,28 @@
     "maxFuel": 150
   },
   {
+    "id": "rescuers",
+    "name": "Спасатели",
+    "kind": "ground",
+    "cost": {
+      "money": 600,
+      "people": 6
+    },
+    "trainTime": 14,
+    "hp": 220,
+    "speed": 0.25,
+    "range": 0.5,
+    "damage": 0,
+    "vision": 6,
+    "mobility": "wheeled",
+    "symbol": "engineer",
+    "fx": "burst",
+    "missRate": 0.5,
+    "cargoCap": 500,
+    "passengerCap": 0,
+    "maxFuel": 100
+  },
+  {
     "id": "tank",
     "name": "Tank",
     "kind": "ground",

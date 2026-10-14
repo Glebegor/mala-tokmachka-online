@@ -1,6 +1,6 @@
 import { type BotDifficulty, distKm, moveToward, nearestNode, offsetKm, sideOf, type LngLat, type Player, type Sim } from '@sw/core';
 
-const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'oil_refinery', 'drone_factory', 'gas_station', 'trench', 'signal_station', 'housing', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
+const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'oil_refinery', 'machine_factory', 'drone_factory', 'gas_station', 'trench', 'signal_station', 'housing', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
@@ -73,7 +73,23 @@ export class Bot {
 
   private command(sim: Sim, p: Player) {
     const w = sim.world;
-    const army = w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)?.kind !== 'air');
+    const army = w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)?.kind !== 'air' && u.def !== 'rescuers');
+
+    // Rescuers: move to damaged friendly buildings or cities
+    for (const res of w.units.filter((u) => u.owner === p.id && u.def === 'rescuers')) {
+      if (res.target) continue;
+      const damagedB = w.buildings.find((b) => b.team === p.team && b.progress >= 1 && b.hp < (sim.defs.b.get(b.def)?.hp ?? 100));
+      if (damagedB) {
+        sim.apply(p.id, { type: 'move', units: [res.id], to: damagedB.pos });
+        continue;
+      }
+      const damagedPt = w.points.find((pt) => pt.owner === p.team && (pt.hp ?? 8000) < (pt.maxHp ?? 8000));
+      if (damagedPt) {
+        const cp = sim.map.capturePoints.find((x) => x.id === damagedPt.id);
+        if (cp) sim.apply(p.id, { type: 'move', units: [res.id], to: cp.pos });
+      }
+    }
+
     const enemyPoints = sim.map.capturePoints.filter((cp) => sideOf(w.front, cp.pos) !== p.team);
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchor: LngLat = hq?.pos ?? sim.map.center;
