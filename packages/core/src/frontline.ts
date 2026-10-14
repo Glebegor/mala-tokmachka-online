@@ -209,12 +209,5 @@ export function resolveFrontLoops(nodes: FrontNode[], pinchDistKm = 4.0): { main
     }
   }
 
-  // Smooth out any sharp fold kinks to maintain a clean frontline curve
-  for (let pass = 0; pass < 2; pass++) {
-    for (let i = 1; i < cur.length - 1; i++) {
-      cur[i].lng = cur[i].lng * 0.7 + ((cur[i - 1].lng + cur[i + 1].lng) / 2) * 0.3;
-      cur[i].lat = cur[i].lat * 0.7 + ((cur[i - 1].lat + cur[i + 1].lat) / 2) * 0.3;
-    }
-  }
   return { main: cur, loops };
 }

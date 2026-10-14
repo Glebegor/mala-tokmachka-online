@@ -4,7 +4,7 @@
   "frontMaxSpeed": 0.08,
   "frontSmoothing": 0.5,
   "frontInfluenceKm": 18,
-  "frontNodeSpacingKm": 2.5,
+  "frontNodeSpacingKm": 1.5,
   "minBuildSpacing": 35,
   "startUnits": ["infantry", "infantry", "infantry", "infantry", "drone"]
 }
