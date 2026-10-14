@@ -139,6 +139,16 @@ button.ghost.on { color: var(--accent); }
 
 .far .cp span { font-size: 8px; letter-spacing: .03em; opacity: .7; }
 .far .cp i { width: 7px; height: 7px; }
+
+/* Hide text signatures of smaller/non-large cities when camera is zoomed out */
+.zoom-far .cp.val-1 span { display: none; }
+.zoom-very-far .cp.val-1 span,
+.zoom-very-far .cp.val-2 span { display: none; }
+.zoom-overview .cp.val-1 span,
+.zoom-overview .cp.val-2 span,
+.zoom-overview .cp.val-3 span { display: none; }
+.zoom-very-far .cp.val-1 i { opacity: 0.35; transform: scale(0.65) rotate(45deg); }
+.zoom-overview .cp.val-2 i { opacity: 0.45; transform: scale(0.75) rotate(45deg); }
 .side .row { flex-wrap: nowrap; }
 .side .row:has(> button) { flex-wrap: wrap; }
 

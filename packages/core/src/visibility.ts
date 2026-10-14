@@ -31,7 +31,9 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     res: me ? { ...me.res } : {},
     energyNet: sim.energyNet.get(playerId) ?? 0,
     rates: { ...(sim.income.get(playerId) ?? {}) },
-    buildings: w.buildings.filter((b) => b.team === team || seen(b.pos)).map((b) => ({
+    buildings: w.buildings
+      .filter((b) => (b.team === team || seen(b.pos)) && !(b.def === 'gas_station' && b.team !== team))
+      .map((b) => ({
       ...b,
       pos: p4(b.pos),
       hp: Math.round(b.hp),
