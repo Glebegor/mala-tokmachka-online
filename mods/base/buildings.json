@@ -2,7 +2,7 @@
   { "id": "hq", "name": "Headquarters", "category": "military", "icon": "⌖",
     "description": "Command centre. Trains units and projects force along the front. Lose all HQs and you lose the match.",
     "cost": { "money": 900, "metal": 60 }, "buildTime": 25, "hp": 1500,
-    "produces": { "money": 1.0 }, "vision": 10, "trains": ["infantry", "drone", "tank", "artillery"], "maxPerPlayer": 3 },
+    "produces": { "money": 1.0 }, "vision": 10, "trains": ["infantry", "tank", "artillery"], "maxPerPlayer": 3 },
 
   { "id": "power_plant", "name": "Power Plant", "category": "civil", "icon": "ϟ",
     "description": "Generates energy for the whole grid.",
@@ -52,7 +52,7 @@
     "consumes": { "energy": 1.5 }, "vision": 35 },
   { "id": "drone_factory", "name": "Завод дронов", "category": "military", "icon": "✈",
     "description": "Производственный комплекс БПЛА и беспилотных систем.",
-    "cost": { "money": 650, "metal": 45 }, "buildTime": 22, "hp": 800, "vision": 6, "trains": ["drone"] },
+    "cost": { "money": 650, "metal": 45 }, "buildTime": 22, "hp": 800, "vision": 6, "trains": ["drone_shahed", "drone_orion", "drone_liutyi", "drone_pd2", "drone_mini_shark", "drone_fire_point"] },
   { "id": "missile_factory", "name": "Ракетный завод", "category": "military", "icon": "▲",
     "description": "Завод по производству ракетных комплексов и боеприпасов.",
     "cost": { "money": 850, "metal": 75 }, "buildTime": 28, "hp": 1100, "vision": 6 },

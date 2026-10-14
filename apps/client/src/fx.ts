@@ -43,6 +43,19 @@ export class ShotFx {
     for (const s of shots) {
       if (this.effects.length > 500) break;
       const d = this.units.get(s.def);
+      if (s.from[0] === s.to[0] && s.from[1] === s.to[1]) {
+        this.effects.push({
+          kind: 'blast',
+          color: this.teamColor[s.team],
+          from: s.from,
+          to: s.to,
+          hit: true,
+          start: now,
+          dur: 800,
+          seed: Math.random(),
+        });
+        continue;
+      }
       const kind = d?.fx ?? 'burst';
       const miss = Math.random() < (d?.missRate ?? 0.3);
       // a miss lands 0.3–1.5 km off (more for indirect fire)
@@ -74,7 +87,14 @@ export class ShotFx {
       const at = (u: number) => ({ x: a.x + (b.x - a.x) * u, y: a.y + (b.y - a.y) * u });
       const impactT = Math.max(0, (now - e.start - e.dur) / 500); // 0..1 after arrival
 
-      if (e.kind === 'burst') {
+      if (e.kind === 'blast') {
+        const radius = (25 + 45 * Math.min(1, t * 1.5)) * k;
+        const alpha = Math.max(0, 1 - t);
+        this.ring(a.x, a.y, radius, '#ffaa44', alpha);
+        this.ring(a.x, a.y, radius * 0.7, '#ffffff', alpha * 0.9);
+        this.flash(a.x, a.y, radius * 0.55, '#ff5522', alpha * 0.75);
+        this.flash(a.x, a.y, radius * 0.28, '#fff6c0', alpha);
+      } else if (e.kind === 'burst') {
         // three quick tracers, slightly fanned
         for (let i = 0; i < 3; i++) {
           const u = t * 1.5 - i * 0.22;

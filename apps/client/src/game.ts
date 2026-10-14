@@ -184,14 +184,54 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.doubleClickZoom.disable();
     map.touchZoomRotate.disableRotation();
 
-    // NATO markers are drawn the first time the style asks for them
+    // NATO markers and drone icons are registered on demand or on load
     map.on('styleimagemissing', (e) => {
       const spec = parseNatoId(e.id);
-      if (spec && !map.hasImage(e.id)) map.addImage(e.id, drawNato(spec), { pixelRatio: 2 });
+      if (spec && !map.hasImage(e.id)) {
+        map.addImage(e.id, drawNato(spec), { pixelRatio: 2 });
+        return;
+      }
+      if (e.id.startsWith('drone|')) {
+        const [, def, side, sel] = e.id.split('|');
+        const img = new Image();
+        img.src = `/drones/${def}_${side}${sel === '1' ? '_sel' : ''}.png`;
+        img.onload = () => {
+          if (!map.hasImage(e.id)) map.addImage(e.id, img, { pixelRatio: 2 });
+        };
+        return;
+      }
+      if (e.id === 'smoke') {
+        const img = new Image();
+        img.src = '/drones/smoke.png';
+        img.onload = () => {
+          if (!map.hasImage('smoke')) map.addImage('smoke', img, { pixelRatio: 2 });
+        };
+        return;
+      }
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets', 'city-schematics']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets', 'city-schematics', 'smokes']) map.addSource(id, { type: 'geojson', data: empty() });
+
+      // Preload custom drone icons and smoke into MapLibre
+      const droneDefs = ['drone_shahed', 'drone_orion', 'drone_liutyi', 'drone_pd2', 'drone_mini_shark', 'drone_fire_point'];
+      for (const dId of droneDefs) {
+        for (const s of ['ua', 'ru']) {
+          for (const sel of [0, 1]) {
+            const key = `drone|${dId}|${s}|${sel}`;
+            const img = new Image();
+            img.src = `/drones/${dId}_${s}${sel === 1 ? '_sel' : ''}.png`;
+            img.onload = () => {
+              if (!map.hasImage(key)) map.addImage(key, img, { pixelRatio: 2 });
+            };
+          }
+        }
+      }
+      const smokeImg = new Image();
+      smokeImg.src = '/drones/smoke.png';
+      smokeImg.onload = () => {
+        if (!map.hasImage('smoke')) map.addImage('smoke', smokeImg, { pixelRatio: 2 });
+      };
 
       if (m.borders) {
         (map.getSource('borders') as GeoJSONSource).setData(m.borders);
@@ -364,9 +404,45 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           id, type: 'symbol', source: id === 'formations' ? 'formations' : 'units', filter, ...extra,
           layout: { 'icon-image': ['get', 'icon'], 'icon-size': id === 'formations' ? ['interpolate', ['linear'], ['zoom'], 5, 0.62, 8, 0.8] : iconSize, 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
         } as any);
-      symbol('units-loose', ['!', ['get', 'grp']], { minzoom: GROUP_ZOOM });
-      symbol('units-grouped', ['get', 'grp'], { minzoom: GROUP_ZOOM });
+      symbol('units-loose', ['all', ['!', ['get', 'grp']], ['!=', ['get', 'air'], true]], { minzoom: GROUP_ZOOM });
+      symbol('units-grouped', ['all', ['get', 'grp'], ['!=', ['get', 'air'], true]], { minzoom: GROUP_ZOOM });
       symbol('formations', ['all'], { maxzoom: GROUP_ZOOM });
+
+      map.addLayer({
+        id: 'drones',
+        type: 'symbol',
+        source: 'units',
+        filter: ['==', ['get', 'air'], true],
+        layout: {
+          'icon-image': ['get', 'icon'],
+          'icon-rotate': ['get', 'bearing'],
+          'icon-rotation-alignment': 'map',
+          'icon-size': [
+            'interpolate', ['linear'], ['zoom'],
+            4, ['*', ['coalesce', ['get', 'scale'], 1], 0.35],
+            8, ['*', ['coalesce', ['get', 'scale'], 1], 0.55],
+            11, ['*', ['coalesce', ['get', 'scale'], 1], 0.8]
+          ],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+          'symbol-sort-key': ['get', 'z']
+        }
+      } as any);
+
+      map.addLayer({
+        id: 'smokes',
+        type: 'symbol',
+        source: 'smokes',
+        layout: {
+          'icon-image': 'smoke',
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.45, 8, 0.8, 12, 1.25],
+          'icon-allow-overlap': true,
+          'icon-ignore-placement': true,
+        },
+        paint: {
+          'icon-opacity': ['coalesce', ['get', 'opacity'], 0.75],
+        },
+      });
 
       for (const cp of init!.map.capturePoints) {
         const el = h('div', { class: `cp val-${cp.value}` + (cp.value >= 3 ? ' cp-major' : ' cp-minor') }, h('i', {}), h('span', {}, cp.name));
@@ -421,7 +497,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (!e.originalEvent.shiftKey) cancelPlacing();
         return;
       }
-      const layers = ['units-loose', 'units-grouped', 'formations'].filter((l) => map.getLayer(l));
+      const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
       const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers }).find((f) => f.properties?.own);
       selBuilding = null;
       if (hit?.properties?.gid) selUnits = new Set(groups.get(Number(hit.properties.gid))?.ids ?? []);
@@ -798,8 +874,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         side.append(storBox);
 
         if (b.progress >= 1) {
+          const mySide = init!.team === 0 ? 'ua' : 'ru';
           for (const uid of d.trains ?? []) {
-            const u = defU.get(uid)!;
+            const u = defU.get(uid);
+            if (!u) continue;
+            if (u.side && u.side !== mySide) continue;
             const globalCost: Record<string, number> = {};
             const storageCost: Record<string, number> = {};
             for (const [k, v] of Object.entries(u.cost)) {
@@ -1232,6 +1311,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   function unitIcon(d: UnitDef, rank: number) {
+    if (d.kind === 'air' && (d.id.startsWith('drone_') || d.id === 'drone')) {
+      const mySide = init!.team === 0 ? 'ua' : 'ru';
+      const droneDef = d.id === 'drone' ? (init!.team === 0 ? 'drone_pd2' : 'drone_orion') : d.id;
+      return h('img', { class: 'nato-ico', src: `/drones/${droneDef}_${mySide}.png`, alt: d.name, title: d.name });
+    }
     const c = h('canvas', { class: 'nato-ico', width: 128, height: 128 });
     c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: TEAM_COLOR[init!.team], symbol: d.symbol ?? 'infantry', echelon: '', rank, selected: false, own: true }), 0, 0);
     return c;
@@ -1302,6 +1386,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (mapReady) renderMap();
   }
 
+  const droneBearings = new Map<number, number>();
+
   function renderUnitsLayer() {
     if (!init || !snap || !mapReady) return;
     const myTeam = init.team;
@@ -1314,8 +1400,57 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const d = defU.get(u.def);
         const own = u.owner === me;
         const sel = selUnits.has(u.id);
-        const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own });
-        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), icon, z: sel ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: curPos(u) } };
+        const isAir = d?.kind === 'air';
+        const pos = curPos(u);
+
+        let icon: string;
+        let bearing = 0;
+        let scale = 1.0;
+
+        if (isAir && (u.def.startsWith('drone_') || u.def === 'drone')) {
+          const side = u.team === 0 ? 'ua' : 'ru';
+          const droneDef = u.def === 'drone' ? (u.team === 0 ? 'drone_pd2' : 'drone_orion') : u.def;
+          icon = `drone|${droneDef}|${side}|${sel ? 1 : 0}`;
+
+          const targetPos = u.path?.[0] || u.target;
+          if (targetPos) {
+            const dx = (targetPos[0] - pos[0]) * Math.cos((pos[1] * Math.PI) / 180);
+            const dy = targetPos[1] - pos[1];
+            if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+              bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+              droneBearings.set(u.id, bearing);
+            } else {
+              bearing = droneBearings.get(u.id) ?? 0;
+            }
+          } else {
+            bearing = droneBearings.get(u.id) ?? 0;
+          }
+
+          if (d?.droneType === 'strike' && u.target) {
+            const dToTarget = distKm(pos, u.target);
+            const diveDist = 18;
+            if (dToTarget < diveDist) {
+              scale = 0.45 + 0.55 * (dToTarget / diveDist);
+            }
+          }
+        } else {
+          icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own });
+        }
+
+        return {
+          type: 'Feature',
+          properties: {
+            id: u.id,
+            own,
+            grp: grouped.has(u.id),
+            air: isAir,
+            icon,
+            bearing,
+            scale,
+            z: sel ? 4 : isAir ? 3 : own ? 2 : 1,
+          },
+          geometry: { type: 'Point', coordinates: pos },
+        };
       }),
     });
   }
@@ -1409,6 +1544,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       (map.getSource('fuel-stations') as GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: friendlyStations,
+      });
+    }
+
+    // persistent smokes
+    if (map.getSource('smokes')) {
+      const smokeFeatures = (snap.smokes ?? []).map((s) => {
+        const rem = Math.max(0, s.expiresAt - snap!.time);
+        const opacity = Math.max(0.18, Math.min(0.85, rem / 600));
+        return {
+          type: 'Feature',
+          properties: { opacity },
+          geometry: { type: 'Point', coordinates: s.pos },
+        };
+      });
+      (map.getSource('smokes') as GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: smokeFeatures,
       });
     }
 

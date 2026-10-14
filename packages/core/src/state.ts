@@ -60,6 +60,15 @@ export interface Unit {
   cargo?: UnitCargo;
   route?: UnitRoute;
   embarkedIn?: number; // transport unit ID carrying this passenger
+  loiterCenter?: LngLat;
+  loiterAngle?: number;
+}
+
+export interface SmokeCloud {
+  id: number;
+  pos: LngLat;
+  createdAt: number;
+  expiresAt: number;
 }
 
 export interface Waypoint {
@@ -116,6 +125,7 @@ export interface World {
   winReason: string | null;
   nextId: number;
   mapId: string;
+  smokes?: SmokeCloud[];
 }
 
 export interface SlotInit {
