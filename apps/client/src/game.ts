@@ -272,8 +272,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#78350f',
-          'line-opacity': 0.5,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 10, 4.4],
+          'line-opacity': 0.6,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.2, 10, 4.8],
         },
       });
       map.addLayer({
@@ -281,8 +281,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#fde047',
-          'line-opacity': ['case', ['==', ['get', 'major'], 1], 0.75, 0.4],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5, ['case', ['==', ['get', 'major'], 1], 1.2, 0.6], 10, ['case', ['==', ['get', 'major'], 1], 3.0, 1.6]],
+          'line-opacity': ['case', ['==', ['get', 'major'], 1], 0.85, ['interpolate', ['linear'], ['zoom'], 5, 0.22, 7, 0.45]],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, ['case', ['==', ['get', 'major'], 1], 1.4, 0.5], 10, ['case', ['==', ['get', 'major'], 1], 3.2, 1.4]],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });

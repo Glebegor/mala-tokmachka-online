@@ -4,37 +4,45 @@ const ukrPath = 'C:/Users/AKIRA/.gemini/antigravity/scratch/ukr_extracted_lines.
 const ruPath = 'C:/Users/AKIRA/.gemini/antigravity/scratch/ru_expanded_lines.json';
 const outFile = 'mods/base/maps/ukraine.roads.json';
 
-console.log('Loading extracted road datasets...');
+console.log('Loading road datasets...');
 const ukr = JSON.parse(readFileSync(ukrPath, 'utf8'));
 const ru = JSON.parse(readFileSync(ruPath, 'utf8'));
 console.log(`Loaded ${ukr.length} Ukraine lines, ${ru.length} Russia lines.`);
 
-// Ukraine: keep all classified highways, plus connecting unclassified (length > ~1.2km)
+// Major highways: motorways, trunks, primary, and secondary (plus links)
+const majorSet = new Set([
+  'motorway', 'trunk', 'primary', 'secondary',
+  'motorway_link', 'trunk_link', 'primary_link', 'secondary_link'
+]);
+
+// Connectors: tertiary and links
+const connectorSet = new Set([
+  'tertiary', 'tertiary_link'
+]);
+
+// 1. Filter: Drop village unclassified clutter, keep major arterial highways and tertiary connectors
 const ukrFiltered = ukr.filter((l) => {
   if (!l.pts || l.pts.length < 2) return false;
-  if (l.fclass !== 'unclassified') return true;
-  let len = 0;
-  for (let i = 0; i < l.pts.length - 1; i++) {
-    len += Math.hypot(l.pts[i + 1][0] - l.pts[i][0], l.pts[i + 1][1] - l.pts[i][1]);
-  }
-  return len > 0.012; // > ~1.2 km
+  return majorSet.has(l.fclass) || connectorSet.has(l.fclass);
 });
 
-const ruFiltered = ru.filter((l) => l.pts && l.pts.length >= 2);
-console.log(`Retained ${ukrFiltered.length} Ukraine lines, ${ruFiltered.length} Russia lines.`);
+const ruFiltered = ru.filter((l) => {
+  if (!l.pts || l.pts.length < 2) return false;
+  return majorSet.has(l.fclass) || connectorSet.has(l.fclass);
+});
+
+console.log(`Retained ${ukrFiltered.length} Ukraine arterial lines, ${ruFiltered.length} Russia arterial lines.`);
 
 const raw = [...ukrFiltered, ...ruFiltered];
-
-// Set major: 1 for motorway, trunk, and primary (plus links)
-const majorSet = new Set(['motorway', 'trunk', 'primary', 'motorway_link', 'trunk_link', 'primary_link']);
 for (const l of raw) {
   l.major = majorSet.has(l.fclass) ? 1 : 0;
 }
 
-// 1. Chaining continuous road segments
-console.log('Chaining continuous road segments...');
-function chainLines(lines) {
-  const ptKey = (p) => `${Math.round(p[0] * 2000)},${Math.round(p[1] * 2000)}`; // ~50m snap
+// 2. Chaining continuous road segments
+console.log('Pass 1: Chaining continuous road segments...');
+function chainLines(lines, snapMeters = 80) {
+  const factor = 111320 / snapMeters;
+  const ptKey = (p) => `${Math.round(p[0] * factor)},${Math.round(p[1] * factor)}`;
   const endpoints = new Map();
 
   lines.forEach((l, idx) => {
@@ -50,15 +58,15 @@ function chainLines(lines) {
   for (let i = 0; i < lines.length; i++) {
     if (used[i]) continue;
     used[i] = 1;
-    const major = lines[i].major;
-    const fclass = lines[i].fclass;
+    let major = lines[i].major;
     const pts = [...lines[i].pts];
 
     const canConnect = (otherIdx) => {
       if (used[otherIdx]) return false;
       const other = lines[otherIdx];
-      if (major === 1) return other.major === 1;
-      return other.fclass === fclass;
+      if (major === 1 && other.major === 1) return true;
+      if (major === 0 && other.major === 0) return true;
+      return false;
     };
 
     // Grow forward
@@ -107,15 +115,76 @@ function chainLines(lines) {
   return merged;
 }
 
-const chained = chainLines(raw);
-console.log(`Chained down to ${chained.length} lines.`);
+const chained1 = chainLines(raw, 80);
+console.log(`Chained Pass 1: ${chained1.length} lines.`);
 
-// 2. Spatial Indexing for gap healing
-console.log('Building spatial index for gap healing...');
-const CELL = 0.05; // ~5 km
+// 3. Artificial Gap Healing
+console.log('Artificial Gap Healing: connecting open endpoints and bridging gaps...');
+
+// 3a. Direct Major Endpoint-to-Endpoint Stitching
+console.log('Stitching severed major highway endpoints...');
+const majorEndpoints = [];
+chained1.forEach((l, li) => {
+  if (l.major === 1) {
+    majorEndpoints.push({ li, end: 0, p: l.pts[0] });
+    majorEndpoints.push({ li, end: l.pts.length - 1, p: l.pts[l.pts.length - 1] });
+  }
+});
+
+const SNAP_MAJOR_EP = 0.0055; // ~600m direct snap for severed major endpoints
+const BRIDGE_MAJOR_EP = 0.035; // ~3.8km straight bridge for severed major endpoints
+const epConnectors = [];
+
+// Spatial index for major endpoints
+const EP_CELL = 0.04;
+const epGrid = new Map();
+majorEndpoints.forEach((ep, epi) => {
+  const k = `${Math.floor(ep.p[0] / EP_CELL)},${Math.floor(ep.p[1] / EP_CELL)}`;
+  (epGrid.get(k) ?? epGrid.set(k, []).get(k)).push(epi);
+});
+
+majorEndpoints.forEach((ep1, i) => {
+  let bestD2 = Infinity;
+  let bestEpi = -1;
+  const cx = Math.floor(ep1.p[0] / EP_CELL), cy = Math.floor(ep1.p[1] / EP_CELL);
+  const span = Math.ceil(BRIDGE_MAJOR_EP / EP_CELL);
+
+  for (let dx = -span; dx <= span; dx++) {
+    for (let dy = -span; dy <= span; dy++) {
+      const bucket = epGrid.get(`${cx + dx},${cy + dy}`) || [];
+      for (const epi of bucket) {
+        if (epi <= i) continue;
+        const ep2 = majorEndpoints[epi];
+        if (ep2.li === ep1.li) continue; // don't loop onto self
+        const d2 = (ep1.p[0] - ep2.p[0]) ** 2 + (ep1.p[1] - ep2.p[1]) ** 2;
+        if (d2 > 1e-9 && d2 < BRIDGE_MAJOR_EP * BRIDGE_MAJOR_EP && d2 < bestD2) {
+          bestD2 = d2;
+          bestEpi = epi;
+        }
+      }
+    }
+  }
+
+  if (bestEpi >= 0) {
+    const ep2 = majorEndpoints[bestEpi];
+    if (bestD2 < SNAP_MAJOR_EP * SNAP_MAJOR_EP) {
+      // Direct snap: set both to average midpoint
+      const mid = [(ep1.p[0] + ep2.p[0]) * 0.5, (ep1.p[1] + ep2.p[1]) * 0.5];
+      chained1[ep1.li].pts[ep1.end] = mid;
+      chained1[ep2.li].pts[ep2.end] = mid;
+    } else {
+      epConnectors.push({ major: 1, pts: [ep1.p, ep2.p] });
+    }
+  }
+});
+console.log(`Stitched major endpoints, added ${epConnectors.length} highway bridges.`);
+
+// 3b. Endpoint-to-Segment Gap Bridging (T-junctions, ramps, minor roads)
+console.log('Bridging road-to-segment junctions...');
+const CELL = 0.04; // ~4.4 km
 const grid = new Map();
 
-chained.forEach((l, li) => {
+chained1.forEach((l, li) => {
   for (let i = 0; i < l.pts.length - 1; i++) {
     const [x1, y1] = l.pts[i], [x2, y2] = l.pts[i + 1];
     const minX = Math.floor(Math.min(x1, x2) / CELL), maxX = Math.floor(Math.max(x1, x2) / CELL);
@@ -129,31 +198,32 @@ chained.forEach((l, li) => {
   }
 });
 
-// 3. Gap Healing: bridge broken roads across Ukraine & Russia
-console.log('Bridging gaps on highways and connectors...');
-const SNAP_MAJOR = 0.04; // ~4.0 km for major highways
-const SNAP_MINOR = 0.02; // ~2.0 km for minor roads
-const connectors = [];
+const SNAP_MAJOR = 0.035; // ~3.5 km for major highways
+const SNAP_MINOR = 0.015; // ~1.5 km for minor roads
+const DIRECT_SNAP = 0.0045; // ~500m direct snap to segment
+const segConnectors = [];
 let bridgedCount = 0;
 
-chained.forEach((l, li) => {
-  const isMajor = l.major === 1;
-  const maxGap = isMajor ? SNAP_MAJOR : SNAP_MINOR;
+chained1.forEach((l, li) => {
+  const maxGap = l.major === 1 ? SNAP_MAJOR : SNAP_MINOR;
 
   for (const end of [0, l.pts.length - 1]) {
     const e = l.pts[end];
     let bestDist2 = Infinity;
     let bestPoint = null;
+    let bestTargetMajor = 0;
 
     const span = Math.ceil(maxGap / CELL);
     const cx = Math.floor(e[0] / CELL), cy = Math.floor(e[1] / CELL);
+
     for (let dx = -span; dx <= span; dx++) {
       for (let dy = -span; dy <= span; dy++) {
         const bucket = grid.get(`${cx + dx},${cy + dy}`) || [];
         for (const seg of bucket) {
           if (seg.li === li) continue;
-          const a = chained[seg.li].pts[seg.si];
-          const b = chained[seg.li].pts[seg.si + 1];
+          const targetLine = chained1[seg.li];
+          const a = targetLine.pts[seg.si];
+          const b = targetLine.pts[seg.si + 1];
           const vx = b[0] - a[0], vy = b[1] - a[1];
           const len2 = vx * vx + vy * vy;
           if (len2 === 0) continue;
@@ -163,35 +233,39 @@ chained.forEach((l, li) => {
           if (d2 > 1e-9 && d2 < maxGap * maxGap && d2 < bestDist2) {
             bestDist2 = d2;
             bestPoint = [Math.round(px * 100000) / 100000, Math.round(py * 100000) / 100000];
+            bestTargetMajor = targetLine.major;
           }
         }
       }
     }
 
     if (bestPoint) {
-      if (bestDist2 < 0.0025 * 0.0025) {
-        // Snap endpoint directly if within 250m
+      const connMajor = (l.major === 1 || bestTargetMajor === 1) ? 1 : 0;
+      if (bestDist2 < DIRECT_SNAP * DIRECT_SNAP) {
         l.pts[end] = bestPoint;
       } else {
-        // Add connector segment
-        connectors.push({ major: l.major, pts: [e, bestPoint] });
+        segConnectors.push({ major: connMajor, pts: [e, bestPoint] });
       }
       bridgedCount++;
     }
   }
 });
 
-console.log(`Bridged ${bridgedCount} gaps, added ${connectors.length} connectors.`);
+console.log(`Bridged ${bridgedCount} gaps, added ${segConnectors.length} segment connectors.`);
 
-// Bridges across Dnipro
-connectors.push(
+// Dnipro bridge connectors
+const fixedConnectors = [
   { major: 1, pts: [[32.72006, 46.67277], [32.7203, 46.66961]] },
   { major: 1, pts: [[32.72287, 46.63682], [32.72301, 46.63465]] }
-);
+];
 
-const allLines = [...chained, ...connectors];
+// 4. Pass 2 Chaining: Merge all connectors with roads into unified continuous linestrings
+console.log('Pass 2: Re-chaining with connectors into unified continuous highways...');
+const allConnected = [...chained1, ...epConnectors, ...segConnectors, ...fixedConnectors];
+const chained2 = chainLines(allConnected, 120);
+console.log(`Pass 2 chained to ${chained2.length} unified lines.`);
 
-// 4. Douglas-Peucker curve simplification
+// 5. Douglas-Peucker curve simplification
 console.log('Simplifying curves...');
 function simplify(pts, tol) {
   if (pts.length <= 2) return pts;
@@ -218,33 +292,51 @@ function simplify(pts, tol) {
   return pts.filter((_, i) => keep[i]);
 }
 
-const simplifiedLines = allLines.map((l) => ({
+const simplifiedLines = chained2.map((l) => ({
   major: l.major,
-  pts: simplify(l.pts, 0.00012)
+  pts: simplify(l.pts, 0.00008) // ~8m accuracy
 }));
 
-// 5. Prune disconnected stubs (lines where both endpoints connect to nothing within 400m)
-console.log('Pruning floating disconnected stubs...');
-const ptBucket = (p) => `${Math.round(p[0] * 250)},${Math.round(p[1] * 250)}`;
-const degree = new Map();
-for (const l of simplifiedLines) {
-  for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) {
-    const k = ptBucket(p);
-    degree.set(k, (degree.get(k) || 0) + 1);
+// 6. Prune dead-end stubs in villages
+console.log('Pruning dead-end village stubs...');
+function lineLengthKm(pts) {
+  let len = 0;
+  for (let i = 0; i < pts.length - 1; i++) {
+    const dx = (pts[i + 1][0] - pts[i][0]) * 71.5;
+    const dy = (pts[i + 1][1] - pts[i][1]) * 111.3;
+    len += Math.hypot(dx, dy);
   }
+  return len;
 }
 
-const cleanLines = simplifiedLines.filter((l) => {
-  if (l.pts.length < 2) return false;
-  // Always keep major roads
-  if (l.major === 1) return true;
-  const d0 = degree.get(ptBucket(l.pts[0])) || 0;
-  const d1 = degree.get(ptBucket(l.pts[l.pts.length - 1])) || 0;
-  // If isolated at both ends (no connection within ~400m), drop it
-  if (d0 <= 1 && d1 <= 1) return false;
-  return true;
-});
+const ptBucket = (p) => `${Math.round(p[0] * 300)},${Math.round(p[1] * 300)}`;
 
+// Build degree map
+let currentLines = simplifiedLines.filter((l) => l.pts.length >= 2);
+
+for (let iter = 0; iter < 2; iter++) {
+  const degree = new Map();
+  for (const l of currentLines) {
+    for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) {
+      const k = ptBucket(p);
+      degree.set(k, (degree.get(k) || 0) + 1);
+    }
+  }
+
+  currentLines = currentLines.filter((l) => {
+    // ALWAYS preserve all major highways
+    if (l.major === 1) return true;
+    const d0 = degree.get(ptBucket(l.pts[0])) || 0;
+    const d1 = degree.get(ptBucket(l.pts[l.pts.length - 1])) || 0;
+    // If disconnected at both ends, remove
+    if (d0 <= 1 && d1 <= 1) return false;
+    // If one end is a dead end and line is short (< 2.5 km), it's a dead-end spur in a village
+    if ((d0 <= 1 || d1 <= 1) && lineLengthKm(l.pts) < 2.5) return false;
+    return true;
+  });
+}
+
+const cleanLines = currentLines;
 const totalVertices = cleanLines.reduce((a, l) => a + l.pts.length, 0);
 console.log(`Final output: ${cleanLines.length} lines, ${totalVertices} vertices.`);
 
