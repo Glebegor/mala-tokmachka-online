@@ -1,10 +1,26 @@
 import { api, type Session } from './api';
 import { clear, h } from './dom';
+import { statsView } from './stats';
 
 const time = (sec: number) => (sec >= 3600 ? `${Math.floor(sec / 3600)}h ${Math.floor((sec % 3600) / 60)}m` : `${Math.floor(sec / 60)}m`);
 
 /** Career statistics of the signed-in player plus the top players by wins. */
 export async function showProfile(box: HTMLElement, s: Session, onBack: () => void) {
+  // a past match's full statistics in a window over the profile
+  const openMatch = async (id: string) => {
+    const close = () => overlay.remove();
+    const overlay = h('div', { class: 'overlay', onClick: (e: MouseEvent) => e.target === overlay && close() }, h('div', { class: 'card stats-card' }, h('p', { class: 'muted' }, 'Loading…')));
+    document.body.append(overlay);
+    const card = overlay.firstElementChild as HTMLElement;
+    try {
+      const r = await api.match(id);
+      clear(card);
+      card.append(statsView(r, s.user.id), h('div', { class: 'row' }, h('button', { class: 'primary', onClick: close }, 'Close')));
+    } catch (e) {
+      clear(card);
+      card.append(h('p', { class: 'error' }, `This match was not saved in detail (older matches have only the summary): ${(e as Error).message}`), h('button', { onClick: close }, 'Close'));
+    }
+  };
   clear(box);
   box.append(h('div', { class: 'card' }, h('p', { class: 'muted' }, 'Loading profile…')));
   try {
@@ -24,10 +40,11 @@ export async function showProfile(box: HTMLElement, s: Session, onBack: () => vo
         h('h3', {}, 'Recent matches'),
         p.recent.length === 0 ? h('p', { class: 'muted' }, 'No finished matches yet. Statistics are recorded when a match ends.') : null,
         ...p.recent.map((m) =>
-          h('div', { class: 'room' },
+          h('div', { class: 'room clickable', title: 'Show the statistics of this match', onClick: () => openMatch(m.matchId) },
             h('span', { class: `result ${m.result}` }, m.result.toUpperCase()),
             h('span', {}, m.mapId),
             h('span', { class: 'muted' }, `${m.kills} destroyed · ${m.losses} lost · ${time(m.seconds)} · ${new Date(m.at).toLocaleDateString('en-GB')}`),
+            h('span', { class: 'link' }, 'Statistics ›'),
           ),
         ),
       ),

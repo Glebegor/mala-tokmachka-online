@@ -77,6 +77,10 @@ export interface Unit {
   cooldown: number;
   xp: number;
   rank: number; // index into ruleset.ranks
+  /** Sim time it last took damage (healing waits until it has been out of the fight for a while). */
+  lastHit?: number;
+  /** A medic, mechanic or hospital is patching it up (server side, shown as a status). */
+  healing?: boolean;
   /** Enemy units destroyed since its last course: above the first rank a course needs at least one. */
   combat?: number;
   /** Driving in column on a road: fast, but cannot fire and takes extra damage. */
@@ -212,6 +216,15 @@ export interface PlayerStats {
   damage: number;
 }
 
+/** One sample of how the match stood (taken every 30 s) for the end-of-match charts. */
+export interface TimelinePoint {
+  t: number; // match seconds
+  score: [number, number];
+  units: [number, number];
+  buildings: [number, number];
+  cities: [number, number];
+}
+
 export interface World {
   tick: number;
   time: number;
@@ -232,6 +245,7 @@ export interface World {
   mapId: string;
   stats: Record<string, PlayerStats>;
   smokes: SmokeCloud[];
+  timeline: TimelinePoint[];
 }
 
 export interface SlotInit {

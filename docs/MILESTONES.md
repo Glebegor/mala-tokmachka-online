@@ -171,6 +171,30 @@ Everything from the akira branch now runs on hlib's core:
   ("Any cargo" picks it), a truck waits at an empty source instead of driving empty laps, and a truck that loses its way
   plans again instead of unloading where it stands.
 
+## M7.4 — Team play, logistics, statistics, performance (v0.12.0)
+- **Map pings**: P opens Going here / Defend here / Danger here / Look here, Alt+click is a quick "look here". The whole
+  side sees a pulsing mark with the sender's name, hears a tone and can click the message to fly there.
+- **Goods live in buildings**: money, people and energy are the treasury; ore, metal, fuel and ammo exist only in building
+  stores. The HQ holds the starting goods; building and upgrades are paid from the HQ and warehouses (what the top bar
+  shows). New buildings no longer come with free stock (factories get materials for two units to get going).
+- **Healing**: Medic Team (troops on foot, 2 km), Mechanic Crew (vehicles, 2 km), Field Hospital (troops on foot, 6 km);
+  nobody heals within 10 s of being hit.
+- **Ammo per shot**: every unit has explicit ammo values (rounds, rounds per shot, refill cost); a unit with fewer rounds
+  than one shot needs cannot fire.
+- **Shift+click** adds units, groups and formations to the selection (or takes them out).
+- **Statistics**: a full report of every finished match (every player including bots, a 30 s timeline of score, army,
+  buildings and cities) is shown at the end with charts and a player table, and stored in a SQLite database
+  (`data/profiles.sqlite`, imported from the old profiles.json); open any past match from Profile → Recent matches.
+- **Guidebook**: Guide button in the lobby and in the game (H): how to win, controls, the map, economy and logistics,
+  the army, team play, plus live tables of every unit and building in-game.
+- **Performance**: marker images are drawn as a base plus overlays (a few dozen images instead of one per combination),
+  sprites are cached while they are being made, ground markers are not fed to the map while zoomed out, unit and fog
+  redraws are capped at ~20 a second; the client went from 91% to 27% main-thread time on a busy 8v8. Game traffic is
+  compressed (permessage-deflate) and static files gzipped.
+- **Fix**: a match with a ceasefire no longer ends on the clients at the plain match length.
+- **Production**: `npm run docker-prod:run` builds and starts everything with generated secrets, restart policies and the
+  client on every interface (LAN and Tailscale), waits until it answers and prints the URLs.
+
 ## M8 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.

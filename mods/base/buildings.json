@@ -4,7 +4,7 @@
     "name": "Military Base (HQ)",
     "category": "military",
     "icon": "⌖",
-    "description": "Command centre and barracks: trains infantry of every kind (including MANPADS teams), tanks and artillery, earns a little money and backs the front. Metal and fuel for training are taken from its own store (deliver more by truck). Lose all your bases and you are out. Units within 8 km refill their ammunition from its store.",
+    "description": "Command centre and barracks: trains infantry of every kind (including MANPADS teams and medics), tanks and artillery, earns a little money and backs the front. All your goods (metal, fuel, ore, ammo) are kept here and in your warehouses: building and upgrades are paid from them, training draws on this store. Lose all your bases and you are out. Units within 8 km refill their ammunition from its store.",
     "cost": {
       "money": 900,
       "metal": 60
@@ -21,6 +21,7 @@
       "infantry_assault",
       "infantry_at",
       "manpads",
+      "medic",
       "tank",
       "artillery"
     ],
@@ -175,7 +176,7 @@
     "name": "Machine Factory",
     "category": "civil",
     "icon": "⚙",
-    "description": "Builds pickups, trucks, fuel trucks and rescue crews. Metal and fuel come from its own store.",
+    "description": "Builds pickups, trucks, fuel trucks, rescue crews and mechanic crews. Metal and fuel come from its own store (a new factory has enough for two vehicles; deliver more by truck).",
     "cost": {
       "money": 500,
       "metal": 40
@@ -187,7 +188,8 @@
       "pickup",
       "truck",
       "fuel_truck",
-      "rescuers"
+      "rescuers",
+      "mechanic"
     ],
     "spacedFrom": [
       "hq",
@@ -376,6 +378,26 @@
       "capacity": 12,
       "baseTime": 30,
       "timePerRank": 45
+    }
+  },
+  {
+    "id": "med_center",
+    "name": "Field Hospital",
+    "category": "military",
+    "icon": "✚",
+    "description": "Treats the wounded: troops on foot within 6 km get back 3% of their strength a second once they have been out of the fight for 10 s. Send battered squads back to it.",
+    "cost": {
+      "money": 350,
+      "metal": 20
+    },
+    "buildTime": 14,
+    "hp": 450,
+    "vision": 4,
+    "fieldWork": true,
+    "heals": {
+      "radiusKm": 6,
+      "perSecond": 0.03,
+      "targets": "foot"
     }
   },
   {

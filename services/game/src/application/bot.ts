@@ -42,7 +42,7 @@ export class Bot {
       const def = BUILD_ORDER[(this.step + k) % BUILD_ORDER.length];
       const d = sim.defs.b.get(def);
       if (!d) continue;
-      if (!Object.entries(d.cost).every(([r, v]) => (p.res[r] ?? 0) >= v)) continue;
+      if (!sim.canPay(p, d.cost)) continue;
       // a few field works of each kind are plenty; the money is better spent on the economy
       if (d.fieldWork && mine.filter((b) => b.def === def).length >= 6) continue;
       for (let attempt = 0; attempt < 14; attempt++) {
@@ -82,7 +82,7 @@ export class Bot {
       const d = sim.defs.b.get(b.def)!;
       if (b.def === 'machine_factory') {
         // a small logistics fleet: trucks for ore and metal, a tanker, a rescue crew
-        const want = count('truck') < (w.buildings.some((x) => x.owner === p.id && x.def === 'ammo_factory') ? 3 : 2) ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : null;
+        const want = count('truck') < (w.buildings.some((x) => x.owner === p.id && x.def === 'ammo_factory') ? 3 : 2) ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : count('mechanic') < 1 ? 'mechanic' : null;
         if (want && !w.queue.some((q) => q.building === b.id)) sim.apply(p.id, { type: 'train', building: b.id, unit: want });
         continue;
       }
@@ -108,7 +108,7 @@ export class Bot {
       const needTrucks = w.buildings.some((x) => x.team === p.team && x.def === 'machine_factory' && x.progress >= 1) && count('truck') < 2;
       if (needTrucks && (p.res.money ?? 0) < 500) continue;
       const drones = w.units.filter((u) => u.owner === p.id && u.def === 'drone').length;
-      const pool = ['infantry', 'infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'manpads', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
+      const pool = ['infantry', 'infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'manpads', 'medic', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
       const pick = pool[Math.floor(Math.random() * pool.length)];
       if (pick) sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
     }

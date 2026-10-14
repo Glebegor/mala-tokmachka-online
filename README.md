@@ -10,6 +10,14 @@ npm install
 npm run dev        # auth :4001, lobby :4002, game :4003, profile :4004, gateway :8080, client :5173
 ```
 
+Production (Docker, reachable over the LAN and Tailscale, e.g. http://100.122.0.1:5173):
+
+```sh
+npm run docker-prod:run    # builds, starts with generated secrets (.env.prod), prints the URLs
+npm run docker-prod:logs   # follow the logs
+npm run docker-prod:stop   # stop everything (data is kept in Docker volumes)
+```
+
 Open http://localhost:5173, register, create a room, add bots with `+ Bot` if you want opponents, and start.
 In the room settings, *Game type: Sandbox* opens a test range (endless resources, ten times faster building and training,
 no victory), and *Ceasefire at start* gives everyone time to build up before the front opens (15 min by default).
@@ -21,7 +29,7 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 
 | Action | Input |
 | --- | --- |
-| Select unit / formation / building | left click (Shift+click adds) |
+| Select unit / formation / building | left click (Shift+click adds or removes) |
 | Box select | Shift + drag |
 | Move by the fastest route (roads in transport mode, bridges over rivers) | right click |
 | Add a waypoint to the current orders | Shift + right click |
@@ -36,6 +44,8 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | Cancel a training order (full refund) | × on its card in the Production panel (beside the building window) |
 | Fire a missile | select it at the missile factory, right click the target |
 | Drones on a pickup | select small drones next to a pickup, *Load*; select the pickup, *Launch at…* and click the target |
+| Ping the map for your team | P (choose with 1–4, click), or Alt+click for "look here" |
+| Guidebook | Guide button, or H in the game |
 | Give fuel to another vehicle | select a vehicle or tanker, *Give fuel…*, click the vehicle (yours or an ally's) |
 | Supply troops with ammo | units refill near an Ammo Depot or the base; truck *Ammo* from an Ammo Factory to the depots |
 | Shoot down drones and missiles | Anti-Air Station, or a MANPADS Team (trained at the base) |

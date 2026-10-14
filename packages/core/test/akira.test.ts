@@ -95,6 +95,8 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   run(sim, 10);
   assert.deepEqual(tank.pos, stuck, 'no fuel, no movement');
   const station = place(sim, 'a', 'gas_station', tank.pos, 0);
+  assert.equal(station.storage!.fuel, 0, 'a new filling station is empty: fuel comes by tanker');
+  station.storage!.fuel = 500;
   run(sim, 10);
   assert.ok(tank.fuel! > 50, 'refuels next to a filling station');
   assert.ok((station.storage!.fuel ?? 0) < 500, 'the station gave its own fuel');

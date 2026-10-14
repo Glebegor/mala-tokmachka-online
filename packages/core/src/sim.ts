@@ -122,7 +122,7 @@ export class Sim {
   private createWorld(slots: SlotInit[]): World {
     const r = this.ruleset.rules;
     const startRes: ResourceAmounts = {};
-    for (const res of this.ruleset.resources) startRes[res.id] = res.start;
+    for (const res of this.ruleset.resources) if (!this.isGood(res.id)) startRes[res.id] = res.start; // goods start in the HQ
     const players: Player[] = slots.map((s) => ({ ...s, res: { ...startRes }, share: true }));
     const w: World = {
       tick: 0,
@@ -147,6 +147,7 @@ export class Sim {
       mapId: this.map.id,
       stats: Object.fromEntries(players.map((p) => [p.id, { kills: 0, losses: 0, buildingsBuilt: 0, buildingsDestroyed: 0, unitsTrained: 0, damage: 0 }])),
       smokes: [],
+      timeline: [],
     };
     this.world = w;
     const counters: [number, number] = [0, 0];
@@ -173,7 +174,7 @@ export class Sim {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
     const goods = this.storageFor(d);
-    const stock = (k: string) => (this.ruleset.rules.sandbox ? this.storageCap({ def } as Building) : k === 'ore' && d.id === 'metalworks' ? 0 : this.ruleset.rules.startStorage);
+    const stock = (k: string) => (this.ruleset.rules.sandbox ? this.storageCap({ def } as Building) : this.starterStock(d, k, p, done));
     const storage = goods.length ? Object.fromEntries(goods.map((k) => [k, stock(k)])) : undefined;
     const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, cooldown: 0, level: 1, upgrade: null, inside: [], course: null, storage };
     this.world.buildings.push(b);
@@ -192,7 +193,7 @@ export class Sim {
       stamina: d.kind === 'ground' && (d.mobility ?? 'foot') === 'foot' && !d.maxFuel ? 100 : undefined,
       fuel: d.maxFuel,
       maxFuel: d.maxFuel,
-      ammo: d.maxAmmo,
+      ammo: d.maxAmmo || undefined,
       cargo: d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [], drones: d.droneCap ? [] : undefined } : undefined,
       // recon drones circle where they are until told otherwise
       loiterCenter: recon ? [pos[0], pos[1]] : undefined,
@@ -231,9 +232,72 @@ export class Sim {
     return best;
   }
 
+  /** Money, people and energy are pooled; everything else (ore, metal, fuel, ammo) is a physical good kept in buildings. */
+  isGood(k: string): boolean {
+    return k !== 'money' && k !== 'people' && k !== 'energy';
+  }
+
+  /**
+   * What a new building holds when it is finished. The HQ placed at the start holds the player's starting goods (that is
+   * where everything a player owns is kept). A factory starts with enough materials for two of its dearest units so it can
+   * get going; everything else starts empty: goods are produced or trucked in, never handed out with a building.
+   */
+  private starterStock(d: BuildingDef, k: string, p: Player, initial: boolean): number {
+    if (d.id === 'hq' && initial) return this.ruleset.resources.find((r) => r.id === k)?.start ?? 0;
+    const need = Math.max(0, ...(d.trains ?? []).map((u) => this.defs.u.get(u)?.cost[k] ?? 0));
+    return Math.min(this.storageCap({ def: d.id } as Building), need * 2);
+  }
+
+  /** Where a player's spendable goods are kept: their HQs first, then their warehouses (finished ones). */
+  homeStores(p: Player): Building[] {
+    const own = this.world.buildings.filter((b) => b.owner === p.id && b.progress >= 1 && b.storage);
+    return [...own.filter((b) => b.def === 'hq'), ...own.filter((b) => b.def === 'warehouse')];
+  }
+
+  /** Goods a player can spend on building and upgrades (what lies in their HQs and warehouses). */
+  goods(p: Player): ResourceAmounts {
+    const out: ResourceAmounts = {};
+    for (const b of this.homeStores(p)) for (const [k, v] of Object.entries(b.storage!)) out[k] = (out[k] ?? 0) + v;
+    return out;
+  }
+
+  /** Money and people from the treasury, goods from the HQ and warehouses. */
+  canPay(p: Player, cost: ResourceAmounts): boolean {
+    const g = Object.keys(cost).some((k) => this.isGood(k)) ? this.goods(p) : {};
+    return Object.entries(cost).every(([k, v]) => ((this.isGood(k) ? g[k] : p.res[k]) ?? 0) >= v);
+  }
+
+  payFor(p: Player, cost: ResourceAmounts) {
+    const stores = this.homeStores(p);
+    for (const [k, v] of Object.entries(cost)) {
+      if (!this.isGood(k)) {
+        p.res[k] = (p.res[k] ?? 0) - v;
+        continue;
+      }
+      let due = v;
+      for (const b of stores) {
+        const take = Math.min(due, b.storage![k] ?? 0);
+        if (take <= 0) continue;
+        b.storage![k] -= take;
+        due -= take;
+        if (due <= 0) break;
+      }
+    }
+  }
+
+  /** Refunds: money and people to the treasury, goods into the HQ. */
+  credit(p: Player, amounts: ResourceAmounts) {
+    const caps = new Map(this.ruleset.resources.map((x) => [x.id, x.cap]));
+    const hq = this.homeStores(p)[0];
+    for (const [k, v] of Object.entries(amounts)) {
+      if (!this.isGood(k)) p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v);
+      else if (hq) hq.storage![k] = Math.max(0, Math.min(this.storageCap(hq), (hq.storage![k] ?? 0) + v));
+    }
+  }
+
   /** Physical goods a building keeps on site: what it makes, what it uses, and what its trainees cost. */
   storageFor(d: BuildingDef): string[] {
-    const fixed: Record<string, string[]> = { gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
+    const fixed: Record<string, string[]> = { hq: ['metal', 'fuel', 'ore', 'ammo'], gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
     if (fixed[d.id]) return fixed[d.id];
     const global = new Set(['money', 'people', 'energy']);
     const out = new Set<string>();
@@ -499,8 +563,8 @@ export class Sim {
             return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : 'space occupied');
           }
         }
-        if (!canAfford(p.res, d.cost)) return fail('not enough resources');
-        pay(p.res, d.cost);
+        if (!this.canPay(p, d.cost)) return fail(Object.keys(d.cost).some((k) => this.isGood(k)) ? 'not enough resources (materials come from your HQ and warehouses)' : 'not enough resources');
+        this.payFor(p, d.cost);
         this.spawnBuilding(d.id, p, cmd.pos);
         return ok();
       }
@@ -523,7 +587,6 @@ export class Sim {
         if (!canAfford(b.storage, site)) return fail('not enough materials in this building: deliver metal or fuel by truck');
         pay(p.res, treasury);
         pay(b.storage, site);
-        for (const [k, v] of Object.entries(site)) p.res[k] = Math.max(0, (p.res[k] ?? 0) - v);
         const time = ud.trainTime * r.trainTimeMult;
         w.queue.push({ id: w.nextId++, building: b.id, unit: ud.id, owner: p.id, remaining: time, total: time, paid: treasury, site });
         return ok();
@@ -534,7 +597,7 @@ export class Sim {
         const [q] = w.queue.splice(i, 1);
         // money and people back to the treasury, goods back into the building's store
         const caps = new Map(this.ruleset.resources.map((x) => [x.id, x.cap]));
-        for (const [k, v] of Object.entries({ ...q.paid, ...q.site })) p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v);
+        for (const [k, v] of Object.entries(q.paid)) p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v);
         const b = w.buildings.find((x) => x.id === q.building);
         if (b) {
           b.storage ??= {};
@@ -738,8 +801,8 @@ export class Sim {
         const next = this.defs.b.get(b.def)!.levels?.[b.level - 1];
         if (!next) return fail('already at the highest level');
         if (b.upgrade) return fail('upgrade already in progress');
-        if (!canAfford(p.res, next.cost)) return fail('not enough resources');
-        pay(p.res, next.cost);
+        if (!this.canPay(p, next.cost)) return fail('not enough resources (materials come from your HQ and warehouses)');
+        this.payFor(p, next.cost);
         b.upgrade = { remaining: next.time * r.buildTimeMult, total: next.time * r.buildTimeMult };
         return ok();
       }
@@ -750,7 +813,7 @@ export class Sim {
         const b = w.buildings[i];
         if (b.def === 'hq') return fail('cannot demolish HQ');
         const d = this.defs.b.get(b.def)!;
-        for (const [k, v] of Object.entries(d.cost)) p.res[k] = (p.res[k] ?? 0) + v * 0.4;
+        this.credit(p, Object.fromEntries(Object.entries(d.cost).map(([k, v]) => [k, v * 0.4])));
         this.evict(b);
         w.buildings.splice(i, 1);
         return ok();
@@ -943,6 +1006,7 @@ export class Sim {
     this.training(dt);
     this.units(dt);
     this.repairs(dt);
+    if (w.tick % r.tickRate === 0) this.healing();
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
     if (!peace) this.frontline(dt), (this.occ.tick = -1); // the line moved: territory index is stale
     if (w.smokes.length && w.tick % r.tickRate === 0) w.smokes = w.smokes.filter((x) => x.expiresAt > w.time);
@@ -953,6 +1017,7 @@ export class Sim {
     if (r.peaceSeconds > 0 && w.time >= r.peaceSeconds && w.time - dt < r.peaceSeconds) this.hooks.emit('ceasefireOver', {});
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
+    if (Math.floor(w.time / 30) !== Math.floor(prevSec / 30) || w.tick === 1) this.sampleTimeline();
     // the clock for the time limit starts when the ceasefire ends
     if (!r.sandbox && r.matchSeconds > 0 && w.time >= r.peaceSeconds + r.matchSeconds && w.winner === null) {
       w.winner = w.scores[0] === w.scores[1] ? null : w.scores[0] > w.scores[1] ? 0 : 1;
@@ -962,7 +1027,7 @@ export class Sim {
 
   /** Sandbox: treasuries and building stores are kept full so every feature can be tried at once. */
   private restock() {
-    for (const p of this.world.players) for (const res of this.ruleset.resources) p.res[res.id] = res.cap;
+    for (const p of this.world.players) for (const res of this.ruleset.resources) if (!this.isGood(res.id)) p.res[res.id] = res.cap;
     for (const b of this.world.buildings) {
       if (!b.storage) continue;
       const cap = this.storageCap(b);
@@ -1134,8 +1199,9 @@ export class Sim {
         if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
       }
       if (u.sprint) s.push(['sprint', 2]);
+      if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
       if (u.ammo !== undefined && d.maxAmmo) {
-        if (u.ammo <= 0) s.push(['noammo', 0]);
+        if (u.ammo < (d.ammoPerShot ?? 1)) s.push(['noammo', 0]);
         else if (u.ammo / d.maxAmmo < 0.25) s.push(['lowammo', u.ammo / d.maxAmmo]);
         if (u.ammo < d.maxAmmo && this.supplyFor(u)) s.push(['supplied', u.ammo / d.maxAmmo]);
       }
@@ -1255,7 +1321,8 @@ export class Sim {
           b.storage[k] = (b.storage[k] ?? 0) + made;
         }
         for (const tp of team) {
-          tp.res[k] = Math.min(caps.get(k) ?? 1e9, (tp.res[k] ?? 0) + made / n);
+          // money and people go to the treasury; goods stay in the building (see `goods`)
+          if (!this.isGood(k)) tp.res[k] = Math.min(caps.get(k) ?? 1e9, (tp.res[k] ?? 0) + made / n);
           const inc = this.income.get(tp.id)!;
           inc[k] = (inc[k] ?? 0) + (v * m) / n;
         }
@@ -1284,6 +1351,22 @@ export class Sim {
       this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit });
       return false;
     });
+  }
+
+  /** Record how the match stands now (for the end-of-match charts); one point per 30 s, the last one replaced at the end. */
+  sampleTimeline() {
+    const w = this.world;
+    const per = <T,>(f: (t: Team) => T): [T, T] => [f(0), f(1)];
+    const point = {
+      t: Math.round(w.time),
+      score: per((t) => Math.round(w.scores[t])),
+      units: per((t) => w.units.filter((u) => u.team === t).length),
+      buildings: per((t) => w.buildings.filter((b) => b.team === t && b.progress >= 1).length),
+      cities: per((t) => w.points.filter((p) => p.owner === t).length),
+    };
+    const last = w.timeline[w.timeline.length - 1];
+    if (last && last.t === point.t) w.timeline[w.timeline.length - 1] = point;
+    else if (w.timeline.length < 2000) w.timeline.push(point);
   }
 
   /** Player tallies (bots and unknown ids get a throwaway record). */
@@ -1378,6 +1461,7 @@ export class Sim {
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
     const dealt = (raw * (1 - cover) * (1 - city) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
+    target.lastHit = this.world.time;
     if (target.hp <= 0 && attacker.team !== target.team) {
       attacker.xp += r.xpPerKill;
       attacker.combat = (attacker.combat ?? 0) + 1;
@@ -1573,7 +1657,8 @@ export class Sim {
       // fire discipline: hold = never, return = only once hit, auto = anything in range
       if ((u.id + w.tick) % r.tickRate === 0) this.resupply(u, d, 1);
       // no rounds left, no shooting
-      const canFire = (u.ammo === undefined || u.ammo >= 1) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
+      const perShot = d.ammoPerShot ?? 1;
+      const canFire = (!d.maxAmmo || (u.ammo ?? 0) >= perShot) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
 
       // artillery barrage on a chosen area (2 s salvos, 1 km blast, a little scatter)
       let barrage = false;
@@ -1587,7 +1672,7 @@ export class Sim {
             const spread = Math.random() * 0.4;
             const impact = offsetKm(u.bombardTarget, spread * Math.cos(ang), spread * Math.sin(ang));
             this.shots.push({ def: u.def, team: u.team, from: u.pos, to: impact });
-            if (u.ammo !== undefined) u.ammo -= 1;
+            if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
             const dealt = this.blast(u, impact, 1, d.damage * rank.damage, false);
             u.xp += dealt * r.xpPerDamage;
             this.stat(u.owner).damage += dealt;
@@ -1645,7 +1730,7 @@ export class Sim {
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
       if ((tu || tb) && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
-        if (u.ammo !== undefined) u.ammo -= 1;
+        if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
         const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1);
         let dealt: number;
         if (tu) {
@@ -1705,6 +1790,7 @@ export class Sim {
       // fast missiles are hard to intercept: most shots miss them
       if (Math.random() >= (this.defs.u.get(target.def)!.interceptChance ?? 1)) continue;
       target.hp -= a.damage;
+      target.lastHit = this.world.time;
       if (target.hp <= 0) this.stat(b.owner).kills++;
     }
     if (this.shots.length > 4000) this.shots.splice(0, this.shots.length - 4000);
@@ -1806,6 +1892,36 @@ export class Sim {
    * Rescuers: inside a city they repair the city and its housing at once; outside they patch up buildings within 2 km.
    * Nothing is repaired within 60 s of being hit. Several rescuers work faster (up to 10 hp/s).
    */
+  /**
+   * Medics, mechanics and field hospitals, once a second: every hurt unit in reach of a healer for its kind gets the best
+   * rate on offer (healers do not stack). Nobody heals until it has been out of the fight (not hit) for 10 s.
+   */
+  private healing() {
+    const w = this.world;
+    const kindOf = (d: UnitDef): 'foot' | 'vehicle' | null => (d.kind === 'air' ? null : (d.mobility ?? 'foot') === 'foot' ? 'foot' : 'vehicle');
+    const healers: { team: Team; pos: LngLat; h: NonNullable<UnitDef['heals']> }[] = [];
+    for (const u of w.units) {
+      const h = this.defs.u.get(u.def)!.heals;
+      if (h && !u.embarkedIn) healers.push({ team: u.team, pos: u.pos, h });
+    }
+    for (const b of w.buildings) {
+      const h = this.defs.b.get(b.def)!.heals;
+      if (h && b.progress >= 1) healers.push({ team: b.team, pos: b.pos, h });
+    }
+    if (!healers.length) return;
+    for (const u of w.units) {
+      if (u.embarkedIn || w.time - (u.lastHit ?? -1e9) < 10) continue;
+      const d = this.defs.u.get(u.def)!;
+      const max = this.maxHp(u);
+      const kind = kindOf(d);
+      if (!kind || u.hp >= max) continue;
+      let rate = 0;
+      for (const x of healers) if (x.team === u.team && x.h.targets === kind && x.h.perSecond > rate && distKm(x.pos, u.pos) <= x.h.radiusKm) rate = x.h.perSecond;
+      if (rate) u.hp = Math.min(max, u.hp + max * rate);
+      u.healing = rate > 0;
+    }
+  }
+
   private repairs(dt: number) {
     const w = this.world;
     const crews = w.units.filter((u) => this.defs.u.get(u.def)!.repairs && !u.embarkedIn);
@@ -1918,7 +2034,7 @@ export class Sim {
     for (const p of w.players) {
       const hqs = w.buildings.some((b) => b.owner === p.id && b.def === 'hq' && b.progress >= 1);
       if (!hqs) continue;
-      abstract[p.team] += (4 + Math.sqrt(p.res.people ?? 0) + Math.sqrt(p.res.metal ?? 0)) * r.abstractPower;
+      abstract[p.team] += (4 + Math.sqrt(p.res.people ?? 0) + Math.sqrt(this.goods(p).metal ?? 0)) * r.abstractPower;
     }
     // the abstract term is spread per 100 km of front so that map size does not change its weight
     const perNode: [number, number] = [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];

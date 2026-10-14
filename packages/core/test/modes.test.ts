@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { distKm, offsetKm, Sim, type LngLat, type RulesConfig, type Team } from '../src';
+import { distKm, offsetKm, Sim, snapshotFor, type LngLat, type RulesConfig, type Team } from '../src';
 
 const base = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const fresh = (rules: Partial<RulesConfig> = {}) => {
@@ -319,13 +319,14 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   const ua = sim.spawnUnit('infantry', a, p0);
   const ru = sim.spawnUnit('infantry', sim.player('b')!, p1);
   (ru.fireMode = 'hold'), (ru.hp = 1e6);
-  assert.equal(ua.ammo, 150, 'infantry starts with 150 rounds');
+  assert.equal(ua.ammo, 300, 'infantry starts with 300 rounds');
   run(sim, 5);
-  assert.ok(ua.ammo! <= 146, `each shot uses a round (${ua.ammo} left)`);
-  ua.ammo = 0;
+  assert.ok(ua.ammo! <= 292 && ua.ammo! % 2 === 0, `each burst uses 2 rounds (${ua.ammo} left)`);
+  ua.ammo = 1; // less than one burst
   const hp0 = ru.hp;
   run(sim, 4);
-  assert.equal(ru.hp, hp0, 'no rounds, no shooting');
+  assert.equal(ru.hp, hp0, 'not enough rounds for a burst: no shooting');
+  assert.equal(ua.ammo, 1);
   assert.ok(ua.status.some(([id]) => id === 'noammo'), 'flagged out of ammo');
   d2.storage.ammo = 1000;
   run(sim, 3.2);
@@ -335,7 +336,7 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(ru.hp < hp0, 'and fires again');
   const tank = sim.spawnUnit('tank', a, offsetKm(d2.pos, 1, 0));
   tank.ammo = 0;
-  (tank.fireMode = 'hold'), (ua.fireMode = 'hold'), (ua.ammo = 150); // only the tank draws from the depot now
+  (tank.fireMode = 'hold'), (ua.fireMode = 'hold'), (ua.ammo = 300); // only the tank draws from the depot now
   const before = d2.storage.ammo;
   for (let i = 0; i < 20 && !tank.ammo; i++) sim.step(0.1); // the first refill (once a second)
   assert.ok(tank.ammo! > 0);
@@ -363,7 +364,7 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   run(sim, 4);
   assert.equal(orion.hp, sim.defs.u.get('drone_orion')!.hp, 'infantry and tanks do not shoot recon drones');
   assert.equal(strike.hp, sim.defs.u.get('drone_shahed')!.hp, 'nor strike drones');
-  assert.equal(inf.ammo, 150, 'no rounds wasted on them');
+  assert.equal(inf.ammo, 300, 'no rounds wasted on them');
   const enemyInf = sim.spawnUnit('infantry', b, p1);
   enemyInf.fireMode = 'hold';
   const team = sim.spawnUnit('manpads', a, offsetKm(p0, 0, 0.3));
@@ -390,7 +391,8 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   const mine = mk('mine', 2, { ore: 0 });
   const works = mk('metalworks', 6, { ore: 0, metal: 800 });
   const truck = sim.spawnUnit('truck', a, mine.pos);
-  assert.equal(sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: mine.id, toBuilding: hq.id, resType: 'ore' }).ok, false, 'the base takes no ore');
+  const depot = mk('ammo_depot', -3, { ammo: 0 });
+  assert.equal(sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: mine.id, toBuilding: depot.id, resType: 'ore' }).ok, false, 'an ammo depot takes no ore');
   assert.ok(sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: works.id, toBuilding: hq.id }).ok, 'metal from the works to the base');
   for (let i = 0; i < 600 && !(truck.cargo!.res.metal ?? 0); i++) sim.step(0.1);
   assert.ok((truck.cargo!.res.metal ?? 0) > 700, `"any" picked the metal (${Math.round(truck.cargo!.res.metal ?? 0)})`);
@@ -405,4 +407,69 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.notEqual(t2.haul?.state, 'loading', 'loads as soon as there is ore and drives off');
   assert.equal(store.storage.ore, 0, 'took all of it');
   console.log('delivery routes ok');
+}
+
+// --- goods are kept in buildings: the HQ holds the starting stock, builds draw on it, new sites start (nearly) empty ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const start = Object.fromEntries(base.resources.map((r) => [r.id, r.start]));
+  assert.equal(hq.storage!.metal, start.metal, 'the HQ holds the starting metal');
+  assert.equal(a.res.metal, undefined, 'goods are not a treasury number any more');
+  const snap = snapshotFor(sim, 'a', 0);
+  assert.equal(snap.res.metal, start.metal, 'the top bar shows what is in the HQ');
+  // a bunker costs metal: it comes out of the HQ
+  const bunkerCost = sim.defs.b.get('bunker')!.cost.metal!;
+  let built = false;
+  for (let r = 3; r < 30 && !built; r += 2) built = sim.apply('a', { type: 'build', def: 'bunker', pos: offsetKm(hq.pos, r, 0) }).ok;
+  assert.ok(built);
+  assert.equal(hq.storage!.metal, start.metal - bunkerCost, 'paid from the HQ store');
+  hq.storage!.metal = 0;
+  let refused = '';
+  for (let r = 3; r < 30 && !refused; r += 2) { const x = sim.apply('a', { type: 'build', def: 'bunker', pos: offsetKm(hq.pos, -r, 0) }); if (!x.ok && /HQ/.test(x.reason)) refused = x.reason; }
+  assert.ok(refused, 'no metal in the HQ, no bunker');
+  // new buildings: a factory gets enough for two of its dearest units, a store or producer starts empty
+  hq.storage!.metal = 5000;
+  const fac = (sim as any).spawnBuilding('machine_factory', a, offsetKm(hq.pos, 60, 0));
+  const dearest = Math.max(...sim.defs.b.get('machine_factory')!.trains!.map((u) => sim.defs.u.get(u)!.cost.metal ?? 0));
+  assert.equal(fac.storage.metal, dearest * 2, 'a factory starts with materials for two units');
+  const wh = (sim as any).spawnBuilding('warehouse', a, offsetKm(hq.pos, 0, 60));
+  assert.deepEqual(Object.values(wh.storage).filter((v) => v), [], 'a warehouse starts empty');
+  console.log('goods in buildings ok');
+}
+
+// --- medics heal troops on foot, mechanics repair vehicles, hospitals heal around them; nobody heals while under fire ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const at = offsetKm(hq.pos, 20, 0);
+  const inf = sim.spawnUnit('infantry', a, at);
+  const tank = sim.spawnUnit('tank', a, offsetKm(at, 0.5, 0));
+  inf.hp = 40;
+  tank.hp = 100;
+  sim.spawnUnit('medic', a, offsetKm(at, 1, 1));
+  run(sim, 5);
+  assert.ok(inf.hp > 40 + 7, `the medic patches up the infantry (${inf.hp.toFixed(0)})`);
+  assert.equal(tank.hp, 100, 'but cannot repair a tank');
+  assert.ok(inf.status.some(([id]) => id === 'healing'), 'shown as healing');
+  sim.spawnUnit('mechanic', a, offsetKm(at, -1, 0));
+  run(sim, 5);
+  assert.ok(tank.hp > 100 + 20, `the mechanic repairs the tank (${tank.hp.toFixed(0)})`);
+  inf.hp = 40;
+  inf.lastHit = sim.world.time;
+  run(sim, 5);
+  assert.equal(inf.hp, 40, 'nobody heals within 10 s of being hit');
+  run(sim, 7);
+  assert.ok(inf.hp > 40, 'then healing starts');
+  // a field hospital heals faster (3%) and further (6 km)
+  const sim2 = fresh();
+  const hq2 = hqOf(sim2, 'a');
+  sim2.world.buildings.push({ ...hq2, id: sim2.world.nextId++, def: 'med_center', hp: 450, pos: offsetKm(hq2.pos, 20, 0), storage: undefined, inside: [], course: null, upgrade: null });
+  const hurt = sim2.spawnUnit('infantry', sim2.player('a')!, offsetKm(hq2.pos, 25, 0));
+  hurt.hp = 20;
+  run(sim2, 4);
+  assert.ok(Math.abs(hurt.hp - (20 + 4 * 3)) < 3.1, `hospital: 3 hp a second for infantry (${hurt.hp.toFixed(1)})`);
+  console.log('healing ok');
 }
