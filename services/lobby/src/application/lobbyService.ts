@@ -5,6 +5,8 @@ import { addSlot, fillWithBots, nameBots, newBot, sanitizeSettings, slotsOf, typ
 
 export interface MatchLauncher {
   launch(room: Room): Promise<string>;
+  /** Is the match still running on the game service? */
+  running(matchId: string): Promise<boolean>;
   maps(): Promise<{ id: string; name: string }[]>;
 }
 
@@ -19,6 +21,15 @@ export class LobbyService {
 
   maps() {
     return this.launcher.maps();
+  }
+
+  /** Rooms whose match has ended or been closed (everyone left) are removed. */
+  async sweep() {
+    for (const room of [...this.rooms.values()]) {
+      if (room.status !== 'playing' || !room.matchId) continue;
+      const alive = await this.launcher.running(room.matchId).catch(() => true); // keep the room if the game service is unreachable
+      if (!alive) this.rooms.delete(room.id);
+    }
   }
 
   list() {

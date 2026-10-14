@@ -10,9 +10,10 @@ export const NATO_PREFIX = 'nato|';
 const SIZE = 64; // css px, rendered at 2x
 const INK = '#0b0d10';
 
-/** Marker colours by relation: own units blue, allies green, the enemy red. */
-export const REL_COLOR = { own: '#3d8bff', ally: '#34c26b', enemy: '#ff4d4d' } as const;
-export type Relation = keyof typeof REL_COLOR;
+/** Marker colours: each nation keeps its colour (Ukraine blue, Russia red) for its own player and the enemy alike; allies are green. */
+export const NATION_COLOR = ['#3d8bff', '#ff4d4d'] as const;
+export const ALLY_COLOR = '#34c26b';
+export type Relation = 'own' | 'ally' | 'enemy';
 
 export interface NatoSpec {
   hostile: boolean;

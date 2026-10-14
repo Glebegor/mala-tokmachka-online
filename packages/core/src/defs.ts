@@ -35,8 +35,8 @@ export interface BuildingDef {
   storageCap?: number;
   /** Fortifications and other field works (built near the front, between the HQ and the line). */
   fieldWork?: boolean;
-  /** Ammo depot: friendly units within the radius deal `damageMult` damage while its store has ammo (`perShot` each). */
-  supply?: { radiusKm: number; damageMult: number; perShot: number };
+  /** Ammo point: friendly units within the radius refill up to `rounds` rounds a second from its ammo store. */
+  supply?: { radiusKm: number; rounds: number };
   /** May also be built inside your side's grey zones (contested ground), even behind the enemy line. */
   buildInGrey?: boolean;
   /** Supply-chain links: these buildings must stay `minBuildSpacing` km apart (checked both ways), so goods go by truck. */
@@ -66,8 +66,10 @@ export interface UnitDef {
   fx?: string;
   /** Share of shots that visibly miss, 0..1 (animation only, damage is unaffected). */
   missRate?: number;
-  /** Damage multiplier against air units (default: rules.airDamageDefault). */
+  /** Damage multiplier against air units (default: rules.airDamageDefault); 0 = cannot engage aircraft at all. */
   airDamage?: number;
+  /** What it may shoot at: 'air' for anti-aircraft teams (MANPADS), default everything its weapons allow. */
+  targets?: 'air' | 'ground' | 'all';
   /** Logistics: how much cargo it hauls, how many infantry it carries, and whether it is a fuel tanker. */
   cargoCap?: number;
   passengerCap?: number;
@@ -94,6 +96,10 @@ export interface UnitDef {
   minRange?: number;
   /** How easily it is spotted (<1 stealthy, >1 loud). Default 1 on foot, 1.35 for vehicles. */
   stealth?: number;
+  /** Rounds carried; a unit with none left cannot fire (missing = needs no ammunition). */
+  maxAmmo?: number;
+  /** Ammo (resource) one round costs when refilled at a depot. Default 1. */
+  ammoCost?: number;
   /** Can repair cities and buildings. */
   repairs?: boolean;
   cost: ResourceAmounts;
@@ -212,7 +218,7 @@ export interface RulesConfig {
   greyZoneTtl: number; // seconds a grey zone lasts after the troops leave
   greyZonePush: number; // extra force for the infiltrating side on front nodes at the zone
   fuelPerKm: number; // fuel a ground vehicle burns per km driven (×1.5 when sprinting)
-  liberateSeconds: number; // ground the front passes over stays grey until the new owner's troops spend this long on it
+  liberateSeconds: number; // ground the front passes over stays grey until no enemy troops have been near it this long
   peaceSeconds: number; // ceasefire at the start: build and deploy, but nobody may fight or cross the front
   sandbox: boolean; // test mode: endless resources, stocked stores, no victory or time limit
   buildTimeMult: number; // multiplies every build, upgrade and course time

@@ -37,7 +37,8 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | Fire a missile | select it at the missile factory, right click the target |
 | Drones on a pickup | select small drones next to a pickup, *Load*; select the pickup, *Launch at…* and click the target |
 | Give fuel to another vehicle | select a vehicle or tanker, *Give fuel…*, click the vehicle (yours or an ally's) |
-| Supply troops with ammo | build an Ammo Factory and Ammo Depots, truck *Ammo* from one to the other |
+| Supply troops with ammo | units refill near an Ammo Depot or the base; truck *Ammo* from an Ammo Factory to the depots |
+| Shoot down drones and missiles | Anti-Air Station, or a MANPADS Team (trained at the base) |
 | Keep your buildings from teammates | top bar *Buildings: shared / private* |
 | Send units into a Training Centre | select them, right click the centre |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |

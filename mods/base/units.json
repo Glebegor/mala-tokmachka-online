@@ -17,8 +17,9 @@
     "symbol": "infantry",
     "fx": "burst",
     "missRate": 0.45,
-    "airDamage": 0.3,
-    "description": "Cheap all-round riflemen. Best in forest and cities where they get cover; can ford streams. Weak in the open against armour. Can ride in pickups and trucks."
+    "airDamage": 0,
+    "description": "Cheap all-round riflemen. Best in forest and cities where they get cover; can ford streams. Weak in the open against armour. Can ride in pickups and trucks.",
+    "maxAmmo": 150
   },
   {
     "id": "infantry_recon",
@@ -39,8 +40,9 @@
     "symbol": "recon",
     "fx": "burst",
     "missRate": 0.35,
-    "airDamage": 0.3,
-    "description": "Small, hard to spot (sees 12 km, very stealthy). The eyes your artillery needs."
+    "airDamage": 0,
+    "description": "Small, hard to spot (sees 12 km, very stealthy). The eyes your artillery needs.",
+    "maxAmmo": 100
   },
   {
     "id": "infantry_assault",
@@ -61,8 +63,9 @@
     "symbol": "assault",
     "fx": "burst",
     "missRate": 0.3,
-    "airDamage": 0.3,
-    "description": "Heavy assault troops: lots of damage at close range, slow."
+    "airDamage": 0,
+    "description": "Heavy assault troops: lots of damage at close range, slow.",
+    "maxAmmo": 120
   },
   {
     "id": "infantry_at",
@@ -84,8 +87,36 @@
     "symbol": "antitank",
     "fx": "burst",
     "missRate": 0.25,
-    "airDamage": 0.1,
-    "description": "Missile team: hits hard at 2.2 km, ideal against armour. Fragile."
+    "airDamage": 0,
+    "description": "Missile team: hits hard at 2.2 km, ideal against armour. Fragile.",
+    "maxAmmo": 12,
+    "ammoCost": 3
+  },
+  {
+    "id": "manpads",
+    "name": "MANPADS Team",
+    "kind": "ground",
+    "cost": {
+      "money": 160,
+      "metal": 15,
+      "people": 3
+    },
+    "trainTime": 10,
+    "hp": 70,
+    "speed": 0.15,
+    "range": 5,
+    "damage": 40,
+    "vision": 7,
+    "stealth": 0.85,
+    "mobility": "foot",
+    "symbol": "antiair",
+    "fx": "missile",
+    "missRate": 0.3,
+    "airDamage": 1,
+    "targets": "air",
+    "maxAmmo": 6,
+    "ammoCost": 8,
+    "description": "Shoulder-launched anti-aircraft missiles (Stinger, Igla): shoots down recon drones, strike drones and cruise missiles within 5 km. Cannot engage ground targets. 6 missiles; refill at an ammo depot or base."
   },
   {
     "id": "pickup",
@@ -109,9 +140,10 @@
     "cargoCap": 500,
     "passengerCap": 1,
     "maxFuel": 80,
-    "airDamage": 0.2,
+    "airDamage": 0,
     "description": "Fast light vehicle with a machine gun. Carries 500 cargo, one infantry squad and a launcher for two small drones (load them next to it, launch them from the field).",
-    "droneCap": 2
+    "droneCap": 2,
+    "maxAmmo": 200
   },
   {
     "id": "truck",
@@ -209,9 +241,11 @@
     "symbol": "armor",
     "fx": "shell",
     "missRate": 0.2,
-    "airDamage": 0.15,
+    "airDamage": 0,
     "description": "Heavy direct fire and armour. Fast on roads and open fields, bogs down in forest, hills and cities. Needs metal and fuel. Burns fuel.",
-    "maxFuel": 100
+    "maxFuel": 100,
+    "maxAmmo": 40,
+    "ammoCost": 4
   },
   {
     "id": "artillery",
@@ -235,7 +269,9 @@
     "airDamage": 0,
     "description": "Indirect fire from 3 to 20 km. Only fires at what your side can see (spot for it with recon or drones), or barrage a chosen area. Never drives up to the front line.",
     "minRange": 3,
-    "maxFuel": 90
+    "maxFuel": 90,
+    "maxAmmo": 30,
+    "ammoCost": 6
   },
   {
     "id": "drone",

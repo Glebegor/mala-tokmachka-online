@@ -16,6 +16,12 @@ export function gameRoutes(mm: MatchManager) {
         throw new HttpError(400, (e as Error).message);
       }
     })
+    // the lobby asks whether a match still runs (empty matches close themselves)
+    .get('/matches/:id', (r) => {
+      internal(r.headers);
+      if (!mm.get(r.params.id)) throw new HttpError(404, 'no such match');
+      return ok({ running: true });
+    })
     .get('/mods', () => ok(mm.rules.mods))
     .get('/maps', () => ok(mm.rules.maps.map((m) => ({ id: m.id, name: m.name }))))
     .get('/health', () => ok());

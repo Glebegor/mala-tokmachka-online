@@ -192,6 +192,7 @@ export class Sim {
       stamina: d.kind === 'ground' && (d.mobility ?? 'foot') === 'foot' && !d.maxFuel ? 100 : undefined,
       fuel: d.maxFuel,
       maxFuel: d.maxFuel,
+      ammo: d.maxAmmo,
       cargo: d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [], drones: d.droneCap ? [] : undefined } : undefined,
       // recon drones circle where they are until told otherwise
       loiterCenter: recon ? [pos[0], pos[1]] : undefined,
@@ -237,6 +238,7 @@ export class Sim {
     const global = new Set(['money', 'people', 'energy']);
     const out = new Set<string>();
     for (const k of [...Object.keys(d.produces ?? {}), ...Object.keys(d.consumes ?? {})]) if (!global.has(k)) out.add(k);
+    if (d.supply) out.add('ammo'); // ammo points keep a store to hand out
     for (const uid of d.trains ?? []) for (const k of Object.keys(this.defs.u.get(uid)?.cost ?? {})) if (!global.has(k)) out.add(k);
     return [...out];
   }
@@ -339,6 +341,14 @@ export class Sim {
     b.course = null;
   }
 
+  /**
+   * Can this unit take the next course? Recruits always can; from the second rank on it must have destroyed at least one
+   * enemy unit since its last course (schooling builds on real combat).
+   */
+  canTrain(u: Unit): boolean {
+    return !!this.ranks[u.rank + 1] && this.defs.u.get(u.def)!.kind !== 'air' && (u.rank === 0 || (u.combat ?? 0) >= 1);
+  }
+
   /** Duration of a course for the units currently inside, and what it costs per second while it runs. */
   courseTerms(b: Building): { perSecond: number; seconds: number; pupils: number } {
     const t = this.defs.b.get(b.def)!.training!;
@@ -347,7 +357,7 @@ export class Sim {
     let pupils = 0;
     let perTick = 0;
     for (const u of b.inside) {
-      if (!this.ranks[u.rank + 1]) continue;
+      if (!this.canTrain(u)) continue;
       pupils++;
       top = Math.max(top, u.rank + 1);
       perTick += r.courseCostPerTick + r.courseCostPerRank * u.rank;
@@ -370,28 +380,30 @@ export class Sim {
     return this.world.grey.some((z) => z.team === team && distKm(z.pos, p) <= z.r) || this.liberatedAt(p)?.team === team;
   }
 
-  /** Stocked friendly ammo depots, refreshed every tick. */
+  /** Stocked friendly ammo points (depots, bases), refreshed every tick. */
   private depots: { tick: number; list: Building[] } = { tick: -1, list: [] };
-  /** The ammo depot keeping this unit supplied, if any is in range and stocked. */
+  /** The stocked ammo point this unit can refill at, if one is in range. */
   supplyFor(u: Unit): Building | null {
     if (this.depots.tick !== this.world.tick) {
       this.depots = { tick: this.world.tick, list: this.world.buildings.filter((b) => b.progress >= 1 && this.defs.b.get(b.def)!.supply && (b.storage?.ammo ?? 0) > 0) };
     }
     for (const b of this.depots.list) {
-      if (b.team !== u.team) continue;
-      const s = this.defs.b.get(b.def)!.supply!;
-      if ((b.storage!.ammo ?? 0) >= s.perShot && distKm(b.pos, u.pos) <= s.radiusKm) return b;
+      if (b.team !== u.team || !this.usable(b, u.owner)) continue;
+      if (distKm(b.pos, u.pos) <= this.defs.b.get(b.def)!.supply!.radiusKm) return b;
     }
     return null;
   }
-  /** Damage multiplier from a nearby depot; the shot's ammo comes out of its store. */
-  private fireSupplied(u: Unit, d: UnitDef): number {
-    if (d.kind === 'air') return 1;
+  /** Refill rounds from a nearby ammo point (called once a second per unit). */
+  private resupply(u: Unit, d: UnitDef, seconds: number): boolean {
+    if (u.ammo === undefined || !d.maxAmmo || u.ammo >= d.maxAmmo || u.embarkedIn) return false;
     const b = this.supplyFor(u);
-    if (!b) return 1;
-    const s = this.defs.b.get(b.def)!.supply!;
-    b.storage!.ammo = Math.max(0, (b.storage!.ammo ?? 0) - s.perShot * (d.minRange ? 4 : 1));
-    return s.damageMult;
+    if (!b) return false;
+    const cost = d.ammoCost ?? 1;
+    const rounds = Math.min(d.maxAmmo - u.ammo, this.defs.b.get(b.def)!.supply!.rounds * seconds, Math.floor((b.storage!.ammo ?? 0) / cost));
+    if (rounds <= 0) return false;
+    u.ammo += rounds;
+    b.storage!.ammo = (b.storage!.ammo ?? 0) - rounds * cost;
+    return true;
   }
 
   /** Supply-chain partners must be built far apart (see `spacedFrom`). */
@@ -572,6 +584,12 @@ export class Sim {
         const to = w.buildings.find((x) => x.id === cmd.toBuilding && x.team === p.team);
         if (!from || !to || from === to) return fail('pick two different buildings of your side');
         if (!this.usable(from, p.id) || !this.usable(to, p.id)) return fail('a teammate keeps that building to themselves');
+        // only goods the destination can store; tankers carry fuel only
+        const ud = this.defs.u.get(u.def)!;
+        const accepts = this.storageFor(this.defs.b.get(to.def)!);
+        const want = ud.fuelOnly ? 'fuel' : cmd.resType && cmd.resType !== 'any' ? cmd.resType : null;
+        if (want && accepts.length && !accepts.includes(want)) return fail(`the ${this.defs.b.get(to.def)!.name} does not take ${want}`);
+        if (!want && !this.haulKinds(from, to, ud).length) return fail(`nothing the ${this.defs.b.get(from.def)!.name} holds is wanted at the ${this.defs.b.get(to.def)!.name}`);
         const loaded = !!u.cargo && Object.values(u.cargo.res).some((v) => v > 0);
         this.orderMove([u], loaded ? to.pos : from.pos, false, false, false);
         u.haul = { fromBuilding: from.id, toBuilding: to.id, resType: cmd.resType, state: loaded ? 'to_to' : 'to_from' };
@@ -682,10 +700,13 @@ export class Sim {
         if (!Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
         const free = t.capacity - b.inside.length - w.units.filter((u) => u.enter === b.id).length;
-        const pupils = w.units
-          .filter((u) => set.has(u.id) && u.owner === p.id && this.defs.u.get(u.def)!.kind !== 'air' && u.rank < this.ranks.length - 1)
-          .slice(0, Math.max(0, free));
-        if (!pupils.length) return fail(free <= 0 ? 'training centre is full' : 'no ground units that can still be trained');
+        const mine = w.units.filter((u) => set.has(u.id) && u.owner === p.id);
+        const pupils = mine.filter((u) => this.canTrain(u)).slice(0, Math.max(0, free));
+        if (!pupils.length) {
+          if (free <= 0) return fail('training centre is full');
+          const green = mine.some((u) => u.rank > 0 && this.ranks[u.rank + 1] && this.defs.u.get(u.def)!.kind !== 'air');
+          return fail(green ? 'above Recruit a unit needs at least one kill since its last course' : 'no ground units that can still be trained');
+        }
         if (!this.orderMove(pupils, b.pos, false, false, false)) return fail('no way to the training centre');
         for (const u of pupils) if (u.path.length) u.enter = b.id;
         return ok();
@@ -1002,15 +1023,17 @@ export class Sim {
   private static cellKey(ix: number, iy: number) {
     return ix * 100000 + iy;
   }
-  /** Contested liberated ground at this position, if any. */
+  /** Contested (grey) ground at this position, if any. */
   liberatedAt(p: LngLat): LiberatedCell | undefined {
-    return this.libByKey.get(Sim.cellKey(Math.floor(p[0] / LIBERATED_CELL.lng), Math.floor(p[1] / LIBERATED_CELL.lat)));
+    const c = this.libByKey.get(Sim.cellKey(Math.floor(p[0] / LIBERATED_CELL.lng), Math.floor(p[1] / LIBERATED_CELL.lat)));
+    return c && !c.free ? c : undefined;
   }
 
   /**
-   * Liberated ground, checked once a second: cells within 2 km of the moving parts of the front are watched; one that
-   * changes hands turns grey for the side that took it and only becomes theirs for real once that side's ground troops
-   * have spent `liberateSeconds` on (or right next to) it. Ground lost again before then simply goes back.
+   * Ground changing hands, checked once a second (as DeepState draws it): cells within 2 km of the moving parts of the front
+   * are watched. One that changes hands turns grey for the side that took it; once no enemy ground troops have been within
+   * 3 km of it for `liberateSeconds`, a Ukrainian gain turns blue (liberated) and a Russian one simply becomes occupied.
+   * Grey ground that is lost again before then just goes back.
    */
   private liberation() {
     const w = this.world;
@@ -1026,13 +1049,16 @@ export class Sim {
           const side = this.side([(ix + 0.5) * cw, (iy + 0.5) * ch]);
           const was = this.cellSide.get(key);
           const now = Math.floor(w.time);
-          if (was) (was.seen = now);
+          if (was) was.seen = now;
           else this.cellSide.set(key, { side, seen: now });
           if (!was || was.side === side) continue;
           was.side = side;
           const cell = this.libByKey.get(key);
-          if (cell) this.libByKey.delete(key), this.libVersion++; // taken back before it was settled
-          else if (this.libByKey.size < 40000) this.libByKey.set(key, { ix, iy, team: side, held: 0 }), (this.libVersion++);
+          this.libByKey.delete(key);
+          this.libVersion++;
+          // grey ground taken straight back simply returns; anything else is contested by the side that took it
+          if (cell && !cell.free && cell.team !== side) continue;
+          if (this.libByKey.size < 60000) this.libByKey.set(key, { ix, iy, team: side, quiet: 0, free: false });
         }
       }
     };
@@ -1040,7 +1066,7 @@ export class Sim {
     for (const p of w.pockets) p.nodes.forEach(watch);
     // forget stretches of front that have been quiet for a while
     if (w.tick % (r.tickRate * 60) === 0) for (const [k, v] of this.cellSide) if (w.time - v.seen > 60) this.cellSide.delete(k);
-    // the new owner settles the ground by keeping troops on it (checked every other second)
+    // grey ground settles once the enemy has stayed away long enough (checked every other second, half the cells each time)
     const odd = Math.floor(w.time) % 2;
     for (const [key, c] of this.libByKey) {
       if ((c.ix + c.iy) % 2 !== odd) continue;
@@ -1050,11 +1076,16 @@ export class Sim {
         this.libVersion++;
         continue;
       }
-      let here = false;
-      this.near(this.unitGrid, at, 2, (u) => {
-        if (!here && u.team === c.team && !u.embarkedIn && this.defs.u.get(u.def)!.kind !== 'air' && distKm(u.pos, at) <= 2) here = true;
+      if (c.free) continue;
+      let enemy = false;
+      this.near(this.unitGrid, at, 3, (u) => {
+        if (!enemy && u.team !== c.team && !u.embarkedIn && this.defs.u.get(u.def)!.kind !== 'air' && distKm(u.pos, at) <= 3) enemy = true;
       });
-      if (here && (c.held += 2) >= r.liberateSeconds) this.libByKey.delete(key), this.libVersion++;
+      c.quiet = enemy ? 0 : c.quiet + 2;
+      if (c.quiet < r.liberateSeconds) continue;
+      if (c.team === 0) c.free = true;
+      else this.libByKey.delete(key);
+      this.libVersion++;
     }
     if (this.libVersion !== this.libSent) (w.liberated = [...this.libByKey.values()]), (this.libSent = this.libVersion), (this.libRuns = null);
   }
@@ -1065,13 +1096,14 @@ export class Sim {
   /** Contested ground as runs along each row of cells: [iy, team, firstIx, length, …] (compact for the wire). */
   liberatedRuns(): number[] {
     if (this.libRuns) return this.libRuns;
-    const cells = [...this.world.liberated].sort((a, b) => a.iy - b.iy || a.team - b.team || a.ix - b.ix);
+    const kind = (c: LiberatedCell) => (c.free ? 2 : c.team);
+    const cells = [...this.world.liberated].sort((a, b) => a.iy - b.iy || kind(a) - kind(b) || a.ix - b.ix);
     const out: number[] = [];
     for (let i = 0; i < cells.length; ) {
       const c = cells[i];
       let n = 1;
-      while (i + n < cells.length && cells[i + n].iy === c.iy && cells[i + n].team === c.team && cells[i + n].ix === c.ix + n) n++;
-      out.push(c.iy, c.team, c.ix, n);
+      while (i + n < cells.length && cells[i + n].iy === c.iy && kind(cells[i + n]) === kind(c) && cells[i + n].ix === c.ix + n) n++;
+      out.push(c.iy, kind(c), c.ix, n);
       i += n;
     }
     return (this.libRuns = out);
@@ -1102,9 +1134,10 @@ export class Sim {
         if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
       }
       if (u.sprint) s.push(['sprint', 2]);
-      if (d.kind !== 'air' && d.damage > 0) {
-        const depot = this.supplyFor(u);
-        if (depot) s.push(['supplied', this.defs.b.get(depot.def)!.supply!.damageMult]);
+      if (u.ammo !== undefined && d.maxAmmo) {
+        if (u.ammo <= 0) s.push(['noammo', 0]);
+        else if (u.ammo / d.maxAmmo < 0.25) s.push(['lowammo', u.ammo / d.maxAmmo]);
+        if (u.ammo < d.maxAmmo && this.supplyFor(u)) s.push(['supplied', u.ammo / d.maxAmmo]);
       }
       if (u.fuel !== undefined && u.maxFuel) {
         if (u.fuel <= 0) s.push(['nofuel', 0]);
@@ -1140,10 +1173,11 @@ export class Sim {
       b.course.remaining -= dt;
       if (b.course.remaining > 0) continue;
       for (const u of b.inside) {
+        if (!this.canTrain(u)) continue; // sat in without the combat record: leaves as it came
         const next = this.ranks[u.rank + 1];
-        if (!next) continue;
         u.xp = Math.max(u.xp, next.xp);
         this.rankUp(u);
+        u.combat = 0; // the next course needs fresh combat experience
         u.hp = this.maxHp(u); // graduates leave rested and at full strength
       }
       this.hooks.emit('courseFinished', { id: b.id, owner: b.owner, units: b.inside.length });
@@ -1346,6 +1380,7 @@ export class Sim {
     target.hp -= dealt;
     if (target.hp <= 0 && attacker.team !== target.team) {
       attacker.xp += r.xpPerKill;
+      attacker.combat = (attacker.combat ?? 0) + 1;
       this.stat(attacker.owner).kills++;
     }
     return dealt;
@@ -1436,6 +1471,17 @@ export class Sim {
     t.fuel += give;
   }
 
+  /** What a truck on a route may carry from `from` to `to`: goods the source stores that the destination takes. */
+  haulKinds(from: Building, to: Building, d: UnitDef, resType?: string): string[] {
+    if (d.fuelOnly) return ['fuel'];
+    if (resType && resType !== 'any') return [resType];
+    const accepts = this.storageFor(this.defs.b.get(to.def)!);
+    const produced = Object.keys(this.defs.b.get(from.def)!.produces ?? {});
+    // what the source makes first, then whatever else it keeps; fuel is for tankers
+    const kinds = [...new Set([...produced, ...this.storageFor(this.defs.b.get(from.def)!)])].filter((k) => k !== 'fuel' && k !== 'money' && k !== 'people' && k !== 'energy');
+    return kinds.filter((k) => !accepts.length || accepts.includes(k));
+  }
+
   /** Delivery rounds: drive to the source, load (5 s), drive to the destination, unload (4 s), repeat. */
   private haulStep(u: Unit, d: UnitDef, dt: number) {
     const h = u.haul!;
@@ -1446,34 +1492,34 @@ export class Sim {
     const go = (b: Building) => this.orderMove([u], b.pos, false, false, false);
     switch (h.state ?? 'to_from') {
       case 'to_from':
-        if (distKm(u.pos, from.pos) <= 3.5 || !u.path.length) (h.state = 'loading'), (h.timer = 5), (u.path = []);
+        if (distKm(u.pos, from.pos) <= 3.5) (h.state = 'loading'), (h.timer = 5), (u.path = []);
+        else if (!u.path.length && (u.id + this.world.tick) % 20 === 0) go(from); // lost the way: plan again
         break;
-      case 'loading':
+      case 'loading': {
         if ((h.timer = (h.timer ?? 5) - dt) > 0) break;
         from.storage ??= {};
         let room = u.cargo.cap - Object.values(u.cargo.res).reduce((a, v) => a + v, 0);
-        // tankers carry fuel only; trucks carry anything but fuel
-        const kinds = d.fuelOnly
-          ? ['fuel']
-          : h.resType && h.resType !== 'any'
-            ? [h.resType]
-            : (() => {
-                const made = Object.keys(this.defs.b.get(from.def)!.produces ?? {}).find((k) => k !== 'fuel' && (from.storage![k] ?? 0) > 0);
-                return made ? [made] : ['ore', 'metal'];
-              })();
-        for (const k of kinds) {
-          if (room <= 0 || (k === 'fuel' && !d.fuelOnly)) continue;
+        for (const k of this.haulKinds(from, to, d, h.resType)) {
+          if (room <= 0) break;
           const take = Math.min(room, from.storage[k] ?? 0);
           if (take <= 0) continue;
           from.storage[k] -= take;
           u.cargo.res[k] = (u.cargo.res[k] ?? 0) + take;
           room -= take;
         }
-        (h.state = 'to_to'), (h.timer = undefined);
+        // nothing to take yet: wait at the source rather than drive an empty lap
+        if (!Object.values(u.cargo.res).some((v) => v >= 1)) {
+          h.timer = 5;
+          h.waiting = true;
+          break;
+        }
+        (h.state = 'to_to'), (h.timer = undefined), (h.waiting = undefined);
         go(to);
         break;
+      }
       case 'to_to':
-        if (distKm(u.pos, to.pos) <= 3.5 || !u.path.length) (h.state = 'unloading'), (h.timer = 4), (u.path = []);
+        if (distKm(u.pos, to.pos) <= 3.5) (h.state = 'unloading'), (h.timer = 4), (u.path = []);
+        else if (!u.path.length && (u.id + this.world.tick) % 20 === 0) go(to);
         break;
       case 'unloading':
         if ((h.timer = (h.timer ?? 4) - dt) > 0) break;
@@ -1525,7 +1571,9 @@ export class Sim {
       if (u.fuelTo) this.fuelStep(u, d, dt);
 
       // fire discipline: hold = never, return = only once hit, auto = anything in range
-      const canFire = !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
+      if ((u.id + w.tick) % r.tickRate === 0) this.resupply(u, d, 1);
+      // no rounds left, no shooting
+      const canFire = (u.ammo === undefined || u.ammo >= 1) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
 
       // artillery barrage on a chosen area (2 s salvos, 1 km blast, a little scatter)
       let barrage = false;
@@ -1539,7 +1587,8 @@ export class Sim {
             const spread = Math.random() * 0.4;
             const impact = offsetKm(u.bombardTarget, spread * Math.cos(ang), spread * Math.sin(ang));
             this.shots.push({ def: u.def, team: u.team, from: u.pos, to: impact });
-            const dealt = this.blast(u, impact, 1, d.damage * rank.damage * this.fireSupplied(u, d), false);
+            if (u.ammo !== undefined) u.ammo -= 1;
+            const dealt = this.blast(u, impact, 1, d.damage * rank.damage, false);
             u.xp += dealt * r.xpPerDamage;
             this.stat(u.owner).damage += dealt;
             this.rankUp(u);
@@ -1557,11 +1606,13 @@ export class Sim {
           let best = range;
           this.near(this.unitGrid, u.pos, range, (e) => {
             if (e.team === u.team || e.hp <= 0 || e.embarkedIn || Math.abs(e.pos[1] - u.pos[1]) > dLat) return;
-            if (airDamage <= 0 && this.defs.u.get(e.def)!.kind === 'air') return;
+            const air = this.defs.u.get(e.def)!.kind === 'air';
+            // only anti-aircraft weapons engage drones and missiles; anti-aircraft teams engage nothing else
+            if (air ? airDamage <= 0 : d.targets === 'air') return;
             const dist = distKm(u.pos, e.pos);
             if (dist <= best) (best = dist), (tu = e);
           });
-          if (!tu) {
+          if (!tu && d.targets !== 'air') {
             this.near(this.buildingGrid, u.pos, range, (e) => {
               if (e.team === u.team || e.hp <= 0 || Math.abs(e.pos[1] - u.pos[1]) > dLat) return;
               const dist = distKm(u.pos, e.pos);
@@ -1594,11 +1645,14 @@ export class Sim {
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
       if ((tu || tb) && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
-        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1) * this.fireSupplied(u, d);
+        if (u.ammo !== undefined) u.ammo -= 1;
+        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1);
         let dealt: number;
         if (tu) {
-          const air = this.defs.u.get(tu.def)!.kind === 'air';
-          dealt = this.hitUnit(u, tu, base * (air ? d.airDamage ?? r.airDamageDefault : 1));
+          const td = this.defs.u.get(tu.def)!;
+          const air = td.kind === 'air';
+          // fast missiles are hard to hit
+          dealt = air && Math.random() >= (td.interceptChance ?? 1) ? 0 : this.hitUnit(u, tu, base * (air ? d.airDamage ?? r.airDamageDefault : 1));
           this.shots.push({ def: u.def, team: u.team, from: u.pos, to: tu.pos });
         } else {
           dealt = this.hitBuilding(u, tb!, base);
@@ -1617,8 +1671,11 @@ export class Sim {
       } else if (!tu && !tb && canFire && !u.haul && !barrage && !d.minRange) {
         let chase: LngLat | null = null;
         let near = d.vision * 0.7;
+        const airDamage = d.airDamage ?? r.airDamageDefault;
         this.near(this.unitGrid, u.pos, near, (e) => {
           if (e.team === u.team || e.embarkedIn) return;
+          // only close with what it can actually hit
+          if (this.defs.u.get(e.def)!.kind === 'air' ? airDamage <= 0 : d.targets === 'air') return;
           const dist = distKm(u.pos, e.pos);
           if (dist < near) (near = dist), (chase = e.pos);
         });

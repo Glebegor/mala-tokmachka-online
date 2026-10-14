@@ -4,7 +4,7 @@
     "name": "Military Base (HQ)",
     "category": "military",
     "icon": "⌖",
-    "description": "Command centre and barracks: trains infantry of every kind, tanks and artillery, earns a little money and backs the front. Metal and fuel for training are taken from its own store (deliver more by truck). Lose all your bases and you are out.",
+    "description": "Command centre and barracks: trains infantry of every kind (including MANPADS teams), tanks and artillery, earns a little money and backs the front. Metal and fuel for training are taken from its own store (deliver more by truck). Lose all your bases and you are out. Units within 8 km refill their ammunition from its store.",
     "cost": {
       "money": 900,
       "metal": 60
@@ -20,10 +20,15 @@
       "infantry_recon",
       "infantry_assault",
       "infantry_at",
+      "manpads",
       "tank",
       "artillery"
     ],
-    "maxPerPlayer": 3
+    "maxPerPlayer": 3,
+    "supply": {
+      "radiusKm": 8,
+      "rounds": 5
+    }
   },
   {
     "id": "power_plant",
@@ -329,7 +334,7 @@
     "name": "Anti-Air Station",
     "category": "military",
     "icon": "⟁",
-    "description": "Shoots down enemy drones and aircraft within 14 km. Ground weapons do little damage to air targets. Uses energy.",
+    "description": "Shoots down enemy drones and missiles within 14 km. Only anti-air stations and MANPADS teams can engage aircraft; other troops cannot. Uses energy.",
     "cost": {
       "money": 320,
       "metal": 35
@@ -354,7 +359,7 @@
     "name": "Training Centre",
     "category": "military",
     "icon": "⚑",
-    "description": "Send ground units inside (select them, right click the centre). With at least 3 inside you can pay for a course: after the wait they come out one rank higher and at full strength. Holds 12.",
+    "description": "Send ground units inside (select them, right click the centre). With at least 3 inside you can pay for a course: after the wait they come out one rank higher and at full strength. A course to Regular takes 75 s, every rank above that 45 s more. Recruits can always be trained; from the second rank on a unit needs at least one kill since its last course. Holds 12.",
     "cost": {
       "money": 450,
       "metal": 20
@@ -369,8 +374,8 @@
     "training": {
       "minUnits": 3,
       "capacity": 12,
-      "baseTime": 25,
-      "timePerRank": 12
+      "baseTime": 30,
+      "timePerRank": 45
     }
   },
   {
@@ -423,7 +428,7 @@
     "name": "Ammo Depot",
     "category": "military",
     "icon": "⊞",
-    "description": "Field ammunition store (6,000). While it holds ammo, every friendly unit within 15 km deals 30% more damage; each shot uses 1 ammo (artillery 4). Can be set up inside your grey zones, even behind the enemy line, and stands as long as the grey zone does. Keep it stocked by truck from an ammo factory.",
+    "description": "Field ammunition store (6,000). Your units within 15 km refill their rounds from it (up to 10 a second each; a tank shell costs 4 ammo, an artillery shell 6, an anti-tank missile 3). Can be set up inside your grey zones, even behind the enemy line, and stands as long as the grey zone does. Keep it stocked by truck from an ammo factory.",
     "cost": {
       "money": 180,
       "metal": 15
@@ -436,8 +441,7 @@
     "buildInGrey": true,
     "supply": {
       "radiusKm": 15,
-      "damageMult": 1.3,
-      "perShot": 1
+      "rounds": 10
     }
   },
   {

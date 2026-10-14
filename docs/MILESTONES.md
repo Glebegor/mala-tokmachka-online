@@ -153,6 +153,24 @@ Everything from the akira branch now runs on hlib's core:
   grey zones, even behind the enemy line, and stand as long as the zone does.
 - Bots: at most 6 of each field work, train before they build, run supply trucks (ammo routes too).
 
+## M7.3 — DeepState map, ammo, anti-air (v0.11.0)
+- **Colours by nation**: your own units in your nation's colour (Ukraine blue, Russia red), allies green, the enemy in
+  theirs, whichever side you play.
+- **Empty matches close**: a match nobody has been connected to for 60 s is removed, and the lobby drops its room.
+- **DeepState-style territory**: free ground is no longer tinted. Ground the front passes over turns grey; once no enemy
+  ground troops have been within 3 km of it for 30 s, a Ukrainian gain turns blue (liberated) and a Russian one plain
+  occupied. Drawn as smooth outlined areas traced from the grid.
+- **Ammunition**: every armed unit carries rounds (infantry 150, recon 100, assault 120, anti-tank 12 missiles, pickup 200,
+  tank 40 shells, artillery 30 shells, MANPADS 6 missiles); with none left it cannot fire. Units near an ammo depot (15 km)
+  or their base (8 km) refill from its store (a tank shell costs 4 ammo, an artillery shell 6, a missile 3–8).
+- **Anti-air**: only anti-air stations and the new MANPADS team engage drones and missiles; MANPADS cannot hit ground
+  targets. Ballistic missiles are still hard to intercept.
+- **Training centre**: courses take 75 s to Regular and 45 s more per rank; above Recruit a unit needs at least one kill
+  since its last course; ranks are much stronger (Guards ×2.1 damage, ×1.75 health).
+- **Delivery routes fixed**: the cargo type no longer defaults to Ore; routes only carry what the destination takes
+  ("Any cargo" picks it), a truck waits at an empty source instead of driving empty laps, and a truck that loses its way
+  plans again instead of unloading where it stands.
+
 ## M8 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.

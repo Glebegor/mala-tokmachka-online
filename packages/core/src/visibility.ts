@@ -41,7 +41,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
         id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0, level: b.level,
         upgrade: b.team === team && b.upgrade ? { remaining: Math.ceil(b.upgrade.remaining), total: b.upgrade.total } : null,
         course: b.team === team && b.course ? { remaining: Math.ceil(b.course.remaining), total: b.course.total } : null,
-        inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank })) : undefined,
+        inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank, ready: sim.canTrain(u) })) : undefined,
         storage: b.team === team && b.storage ? Object.fromEntries(Object.entries(b.storage).map(([k, v]) => [k, Math.floor(v)])) : undefined,
       })),
     units: w.units
@@ -70,6 +70,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           fireMode: own ? u.fireMode : undefined,
           fuel: own && u.fuel !== undefined ? Math.round(u.fuel) : undefined,
           maxFuel: own ? u.maxFuel : undefined,
+          ammo: own && u.ammo !== undefined ? Math.floor(u.ammo) : undefined,
+          combat: mine ? u.combat ?? 0 : undefined,
           cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers, drones: u.cargo.drones } : undefined,
           haul: own ? u.haul : undefined,
           fuelTo: mine ? u.fuelTo : undefined,
