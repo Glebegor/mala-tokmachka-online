@@ -3,6 +3,7 @@ import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   distKm, distToFrontKm, offsetKm, RoadNetwork, sideOfWithPockets, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
+  SPECIAL_ZONES, isInSpecialZone, isKremenchukRefinery, isAlabugaDroneZone,
 } from '@sw/core';
 import { api, type Session } from './api';
 import { clear, h } from './dom';
@@ -41,6 +42,15 @@ interface Group {
   ids: Set<number>;
 }
 
+function makeCircleCoords(center: LngLat, radiusKm: number, numPoints = 40): LngLat[] {
+  const coords: LngLat[] = [];
+  for (let i = 0; i <= numPoints; i++) {
+    const angle = (i * 2 * Math.PI) / numPoints;
+    coords.push(offsetKm(center, radiusKm * Math.cos(angle), radiusKm * Math.sin(angle)));
+  }
+  return coords;
+}
+
 export function startGame(app: HTMLElement, session: Session, matchId: string, onExit: () => void) {
   const wsUrl = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/ws?token=${encodeURIComponent(session.token)}&match=${encodeURIComponent(matchId)}`;
   const ws = new WebSocket(wsUrl);
@@ -56,6 +66,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let defB = new Map<string, BuildingDef>();
   let defU = new Map<string, UnitDef>();
   let closed = false;
+  let lastPowerLineKey = '';
 
   // ---------- DOM shell ----------
   const mapEl = h('div', { class: 'map' });
@@ -211,7 +222,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets', 'city-schematics', 'smokes']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets', 'city-schematics', 'smokes', 'special-zones', 'power-lines', 'recon-orbits']) map.addSource(id, { type: 'geojson', data: empty() });
 
       // Preload custom drone icons and smoke into MapLibre
       const droneDefs = ['drone_shahed', 'drone_orion', 'drone_liutyi', 'drone_pd2', 'drone_mini_shark', 'drone_fire_point'];
@@ -444,6 +455,160 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         },
       });
 
+      // Special production zones (Kremenchuk Oil Refinery & Alabuga Drone Factory)
+      map.addLayer({
+        id: 'special-zones-fill',
+        type: 'fill',
+        source: 'special-zones',
+        paint: {
+          'fill-color': ['get', 'color'],
+          'fill-opacity': 0.16,
+        },
+      });
+      map.addLayer({
+        id: 'special-zones-glow',
+        type: 'line',
+        source: 'special-zones',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 6,
+          'line-blur': 4,
+          'line-opacity': 0.45,
+        },
+      });
+      map.addLayer({
+        id: 'special-zones-line',
+        type: 'line',
+        source: 'special-zones',
+        paint: {
+          'line-color': ['get', 'color'],
+          'line-width': 2,
+          'line-dasharray': [4, 2],
+          'line-opacity': 0.85,
+        },
+      });
+      map.addLayer({
+        id: 'special-zones-label',
+        type: 'symbol',
+        source: 'special-zones',
+        layout: {
+          'text-field': ['get', 'label'],
+          'text-size': 11,
+          'text-offset': [0, 0],
+          'text-anchor': 'center',
+          'text-allow-overlap': true,
+        },
+        paint: {
+          'text-color': '#f8fafc',
+          'text-halo-color': '#0f172a',
+          'text-halo-width': 2,
+        },
+      });
+
+      const zoneFeatures = SPECIAL_ZONES.map((z) => ({
+        type: 'Feature',
+        properties: {
+          id: z.id,
+          name: z.name,
+          side: z.side,
+          color: z.color,
+          bonusTitle: z.bonusTitle,
+          bonusDesc: z.bonusDesc,
+          label: `${z.name}\n(${z.side === 'ua' ? 'Бонус x2 топлива' : 'Бонус x2 БПЛА'})`,
+        },
+        geometry: {
+          type: 'Polygon',
+          coordinates: [z.polygon],
+        },
+      }));
+      (map.getSource('special-zones') as GeoJSONSource)?.setData({
+        type: 'FeatureCollection',
+        features: zoneFeatures,
+      });
+
+      let zonePopup: maplibregl.Popup | null = null;
+      map.on('mouseenter', 'special-zones-fill', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const f = e.features?.[0];
+        if (!f?.properties) return;
+        const name = f.properties.name;
+        const title = f.properties.bonusTitle;
+        const desc = f.properties.bonusDesc;
+        if (!zonePopup) {
+          zonePopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12 });
+        }
+        zonePopup
+          .setLngLat(e.lngLat)
+          .setHTML(`<div style="font-family:sans-serif;max-width:240px;line-height:1.3;padding:2px 4px;">
+            <div style="font-weight:bold;color:#38bdf8;font-size:13px;margin-bottom:3px;">${name}</div>
+            <div style="font-weight:600;color:#facc15;font-size:11px;margin-bottom:4px;">${title}</div>
+            <div style="font-size:11px;color:#cbd5e1;">${desc}</div>
+          </div>`)
+          .addTo(map);
+      });
+      map.on('mousemove', 'special-zones-fill', (e) => {
+        if (zonePopup) zonePopup.setLngLat(e.lngLat);
+      });
+      map.on('mouseleave', 'special-zones-fill', () => {
+        map.getCanvas().style.cursor = '';
+        if (zonePopup) {
+          zonePopup.remove();
+          zonePopup = null;
+        }
+      });
+
+      // Power lines along roads
+      map.addLayer({
+        id: 'power-lines-glow',
+        type: 'line',
+        source: 'power-lines',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#38bdf8',
+          'line-width': 4.5,
+          'line-blur': 3,
+          'line-opacity': 0.45,
+        },
+      });
+      map.addLayer({
+        id: 'power-lines-line',
+        type: 'line',
+        source: 'power-lines',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#7dd3fc',
+          'line-width': 1.6,
+          'line-dasharray': [3, 2],
+          'line-opacity': 0.85,
+        },
+      });
+
+      // Recon drone loitering orbits
+      map.addLayer({
+        id: 'recon-orbits-glow',
+        type: 'line',
+        source: 'recon-orbits',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#10b981',
+          'line-width': 5,
+          'line-blur': 4,
+          'line-opacity': 0.45,
+        },
+      });
+      map.addLayer({
+        id: 'recon-orbits-line',
+        type: 'line',
+        source: 'recon-orbits',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#a7f3d0',
+          'line-width': 1.8,
+          'line-dasharray': [4, 2],
+          'line-opacity': 0.9,
+        },
+      });
+
       for (const cp of init!.map.capturePoints) {
         const el = h('div', { class: `cp val-${cp.value}` + (cp.value >= 3 ? ' cp-major' : ' cp-minor') }, h('i', {}), h('span', {}, cp.name));
         new maplibregl.Marker({ element: el }).setLngLat(cp.pos).addTo(map);
@@ -517,7 +682,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         return;
       }
       if (placing) return cancelPlacing();
-      if (selUnits.size) send({ type: 'move', units: [...selUnits], to: [e.lngLat.lng, e.lngLat.lat], cohesion: formation && selUnits.size > 1 });
+      const isShift = !!e.originalEvent?.shiftKey;
+      if (selUnits.size) send({ type: 'move', units: [...selUnits], to: [e.lngLat.lng, e.lngLat.lat], cohesion: formation && selUnits.size > 1, append: isShift });
     });
     window.addEventListener('keydown', onKey);
 
@@ -733,7 +899,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
     const road = roads?.isNear(p, init.ruleset.rules.roadAccessKm);
     const bonus = Math.round((init.ruleset.rules.roadOutputMult - 1) * 100);
-    hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''} (Shift keeps placing, Esc cancels)`;
+    let specialBonus = '';
+    if (placing.id === 'oil_refinery' && isKremenchukRefinery(p)) {
+      specialBonus = ' · ★ БОНУС КРЕМЕНЧУГА: x2 к производству топлива!';
+    } else if (placing.id === 'drone_factory' && isAlabugaDroneZone(p)) {
+      specialBonus = ' · ★ БОНУС ОЭЗ «АЛАБУГА»: x2 к скорости производства дронов!';
+    }
+    hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''}${specialBonus} (Shift keeps placing, Esc cancels)`;
   }
 
   // ---------- UI ----------
@@ -858,6 +1030,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           h('div', { class: 'stat' }, `HP ${b.hp}/${d.hp}`),
         );
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
+        const hasPower = snap.buildings.some((o) => o.team === b.team && o.progress >= 1 && o.def === 'power_plant' && distKm(o.pos, b.pos) <= 100);
+        if (hasPower) {
+          side.append(h('div', { class: 'stat', style: { color: '#38bdf8' } }, '⚡ Электросеть: +25% к скорости производства'));
+        }
+        if (b.def === 'oil_refinery' && isKremenchukRefinery(b.pos)) {
+          side.append(h('div', { class: 'stat', style: { color: '#06b6d4', fontWeight: 'bold' } }, '★ Бонус Кременчугского НПЗ: x2 к производству топлива!'));
+        }
+        if (b.def === 'drone_factory' && isAlabugaDroneZone(b.pos)) {
+          side.append(h('div', { class: 'stat', style: { color: '#f59e0b', fontWeight: 'bold' } }, '★ Бонус ОЭЗ «Алабуга»: x2 к скорости производства БПЛА!'));
+        }
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
 
         // Building local storage
@@ -1086,20 +1268,26 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (hasNonDrones) {
       const isSprinting = selectedList.some((u) => u.sprint);
       const staminaUnits = selectedList.filter((u) => u.stamina !== undefined);
-      const avgStamina = staminaUnits.reduce((acc, u) => acc + (u.stamina ?? 100), 0) / (staminaUnits.length || 1);
+      const hasStamina = staminaUnits.length > 0;
+      const isAllVehicles = selectedList.every((u) => u.stamina === undefined && u.fuel !== undefined);
 
       sprintBtn = h('button', {
         class: 'hud-btn sprint-btn' + (isSprinting ? ' active' : ''),
-        title: 'Ускорение x2 (тратит стамину за 60с, восст. 3 мин. У техники расход топлива x1.5)',
+        title: isAllVehicles
+          ? 'Ускорение x2 (расход топлива x1.5, действует пока не выключите)'
+          : 'Ускорение x2 (для пехоты тратит стамину, для техники расход топлива x1.5)',
         onClick: () => send({ type: 'sprint', units: [...selUnits], active: !isSprinting })
       }, `⚡ Быстрее (${isSprinting ? 'ВКЛ' : 'ВЫКЛ'})`);
 
-      staminaMeter = h('div', { class: 'meter-wrap', title: 'Запас стамины: 60с бега, 180с восстановления' },
-        h('div', { class: 'meter-label' }, h('span', {}, 'Стамина'), h('span', {}, `${Math.round(avgStamina)}%`)),
-        h('div', { class: 'meter-bar' },
-          h('div', { class: 'meter-fill stamina', style: { width: `${Math.max(0, Math.min(100, avgStamina))}%` } })
-        )
-      );
+      if (hasStamina) {
+        const avgStamina = staminaUnits.reduce((acc, u) => acc + (u.stamina ?? 100), 0) / (staminaUnits.length || 1);
+        staminaMeter = h('div', { class: 'meter-wrap', title: 'Запас стамины пехоты: 60с бега, 180с восстановления' },
+          h('div', { class: 'meter-label' }, h('span', {}, 'Стамина'), h('span', {}, `${Math.round(avgStamina)}%`)),
+          h('div', { class: 'meter-bar' },
+            h('div', { class: 'meter-fill stamina', style: { width: `${Math.max(0, Math.min(100, avgStamina))}%` } })
+          )
+        );
+      }
     }
 
     // 5. Fuel meter & Refuel button for vehicles
@@ -1466,7 +1654,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!init || !snap || !mapReady) return;
     const features: any[] = [];
     for (const u of snap.units) {
-      if (!selUnits.has(u.id) || !u.target) continue;
+      if (!selUnits.has(u.id)) continue;
+      if (u.loiterCenter && u.loiterRadius) {
+        features.push({
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates: makeCircleCoords(u.loiterCenter, u.loiterRadius) },
+        });
+      }
+      if (!u.target) continue;
       const p = curPos(u);
       let coords: LngLat[];
       if (u.path && u.path.length > 0) {
@@ -1569,6 +1765,63 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         type: 'FeatureCollection',
         features: smokeFeatures,
       });
+    }
+
+    // Recon drone circular orbits
+    if (map.getSource('recon-orbits')) {
+      const orbitFeatures: any[] = [];
+      for (const u of snap.units) {
+        if (u.team === myTeam && u.loiterCenter && u.loiterRadius) {
+          orbitFeatures.push({
+            type: 'Feature',
+            properties: { id: u.id },
+            geometry: {
+              type: 'LineString',
+              coordinates: makeCircleCoords(u.loiterCenter, u.loiterRadius),
+            },
+          });
+        }
+      }
+      (map.getSource('recon-orbits') as GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: orbitFeatures,
+      });
+    }
+
+    // Power lines along roads connecting power plants to buildings <= 100km
+    if (map.getSource('power-lines')) {
+      const powerPlants = snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1 && b.def === 'power_plant');
+      const pKey = powerPlants.map((p) => p.id).sort().join(',') + '|' + snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1).map((b) => `${b.id}:${b.pos[0].toFixed(3)},${b.pos[1].toFixed(3)}`).sort().join(';');
+      if (pKey !== lastPowerLineKey) {
+        lastPowerLineKey = pKey;
+        const powerLineFeatures: any[] = [];
+        if (powerPlants.length > 0) {
+          const friendlyBuildings = snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1 && b.def !== 'power_plant');
+          for (const pp of powerPlants) {
+            for (const b of friendlyBuildings) {
+              const d = distKm(pp.pos, b.pos);
+              if (d <= 100) {
+                let coords: LngLat[];
+                if (roads) {
+                  const r = roads.route(pp.pos, b.pos, 1.0, 30);
+                  coords = r.length > 0 ? [pp.pos, ...r, b.pos] : [pp.pos, b.pos];
+                } else {
+                  coords = [pp.pos, b.pos];
+                }
+                powerLineFeatures.push({
+                  type: 'Feature',
+                  properties: { from: pp.id, to: b.id },
+                  geometry: { type: 'LineString', coordinates: coords },
+                });
+              }
+            }
+          }
+        }
+        (map.getSource('power-lines') as GeoJSONSource).setData({
+          type: 'FeatureCollection',
+          features: powerLineFeatures,
+        });
+      }
     }
 
     // buildings → DOM markers with construction animation
