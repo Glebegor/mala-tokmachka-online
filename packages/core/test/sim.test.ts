@@ -26,8 +26,11 @@ function report(t: number) {
   const moving = w.units.filter((u) => u.path.length).length;
   const transport = w.units.filter((u) => u.transport).length;
   const school = w.buildings.reduce((a, b) => a + b.inside.length, 0);
+  const kinds = [...new Set(w.buildings.map((b) => b.def))].length;
+  const hauling = w.units.filter((u) => u.haul).length;
+  const drones = w.units.filter((u) => sim.defs.u.get(u.def)!.kind === 'air').length;
   const ranks = [0, 1, 2, 3, 4].map((r) => w.units.filter((u) => u.rank === r).length).join('/');
-  console.log(`t=${t.toFixed(0)}s buildings=${w.buildings.length} units=${w.units.length} nodes=${w.front.length} avgFrontShift=${shift.toFixed(1)}km moving=${moving} transport=${transport} inSchool=${school} inRiver=${wet} shots=${shots} ranks=${ranks} points=${w.points.map((p) => p.owner).join('')} scores=${w.scores.map(Math.round)} winner=${w.winner} ${w.winReason ?? ''}`);
+  console.log(`t=${t.toFixed(0)}s buildings=${w.buildings.length} units=${w.units.length} nodes=${w.front.length} avgFrontShift=${shift.toFixed(1)}km moving=${moving} transport=${transport} inSchool=${school} buildingKinds=${kinds} hauling=${hauling} drones=${drones} smokes=${w.smokes.length} inRiver=${wet} shots=${shots} ranks=${ranks} points=${w.points.map((p) => p.owner).join('')} scores=${w.scores.map(Math.round)} winner=${w.winner} ${w.winReason ?? ''}`);
 }
 console.log(`wall ${Date.now() - t0}ms`);
 const bad = sim.world.players.some((p) => Object.values(p.res).some((v) => !Number.isFinite(v) || v < 0));

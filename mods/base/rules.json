@@ -4,5 +4,12 @@
   "frontMaxSpeed": 0.11,
   "frontNodeSpacingKm": 9,
   "xpPerKill": 25,
-  "startUnits": ["infantry", "infantry", "infantry", "infantry", "drone"]
+  "startUnits": [
+    "infantry",
+    "infantry",
+    "infantry",
+    "infantry",
+    "drone"
+  ],
+  "minBuildSpacing": 35
 }

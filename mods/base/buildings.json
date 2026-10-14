@@ -1,10 +1,10 @@
 [
   {
     "id": "hq",
-    "name": "Headquarters",
+    "name": "Military Base (HQ)",
     "category": "military",
     "icon": "⌖",
-    "description": "Command centre. Trains every unit type, earns a little money and feeds the abstract war along the front. Lose all your HQs and you are out.",
+    "description": "Command centre and barracks: trains infantry of every kind, tanks and artillery, earns a little money and backs the front. Metal and fuel for training are taken from its own store (deliver more by truck). Lose all your bases and you are out.",
     "cost": {
       "money": 900,
       "metal": 60
@@ -14,10 +14,12 @@
     "produces": {
       "money": 1.0
     },
-    "vision": 10,
+    "vision": 15,
     "trains": [
       "infantry",
-      "drone",
+      "infantry_recon",
+      "infantry_assault",
+      "infantry_at",
       "tank",
       "artillery"
     ],
@@ -28,7 +30,7 @@
     "name": "Power Plant",
     "category": "civil",
     "icon": "ϟ",
-    "description": "Generates energy. Every other building draws on it; when the grid runs dry, production drops to 40%.",
+    "description": "Generates energy for your side's grid. Every building within 100 km of a power plant works 25% faster (housing earns 50% more). Select it to see its power lines.",
     "cost": {
       "money": 300
     },
@@ -44,12 +46,12 @@
     "name": "Housing Block",
     "category": "civil",
     "icon": "▥",
-    "description": "Citizens pay taxes (money) and enlist (people). People are spent on infantry and trenches.",
+    "description": "Only inside a city your side holds, at most 10 per city. Citizens pay taxes (money) and enlist (people), shared between teammates. 50% more income on the power grid.",
     "cost": {
       "money": 200
     },
     "buildTime": 10,
-    "hp": 300,
+    "hp": 500,
     "produces": {
       "money": 0.8,
       "people": 0.12
@@ -64,7 +66,7 @@
     "name": "Ore Mine",
     "category": "civil",
     "icon": "◭",
-    "description": "Extracts raw ore for the metal works. Uses energy.",
+    "description": "Extracts ore into its own store. Truck the ore to a metal works.",
     "cost": {
       "money": 250
     },
@@ -83,7 +85,7 @@
     "name": "Metal Works",
     "category": "civil",
     "icon": "❖",
-    "description": "Smelts ore into metal, needed for tanks, artillery, bunkers and most war buildings. Uses ore and energy.",
+    "description": "Smelts ore into metal. Needs ore delivered into its store by truck; the metal it makes stays on site until trucked away.",
     "cost": {
       "money": 400
     },
@@ -99,23 +101,39 @@
     "vision": 3
   },
   {
-    "id": "gas_station",
-    "name": "Fuel Depot",
+    "id": "oil_refinery",
+    "name": "Oil Refinery",
     "category": "civil",
-    "icon": "⬢",
-    "description": "Produces fuel for tanks and drones. Uses energy.",
+    "icon": "⬣",
+    "description": "Refines fuel (2.5/s) into its tank. Fuel trucks take it to filling stations, airfields and bases. Built in the Kremenchuk zone (Ukraine only) it makes 50% more.",
     "cost": {
-      "money": 280
+      "money": 450,
+      "metal": 35
     },
-    "buildTime": 12,
-    "hp": 300,
+    "buildTime": 16,
+    "hp": 550,
     "produces": {
-      "fuel": 0.8
+      "fuel": 2.5
     },
     "consumes": {
-      "energy": 1
+      "energy": 2.0
     },
-    "vision": 3
+    "vision": 4
+  },
+  {
+    "id": "gas_station",
+    "name": "Filling Station",
+    "category": "civil",
+    "icon": "⬢",
+    "description": "Fuel depot (20,000). Vehicles within 8 km refuel here automatically; keep it supplied with a fuel truck. Never shown to the enemy.",
+    "cost": {
+      "money": 220,
+      "metal": 15
+    },
+    "buildTime": 10,
+    "hp": 350,
+    "storageCap": 20000,
+    "vision": 4
   },
   {
     "id": "rail_station",
@@ -137,6 +155,40 @@
       "outputMult": 1.25
     },
     "vision": 5
+  },
+  {
+    "id": "machine_factory",
+    "name": "Machine Factory",
+    "category": "civil",
+    "icon": "⚙",
+    "description": "Builds pickups, trucks, fuel trucks and rescue crews. Metal and fuel come from its own store.",
+    "cost": {
+      "money": 500,
+      "metal": 40
+    },
+    "buildTime": 18,
+    "hp": 600,
+    "vision": 5,
+    "trains": [
+      "pickup",
+      "truck",
+      "fuel_truck",
+      "rescuers"
+    ]
+  },
+  {
+    "id": "warehouse",
+    "name": "Warehouse",
+    "category": "civil",
+    "icon": "▦",
+    "description": "Stores metal, fuel and ore (up to 30,000 each) as a hub for delivery routes.",
+    "cost": {
+      "money": 280,
+      "metal": 20
+    },
+    "buildTime": 12,
+    "hp": 500,
+    "vision": 4
   },
   {
     "id": "trench",
@@ -174,7 +226,8 @@
         "defenseMult": 0.55,
         "hp": 650
       }
-    ]
+    ],
+    "fieldWork": true
   },
   {
     "id": "bunker",
@@ -212,7 +265,8 @@
         "defenseMult": 1.1,
         "hp": 2000
       }
-    ]
+    ],
+    "fieldWork": true
   },
   {
     "id": "signal_station",
@@ -229,7 +283,8 @@
     "consumes": {
       "energy": 1.5
     },
-    "vision": 35
+    "vision": 35,
+    "fieldWork": true
   },
   {
     "id": "boat_crossing",
@@ -248,7 +303,8 @@
       "radiusKm": 6,
       "speed": 0.5
     },
-    "needsWaterWithinKm": 3
+    "needsWaterWithinKm": 3,
+    "fieldWork": true
   },
   {
     "id": "antiair",
@@ -272,7 +328,8 @@
       "targets": "air",
       "fx": "missile",
       "missRate": 0.25
-    }
+    },
+    "fieldWork": true
   },
   {
     "id": "training_center",
@@ -297,5 +354,71 @@
       "baseTime": 25,
       "timePerRank": 12
     }
+  },
+  {
+    "id": "drone_factory",
+    "name": "Drone Factory",
+    "category": "military",
+    "icon": "✣",
+    "description": "Builds your side's drones: strike drones that dive on a target and explode, and recon drones that circle an area. Built in the Alabuga zone (Russia only) it works 50% faster.",
+    "cost": {
+      "money": 650,
+      "metal": 45
+    },
+    "buildTime": 22,
+    "hp": 800,
+    "vision": 6,
+    "trains": [
+      "drone_shahed",
+      "drone_orion",
+      "drone_liutyi",
+      "drone_pd2",
+      "drone_mini_shark",
+      "drone_fire_point"
+    ]
+  },
+  {
+    "id": "missile_factory",
+    "name": "Missile Factory",
+    "category": "military",
+    "icon": "⇑",
+    "description": "Missile production line. Missiles are not in the game yet: this site is ready for a coming update.",
+    "cost": {
+      "money": 850,
+      "metal": 75
+    },
+    "buildTime": 28,
+    "hp": 1100,
+    "vision": 6
+  },
+  {
+    "id": "airfield",
+    "name": "Airfield",
+    "category": "military",
+    "icon": "✈",
+    "description": "Base for recon drones: they refuel here (within 12 km) from its fuel tank (20,000). Sees 25 km.",
+    "cost": {
+      "money": 900,
+      "metal": 50
+    },
+    "buildTime": 30,
+    "hp": 1200,
+    "storageCap": 20000,
+    "vision": 25
+  },
+  {
+    "id": "aircraft_plant",
+    "name": "Aircraft Plant",
+    "category": "military",
+    "icon": "⛭",
+    "description": "Factory for manned aircraft and helicopters. Not in the game yet: this site is ready for a coming update.",
+    "cost": {
+      "money": 850,
+      "metal": 70
+    },
+    "buildTime": 26,
+    "hp": 1100,
+    "vision": 8,
+    "trains": []
   }
 ]

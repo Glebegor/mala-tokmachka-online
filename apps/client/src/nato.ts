@@ -143,6 +143,18 @@ export function drawNato(spec: NatoSpec): ImageData {
       line(9, -4, 9, 4);
       line(0, -4, 0, 4);
       break;
+    case 'motorized':
+      line(-dx, -dy, dx, dy);
+      line(-dx, dy, dx, -dy);
+      line(0, -hh, 0, hh);
+      break;
+    case 'fuel':
+      g.beginPath();
+      g.moveTo(cx, cy - 7);
+      g.quadraticCurveTo(cx + 6, cy + 1, cx, cy + 6);
+      g.quadraticCurveTo(cx - 6, cy + 1, cx, cy - 7);
+      g.fill();
+      break;
     case 'supply':
       line(-hw, hh - 7, hw, hh - 7);
       break;

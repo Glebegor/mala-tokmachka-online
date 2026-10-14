@@ -36,6 +36,10 @@ Dependencies point inward: interface → application → domain; infrastructure 
 - **Terrain** (`terrain.ts`): run-length-encoded grid aligned with Web Mercator. Terrain definitions are mod data.
 - **Cauldrons** (`findPinch`, `Sim.pinch`, `Sim.collapsePockets`): `world.pockets` holds closed rings cut from the main
   line when its jaws meet. `Sim.side()` checks pockets before the main line. Pocket rings move by the same force rule.
+- **Logistics** (`Sim.economy`, `Sim.haulStep`): building `storage` holds goods; trucks with a `haul` loop between two
+  buildings. `Sim.train` charges treasury costs (money, people) to the player and material costs to the building.
+- **Spatial index** (`Sim.indexWorld`, `Sim.near`): units and buildings are bucketed per tick so targeting, spotting and
+  front forces only look at nearby objects.
 - **Combat**: nearest enemy in range, one salvo per second; cover (terrain) and fortifications reduce damage.
   Every salvo is also reported as a `Shot` for client animation. Damage and kills give XP; ranks multiply damage/HP/range.
 - **Economy**: money, energy, people (+ ore, metal, fuel from the base mod). Energy deficit slows production; rail hubs and

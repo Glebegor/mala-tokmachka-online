@@ -122,7 +122,12 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
             h('div', { class: 'room' },
               h('span', {}, r.name),
               h('span', { class: 'muted' }, `${r.slots.filter((x) => !x.bot).length} players · ${r.settings.teamSize}v${r.settings.teamSize} · ${r.status}`),
-              h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, r.status === 'open' ? 'Join' : 'Rejoin'),
+              // a running match can only be re-entered by someone who was in it when it started
+              r.status === 'open'
+                ? h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, 'Join')
+                : r.slots.some((x) => x.id === s.user.id)
+                  ? h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, 'Rejoin')
+                  : h('span', { class: 'muted' }, 'in progress'),
             ),
           ),
         ),

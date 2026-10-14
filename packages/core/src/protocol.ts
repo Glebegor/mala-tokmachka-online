@@ -3,7 +3,7 @@ import type { MapDef, Ruleset } from './defs';
 import type { BuildingView, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
 
 /** `ready`: the client has drawn the map; the start countdown waits for it. */
-export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' } | { t: 'ready' };
+export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' } | { t: 'ready' } | { t: 'powerLines'; building: number };
 
 export interface InitMsg {
   t: 'init';
@@ -29,6 +29,8 @@ export interface SnapMsg {
   /** Shots fired since the previous snapshot (animation only). */
   shots: Shot[];
   front: FrontNode[];
+  /** Strike craters still smoking. */
+  smokes: { id: number; pos: [number, number]; expiresAt: number }[];
   /** Grey zones: contested patches behind the front. */
   grey: { team: Team; pos: [number, number]; r: number }[];
   /** Cauldrons: closed rings around cut-off territory. */
@@ -44,7 +46,9 @@ export type ServerMsg =
   | { t: 'end'; winner: Team | null; reason: string }
   | { t: 'error'; reason: string }
   | { t: 'toast'; text: string }
-  | { t: 'pong' };
+  | { t: 'pong' }
+  /** Power lines (along roads) from a power plant to the buildings it feeds, or to a consumer from its plant. */
+  | { t: 'powerLines'; building: number; lines: [number, number][][] };
 
 export interface RoomSlot {
   id: string;

@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, distKm, distToFrontKm, offsetKm, pointInRing, RoadIndex, TerrainGrid,
+  DEBUFFS, distKm, distToFrontKm, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -9,6 +9,8 @@ import { clear, h } from './dom';
 import { ShotFx } from './fx';
 import { iconHtml, STATUS, statusIconHtml } from './icons';
 import { FrontArrows } from './arrows';
+import { FogOverlay } from './fog';
+import { renderUnitHud, type Pickers } from './unitHud';
 import { drawNato, echelonFor, natoId, parseNatoId } from './nato';
 
 /**
@@ -43,7 +45,7 @@ const STYLE: maplibregl.StyleSpecification = {
 const TEAM_COLOR = ['#3d8bff', '#ff4d4d'];
 const TEAM_NAME = ['UKRAINE', 'RUSSIA'];
 const GROUP_ZOOM = 8; // below this zoom a group is drawn as one formation marker
-const HINT = 'Click: select · Shift+drag: box · Right click: move (Shift: add waypoint, Alt: off-road) · G: group · T: terrain';
+const HINT = 'Click: select · Shift+drag: box · Right click: move (Shift: waypoint, Alt: off-road) · G: group · T: terrain · M: map';
 
 type Fc = { type: 'FeatureCollection'; features: any[] };
 const empty = (): Fc => ({ type: 'FeatureCollection', features: [] });
@@ -65,6 +67,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let mapReady = false;
   let fx: ShotFx | null = null;
   let arrows: FrontArrows | null = null;
+  let fog: FogOverlay | null = null;
+  /** Click modes for delivery routes and artillery barrages. */
+  const pick: Pickers = { route: null, bombard: null };
+  /** City boundaries per capture point (housing may only go inside a held city). */
+  const cityPolys = new Map<string, LngLat[][]>();
+  /** Smoothly interpolated unit positions between 5 Hz snapshots. */
+  const unitPos = new Map<number, LngLat>();
+  const posOf = (u: { id: number; pos: LngLat }): LngLat => unitPos.get(u.id) ?? u.pos;
+  const droneBearing = new Map<number, { b: number; v: number }>();
   let terrain: TerrainGrid | null = null;
   let roads: RoadIndex | null = null;
   let defB = new Map<string, BuildingDef>();
@@ -85,11 +96,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const boxEl = h('div', { class: 'selbox' });
   const countEl = h('div', { class: 'countdown' });
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
+  const basemapBtn = h('button', { class: 'ghost', title: 'Hide or show the real map underneath (M)', onClick: () => toggleBasemap() }, 'Map: ON');
+  const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
+  const routeBanner = h('div', { class: 'route-banner', style: { display: 'none' } });
   const leave = () => {
     closed = true;
     ws.close();
     fx?.destroy();
     arrows?.destroy();
+    fog?.destroy();
     card.remove();
     window.removeEventListener('keydown', onKey);
     window.removeEventListener('mousemove', onBoxMove);
@@ -99,8 +114,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   };
   app.append(
     h('div', { class: 'game' }, mapEl,
-      h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
-      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl),
+      h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner),
   );
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
@@ -150,16 +165,25 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.attack) f.push(`Hits ${d.attack.targets} targets: ${d.attack.damage} dmg/s, ${d.attack.range} km`);
     if (d.crossing) f.push(`River crossing within ${d.crossing.radiusKm} km`);
     if (d.training) f.push(`Courses for ${d.training.minUnits}–${d.training.capacity} units, ${d.training.baseTime + d.training.timePerRank}s and up`);
-    if (d.trains?.length) f.push(`Trains ${d.trains.map((u) => defU.get(u)?.name ?? u).join(', ')}`);
+    if (d.trains?.length) f.push(`Trains ${d.trains.filter((u) => !defU.get(u)?.side || defU.get(u)?.side === (init?.team === 0 ? 'ua' : 'ru')).map((u) => defU.get(u)?.name ?? u).join(', ')}`);
+    if (d.storageCap) f.push(`Store ${d.storageCap.toLocaleString('en-US')}`);
+    if (!d.fieldWork && d.id !== 'housing') f.push(`Needs ${init?.ruleset.rules.minBuildSpacing ?? 35} km from other sites`);
     if (d.vision) f.push(`Sees ${d.vision} km`);
     if (d.maxPerPlayer) f.push(`Limit ${d.maxPerPlayer} per player`);
     return f;
   }
   function unitFacts(u: UnitDef): string[] {
     const air = u.airDamage ?? init?.ruleset.rules.airDamageDefault ?? 0.25;
+    const extra: string[] = [];
+    if (u.minRange) extra.push(`Indirect fire ${u.minRange}–${u.range} km, needs a spotter`);
+    if (u.cargoCap) extra.push(`${u.fuelOnly ? 'Fuel tank' : 'Cargo'} ${u.cargoCap}${u.passengerCap ? ` · carries ${u.passengerCap} infantry` : ''}`);
+    if (u.maxFuel) extra.push(`Fuel tank ${u.maxFuel}${u.droneType === 'strike' ? ' (one way)' : ''}`);
+    if (u.droneType) extra.push(u.droneType === 'strike' ? `Explodes on its target (${u.damage} damage, 1.8 km blast)` : 'Circles its area, refuels at an airfield');
+    if (u.side) extra.push(`${u.side === 'ua' ? 'Ukraine' : 'Russia'} only`);
     return [
+      ...extra,
       `${u.hp} HP · ${u.damage} dmg/s · range ${u.range} km`,
-      `Speed ${Math.round(u.speed * 3600)} km/h game time${u.kind === 'air' ? ' (flies)' : ` · ${u.mobility ?? 'foot'}`}`,
+      `Speed ${(u.speed * 60).toFixed(1)} km/min${u.kind === 'air' ? ' (flies)' : ` · ${u.mobility ?? 'foot'}, ×${init?.ruleset.rules.roadSpeedMult ?? 1} on roads`}`,
       `Sees ${u.vision} km · ${air ? `${Math.round(air * 100)}% damage vs aircraft` : 'cannot hit aircraft'}`,
       `Training ${u.trainTime}s`,
     ];
@@ -189,6 +213,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         for (const t of msg.ruleset.terrain) if (t.barrier) barriers[t.id] = t.barrier.minCells;
         terrain = msg.map.terrain ? new TerrainGrid(msg.map.terrain, barriers) : null;
         roads = msg.map.roads?.length ? new RoadIndex(msg.map.roads) : null;
+        cityPolys.clear();
+        for (const f of msg.map.cities?.features ?? []) {
+          const id = f.properties?.cityId ?? f.properties?.id;
+          const rings: LngLat[][] = f.geometry?.type === 'Polygon' ? [f.geometry.coordinates[0]] : f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates.map((x: any) => x[0]) : [];
+          if (id) for (const r of rings) if (r?.length >= 3) cityPolys.set(id, [...(cityPolys.get(id) ?? []), r]);
+        }
         document.getElementById('mod-theme')!.textContent = msg.ruleset.themes.map((t) => t.css).join('\n');
         terrainBtn.style.display = terrain ? '' : 'none';
         buildMap();
@@ -203,6 +233,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         break;
       case 'error':
         toast(msg.reason, true);
+        break;
+      case 'powerLines':
+        if (mapReady && msg.building === selBuilding) {
+          (map.getSource('power-lines') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: msg.lines.map((l) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: l } })) } as any);
+        }
         break;
       case 'end': {
         finished = true;
@@ -224,7 +259,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (closed) return;
     // the match no longer exists on the server (finished or restarted): leaving must not offer a rejoin
     if (!init) finished = true;
-    hint.textContent = init ? 'Disconnected from server.' : 'This match is no longer running. Press Leave.';
+    hint.textContent = '';
+    app.append(h('div', { class: 'overlay' }, h('div', { class: 'card' },
+      h('h2', {}, 'DISCONNECTED'),
+      h('p', { class: 'muted' }, init ? 'The connection to the match was lost. You can rejoin from the lobby.' : 'This match is no longer running.'),
+      h('button', { class: 'primary', onClick: leave }, 'Back to lobby'))));
   };
 
   // ---------- map ----------
@@ -249,11 +288,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('styleimagemissing', (e) => {
       if (map.hasImage(e.id)) return;
       const spec = parseNatoId(e.id);
-      if (spec) map.addImage(e.id, drawNato(spec), { pixelRatio: 2 });
+      if (spec) return void map.addImage(e.id, drawNato(spec), { pixelRatio: 2 });
+      // drone sprites (side-specific, from the akira branch) and strike smoke
+      const src = e.id.startsWith('drone|') ? (() => { const [, def, side, sel] = e.id.split('|'); return `/drones/${def}_${side}${sel === '1' ? '_sel' : ''}.png`; })() : e.id === 'smoke' ? '/drones/smoke.png' : null;
+      if (!src) return;
+      const img = new Image();
+      img.onload = () => !map.hasImage(e.id) && map.addImage(e.id, img, { pixelRatio: 2 });
+      img.src = src;
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -305,6 +350,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       // occupied ground also gets fine diagonal hatching, like on printed situation maps
       map.addImage('hatch', hatchImage(), { pixelRatio: 2 });
       map.addLayer({ id: 'occupied-hatch', type: 'fill', source: 'occupied', paint: { 'fill-pattern': 'hatch', 'fill-opacity': 0.5 } }, 'front-zone');
+      // build exclusion rings around existing sites and the special production zones (only while placing)
+      map.addLayer({ id: 'restricted-fill', type: 'fill', source: 'restricted', paint: { 'fill-color': '#ff3333', 'fill-opacity': 0.08 } });
+      map.addLayer({ id: 'restricted-line', type: 'line', source: 'restricted', paint: { 'line-color': '#ff6b6b', 'line-width': 1, 'line-opacity': 0.5, 'line-dasharray': [3, 3] } });
+      map.addLayer({ id: 'zones-fill', type: 'fill', source: 'zones', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.18 } });
+      map.addLayer({ id: 'zones-line', type: 'line', source: 'zones', paint: { 'line-color': ['get', 'color'], 'line-width': 2, 'line-dasharray': [4, 2] } });
+      // friendly filling stations from OpenStreetMap
+      map.addLayer({ id: 'fuel-stations', type: 'circle', source: 'fuel-stations', minzoom: 7, paint: { 'circle-radius': 2.5, 'circle-color': '#38bdf8', 'circle-opacity': 0.6, 'circle-stroke-color': '#0b0d10', 'circle-stroke-width': 1 } });
+      // power lines along the roads, shown when a power plant (or a building it feeds) is selected
+      map.addLayer({ id: 'power-lines', type: 'line', source: 'power-lines', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#38bdf8', 'line-width': 1.2, 'line-dasharray': [4, 3], 'line-opacity': 0.6, 'line-offset': 3 } });
+      map.addLayer({ id: 'orbits', type: 'line', source: 'orbits', paint: { 'line-color': '#a7f3d0', 'line-width': 1.4, 'line-dasharray': [4, 2], 'line-opacity': 0.8 } });
+      map.addLayer({ id: 'smokes', type: 'symbol', source: 'smokes', layout: { 'icon-image': 'smoke', 'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.0125, 8, 0.2, 12, 3.2], 'icon-allow-overlap': true, 'icon-ignore-placement': true }, paint: { 'icon-opacity': ['get', 'opacity'] } });
       map.addLayer({ id: 'rings', type: 'line', source: 'rings', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.4, 'line-dasharray': [2, 3] } });
       map.addLayer({ id: 'ghost-fill', type: 'fill', source: 'ghost', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 } });
       map.addLayer({ id: 'ghost-line', type: 'line', source: 'ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [3, 2] } });
@@ -317,18 +373,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           id, type: 'symbol', source: id === 'formations' ? 'formations' : 'units', filter, ...extra,
           layout: { 'icon-image': ['get', 'icon'], 'icon-size': id === 'formations' ? ['interpolate', ['linear'], ['zoom'], 5, 0.62, 8, 0.8] : iconSize, 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
         } as any);
-      symbol('units-loose', ['!', ['get', 'grp']], { minzoom: GROUP_ZOOM });
-      symbol('units-grouped', ['get', 'grp'], { minzoom: GROUP_ZOOM });
+      symbol('units-loose', ['all', ['!', ['get', 'grp']], ['!', ['get', 'air']]], { minzoom: GROUP_ZOOM });
+      symbol('units-grouped', ['all', ['get', 'grp'], ['!', ['get', 'air']]], { minzoom: GROUP_ZOOM });
       symbol('formations', ['all'], { maxzoom: GROUP_ZOOM });
+      // drones fly as sprites, turned to their heading; strike drones shrink as they dive
+      map.addLayer({
+        id: 'drones', type: 'symbol', source: 'units', filter: ['get', 'air'],
+        layout: {
+          'icon-image': ['get', 'icon'], 'icon-rotate': ['get', 'bearing'], 'icon-rotation-alignment': 'map',
+          'icon-size': ['interpolate', ['linear'], ['zoom'], 4, ['*', ['get', 'scale'], 0.18], 8, ['*', ['get', 'scale'], 0.28], 11, ['*', ['get', 'scale'], 0.4]],
+          'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'],
+        },
+      } as any);
 
       for (const cp of init!.map.capturePoints) {
-        const el = h('div', { class: 'cp' }, h('i', {}), h('span', {}, cp.name));
+        const el = h('div', { class: `cp${cp.value >= 3 ? ' cp-major' : ''}` }, h('i', {}), h('span', {}, cp.name), h('div', { class: 'cp-hp' }, h('b', {})));
         new maplibregl.Marker({ element: el }).setLngLat(cp.pos).addTo(map);
         pMarkers.set(cp.id, el);
       }
+      fog = new FogOverlay(map);
+      map.on('move', () => drawFog());
       arrows = new FrontArrows(map, mapEl, TEAM_COLOR, () => snap?.front ?? []);
       fx = new ShotFx(map, mapEl, (def) => defU.get(def) ?? defB.get(def)?.attack, TEAM_COLOR);
-      if (import.meta.env.DEV) (window as any).__sw = { map, fx, arrows, snap: () => snap, fakePockets: [] };
+      if (import.meta.env.DEV) (window as any).__sw = { map, fx, arrows, snap: () => snap, fakePockets: [], select: (ids: number[]) => ((selUnits = new Set(ids)), (selBuilding = null), render()) };
       mapReady = true;
       if (snap) render();
       showStart();
@@ -355,12 +422,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('click', (e) => {
       const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
       if (performance.now() - suppressClick < 250) return; // the click that ends a box selection
+      if (pick.bombard) {
+        send({ type: 'bombard', units: pick.bombard.unitIds, target: p });
+        toast('Barrage area set');
+        pick.bombard = null;
+        return render();
+      }
+      if (pick.route) return toast('Click one of your buildings (Esc cancels)');
       if (placing) {
         send({ type: 'build', def: placing.id, pos: p });
         if (!e.originalEvent.shiftKey) cancelPlacing();
         return;
       }
-      const layers = ['units-loose', 'units-grouped', 'formations'].filter((l) => map.getLayer(l));
+      const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
       const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers }).find((f) => f.properties?.own);
       selBuilding = null;
       if (hit?.properties?.gid) selUnits = new Set(groups.get(Number(hit.properties.gid))?.ids ?? []);
@@ -373,6 +447,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       render();
     });
     map.on('contextmenu', (e) => {
+      if (pick.bombard) {
+        send({ type: 'bombard', units: pick.bombard.unitIds, target: [e.lngLat.lng, e.lngLat.lat] });
+        pick.bombard = null;
+        return render();
+      }
+      if (pick.route) return void ((pick.route = null), render());
       if (placing) return cancelPlacing();
       if (!selUnits.size) return;
       const ev = e.originalEvent;
@@ -409,7 +489,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const x0 = Math.min(start.x, e.clientX) - r.left, x1 = Math.max(start.x, e.clientX) - r.left;
     const y0 = Math.min(start.y, e.clientY) - r.top, y1 = Math.max(start.y, e.clientY) - r.top;
     selUnits = new Set(snap.units.filter((u) => u.owner === me).filter((u) => {
-      const p = map.project(u.pos);
+      const p = map.project(posOf(u));
       return p.x >= x0 && p.x <= x1 && p.y >= y0 && p.y <= y1;
     }).map((u) => u.id));
     selBuilding = null;
@@ -420,10 +500,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-    if (e.key === 'Escape') return cancelPlacing();
+    if (e.key === 'Escape') {
+      if (pick.route || pick.bombard) return void ((pick.route = pick.bombard = null), render());
+      return cancelPlacing();
+    }
     const k = e.key.toLowerCase();
     if (k === 's' && selUnits.size) return void send({ type: 'stop', units: [...selUnits] });
     if (k === 't') return toggleTerrain();
+    if (k === 'm') return toggleBasemap();
     if (k === 'g' && selUnits.size) return makeGroup();
     if (k === 'u' && selUnits.size) return ungroup();
     if (/^[1-9]$/.test(e.key)) {
@@ -563,6 +647,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     g.putImageData(img, 0, 0);
     return c.toDataURL('image/png');
   }
+  /** Hide the real map (basemap and relief) for a clean tactical display; the fog gets darker to match. */
+  function toggleBasemap() {
+    if (!mapReady) return;
+    const off = map.getLayoutProperty('osm', 'visibility') !== 'none';
+    for (const id of ['osm', 'relief']) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', off ? 'none' : 'visible');
+    basemapBtn.textContent = off ? 'Map: OFF' : 'Map: ON';
+    basemapBtn.classList.toggle('on', off);
+    drawFog();
+  }
+  function drawFog() {
+    if (!fog || !mapReady) return;
+    fog.render(snap, init, defU, defB, map.getLayoutProperty('osm', 'visibility') === 'none', (id, fallback) => unitPos.get(id) ?? fallback);
+  }
+
   function toggleTerrain() {
     if (!mapReady || !map.getLayer('terrain')) return;
     const on = map.getLayoutProperty('terrain', 'visibility') !== 'visible';
@@ -588,9 +686,22 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   // ---------- placement ----------
+  /** While placing: red exclusion rings around existing sites, and the special zones this building could use. */
+  function showPlacementAids() {
+    if (!mapReady || !init || !snap) return;
+    const zones = placing ? SPECIAL_ZONES.filter((z) => z.side === (init!.team === 0 ? 'ua' : 'ru') && z.buildingDef === placing!.id) : [];
+    (map.getSource('zones') as GeoJSONSource).setData({ type: 'FeatureCollection', features: zones.map((z) => ({ type: 'Feature', properties: { color: z.color, name: z.name }, geometry: { type: 'Polygon', coordinates: [z.polygon] } })) } as any);
+    const r = init.ruleset.rules;
+    const rings = placing && placing.id !== 'housing'
+      ? snap.buildings.filter((b) => b.def !== 'housing').map((b) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(b.pos, placing!.fieldWork || defB.get(b.def)?.fieldWork ? r.fieldWorkSpacing : specialZoneAt(b.pos) ? 0.5 : r.minBuildSpacing, 64)] } }))
+      : [];
+    (map.getSource('restricted') as GeoJSONSource).setData({ type: 'FeatureCollection', features: rings } as any);
+  }
+
   function cancelPlacing() {
     if (!placing) return;
     placing = null;
+    showPlacementAids();
     hint.textContent = HINT;
     mapEl.classList.remove('placing');
     (map.getSource('ghost') as GeoJSONSource | undefined)?.setData(empty());
@@ -601,18 +712,41 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return Array.from({ length: n + 1 }, (_, i) => offsetKm(c, Math.cos((i / n) * 6.2832) * km, Math.sin((i / n) * 6.2832) * km));
   }
 
+  /** The city whose boundary holds this point. */
+  function cityAt(p: LngLat) {
+    return init!.map.capturePoints.find((cp) => {
+      const polys = cityPolys.get(cp.id);
+      if (polys?.length) return Math.abs(p[1] - cp.pos[1]) < 0.5 && polys.some((r) => inPolygon(p, r));
+      return distKm(p, cp.pos) <= [0, 2.5, 3.5, 5, 8, 12][Math.max(1, Math.min(5, cp.value))];
+    });
+  }
+
   function placementProblem(def: BuildingDef, p: LngLat): string | null {
     if (!init || !snap) return 'not ready';
     const r = init.ruleset.rules;
-    const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
-    const pocket = snap.pockets.find((k) => pointInRing(k.nodes, p));
-    if (pocket) return pocket.team === init.team ? 'this ground is encircled' : 'not your territory';
-    if (snap.grey.some((z) => distKm(z.pos, p) <= z.r)) return 'contested ground (grey zone)';
-    if (d < 0) return 'not your territory';
-    if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
+    const zone = specialZoneAt(p);
+    const mySide = init.team === 0 ? 'ua' : 'ru';
+    if (zone && zone.side !== mySide) return `${zone.name} belongs to the other side`;
+    if (!zone) {
+      const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
+      const pocket = snap.pockets.find((k) => pointInRing(k.nodes, p));
+      if (pocket) return pocket.team === init.team ? 'this ground is encircled' : 'not your territory';
+      if (snap.grey.some((z) => distKm(z.pos, p) <= z.r)) return 'contested ground (grey zone)';
+      if (d < 0) return 'not your territory';
+      if (def.id !== 'housing' && d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
+    }
     if (terrain?.at(p) === 'water') return 'cannot build on water';
     if (def.needsWaterWithinKm && !nearRiver(p, def.needsWaterWithinKm)) return 'must be on a river bank';
-    if (snap.buildings.some((b) => distKm(b.pos, p) < r.minBuildSpacing)) return 'space occupied';
+    if (def.id === 'housing') {
+      const city = cityAt(p);
+      if (!city) return 'housing only inside a city';
+      if (snap.points[init.map.capturePoints.indexOf(city)]?.owner !== init.team) return 'your side must hold the city';
+      if (snap.buildings.filter((b) => b.def === 'housing' && cityAt(b.pos) === city).length >= r.cityHousingLimit) return `${city.name} already has ${r.cityHousingLimit} housing blocks`;
+    } else {
+      const spacing = zone ? 0.5 : def.fieldWork ? r.fieldWorkSpacing : r.minBuildSpacing;
+      const clash = snap.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, p) < (def.fieldWork || defB.get(b.def)?.fieldWork ? r.fieldWorkSpacing : spacing));
+      if (clash) return def.fieldWork ? 'space occupied' : `too close to another site (${spacing} km apart)`;
+    }
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
     return null;
   }
@@ -661,6 +795,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           h('button', { class: 'bld' + (placing?.id === b.id ? ' active' : ''), onClick: () => {
             placing = b;
             mapEl.classList.add('placing');
+            showPlacementAids();
             hint.textContent = `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
             buildPalette();
           } },
@@ -717,7 +852,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!palette.matches(':hover')) card.style.display = 'none';
     clear(side);
     if (selBuilding !== null) {
-      const b = snap.buildings.find((x) => x.id === selBuilding && x.owner === me);
+      const b = snap.buildings.find((x) => x.id === selBuilding && x.team === init!.team);
       if (!b) selBuilding = null;
       else {
         const d = defB.get(b.def)!;
@@ -726,7 +861,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           h('div', { class: 'muted' }, d.description ?? ''),
           h('div', { class: 'stat' }, `HP ${b.hp}/${d.levels?.[b.level - 2]?.hp ?? d.hp}`),
         );
+        if (b.owner !== me) side.append(h('div', { class: 'muted' }, `Built by ${init.players.find((p) => p.id === b.owner)?.name ?? 'a teammate'}: shared with your side`));
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
+        const rules = init.ruleset.rules;
+        if (b.def !== 'power_plant') {
+          const grid = snap.buildings.some((o) => o.team === b.team && o.progress >= 1 && o.def === 'power_plant' && distKm(o.pos, b.pos) <= rules.powerGridKm);
+          side.append(h('div', { class: 'stat', style: { color: grid ? '#38bdf8' : 'var(--muted)' } }, grid ? `On the power grid: +${Math.round(((b.def === 'housing' ? rules.housingGridMult : rules.powerGridMult) - 1) * 100)}%` : `Off the grid (no power plant within ${rules.powerGridKm} km)`));
+        }
+        if (b.def === 'housing') {
+          const city = cityAt(b.pos);
+          if (city) side.append(h('div', { class: 'stat' }, `${city.name}: ${snap.buildings.filter((x) => x.def === 'housing' && cityAt(x.pos) === city).length}/${rules.cityHousingLimit} housing blocks`));
+        }
+        const zone = specialZoneAt(b.pos);
+        if (zone && zone.buildingDef === b.def) side.append(h('div', { class: 'stat', style: { color: zone.color } }, `★ ${zone.bonusTitle}`));
+        // the building's own store of goods
+        if (b.storage && Object.keys(b.storage).length) {
+          const cap = d.storageCap ?? rules.storageCap;
+          side.append(h('div', { class: 'storage-box' }, h('b', {}, `Store (up to ${cap.toLocaleString('en-US')} each)`),
+            h('div', { class: 'storage-grid' }, ...Object.entries(b.storage).map(([k, v]) => {
+              const res = init!.ruleset.resources.find((x) => x.id === k);
+              const ico = h('span', {});
+              ico.innerHTML = iconHtml(res?.icon, res?.color ?? '#888');
+              return h('div', { class: 'storage-item' }, ico, h('span', {}, res?.name ?? k), h('b', {}, Math.floor(v).toLocaleString('en-US')));
+            }))));
+        }
+        if (b.def === 'missile_factory' || b.def === 'aircraft_plant') side.append(h('div', { class: 'muted' }, 'Production starts with a coming update.'));
         if (d.training && b.progress >= 1) {
           const t = d.training;
           const inside = b.inside ?? [];
@@ -778,16 +937,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (d.crossing) side.append(h('div', { class: 'stat' }, `River crossing radius ${d.crossing.radiusKm} km`));
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
         if (b.progress >= 1) {
+          const mySide = init.team === 0 ? 'ua' : 'ru';
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
-            const btn = h('button', { class: 'bld', onClick: () => send({ type: 'train', building: b.id, unit: uid }) },
-              unitIcon(u, 0), h('span', { class: 'meta' }, h('b', {}, `Train ${u.name} · ${u.trainTime}s`), costHtml(u.cost, snap!.res)));
+            if (u.side && u.side !== mySide) continue;
+            // money and people from the treasury, materials from this building's own store
+            const have: Record<string, number> = { ...(b.storage ?? {}), money: snap.res.money ?? 0, people: snap.res.people ?? 0 };
+            const short = Object.entries(u.cost).find(([k, v]) => (have[k] ?? 0) < v);
+            const btn = h('button', { class: 'bld' + (short ? ' short' : ''), onClick: () => send({ type: 'train', building: b.id, unit: uid }) },
+              unitIcon(u, 0), h('span', { class: 'meta' }, h('b', {}, `Train ${u.name} · ${u.trainTime}s`), costHtml(u.cost, have),
+                short && short[0] !== 'money' && short[0] !== 'people' ? h('small', { class: 'warn' }, `Not enough ${short[0]} on site: deliver it by truck`) : null));
             describe(btn, u.name, u.description, unitFacts(u), 'left');
             side.append(btn);
           }
           const q = snap.queue.filter((x) => x.building === b.id);
           if (q.length) side.append(h('div', { class: 'stat' }, 'Queue: ' + q.map((x) => `${defU.get(x.unit)?.name} (${x.remaining}s)`).join(', ')));
         }
+        if (b.def === 'power_plant' || b.progress >= 1) ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'powerLines', building: b.id } satisfies ClientMsg));
         if (b.def !== 'hq') side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
       }
     } else if (selUnits.size) {
@@ -867,6 +1033,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   function unitIcon(d: UnitDef, rank: number) {
+    if (d.kind === 'air') {
+      const def = d.id === 'drone' ? (init!.team === 0 ? 'drone_pd2' : 'drone_orion') : d.id;
+      return h('img', { class: 'nato-ico drone-ico', src: `/drones/${def}_${init!.team === 0 ? 'ua' : 'ru'}.png`, alt: d.name });
+    }
     const c = h('canvas', { class: 'nato-ico', width: 128, height: 128 });
     c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: TEAM_COLOR[init!.team], symbol: d.symbol ?? 'infantry', echelon: '', rank, selected: false, own: true, transport: false }), 0, 0);
     return c;
@@ -894,14 +1064,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!placing) buildPalette();
     }
     renderGroups();
+    renderHud();
     if (mapReady) renderMap();
+  }
+
+  function renderHud() {
+    if (!init || !snap) return;
+    renderUnitHud(unitHud, {
+      snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
+    });
+    routeBanner.style.display = pick.route ? 'block' : 'none';
+    routeBanner.textContent = pick.route
+      ? pick.route.fromBuilding ? 'Delivery route — step 2: click the building to unload at (Esc cancels)' : 'Delivery route — step 1: click the building to load at (Esc cancels)'
+      : '';
+    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard));
   }
 
   /** Full refresh after a local change (selection, grouping). */
   function render() {
     renderSide();
     renderGroups();
+    renderHud();
     if (mapReady) renderMap();
+    if (selBuilding === null && mapReady) (map.getSource('power-lines') as GeoJSONSource | undefined)?.setData(empty());
   }
 
   function renderMap() {
@@ -910,21 +1095,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const grouped = new Map<number, number>();
     for (const g of groups.values()) for (const id of g.ids) grouped.set(id, g.id);
 
-    (map.getSource('units') as GeoJSONSource).setData({
-      type: 'FeatureCollection',
-      features: snap.units.map((u) => {
-        const d = defU.get(u.def);
-        const own = u.owner === me;
-        const sel = selUnits.has(u.id);
-        const icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
-        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), icon, z: sel ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: u.pos } };
-      }),
-    });
+    renderUnits();
 
     // one formation marker per group (shown when zoomed out)
     const formations: any[] = [];
     for (const g of groups.values()) {
-      const us = snap.units.filter((u) => g.ids.has(u.id));
+      const us = snap.units.filter((u) => g.ids.has(u.id) && defU.get(u.def)?.kind !== 'air');
       const c = centroid(us);
       if (!c) continue;
       const kinds = new Set(us.map((u) => defU.get(u.def)?.symbol ?? 'infantry'));
@@ -936,7 +1112,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // zoomed out, everything else is merged into formation markers per ~30 km cell (mine / allied / hostile kept apart)
     const cells = new Map<string, UnitView[]>();
     for (const u of snap.units) {
-      if (grouped.has(u.id)) continue;
+      if (grouped.has(u.id) || defU.get(u.def)?.kind === 'air') continue;
       const key = `${u.team}|${u.owner === me ? 1 : 0}|${Math.floor(u.pos[0] / 0.36)}|${Math.floor(u.pos[1] / 0.24)}`;
       const list = cells.get(key);
       list ? list.push(u) : cells.set(key, [u]);
@@ -955,17 +1131,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     (map.getSource('formations') as GeoJSONSource).setData({ type: 'FeatureCollection', features: formations });
 
-    // destination lines for the selection
-    (map.getSource('sel') as GeoJSONSource).setData({
-      type: 'FeatureCollection',
-      features: snap.units.filter((u) => selUnits.has(u.id) && u.target).slice(0, 60).flatMap((u) => {
-        const stops = u.route?.length ? u.route : [u.target!];
-        return [
-          { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [u.pos, ...stops] } },
-          ...stops.map((p) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: p } })),
-        ];
-      }),
-    });
+    renderSelLines();
 
     // vision rings for own long-range assets
     const rings: any[] = [];
@@ -976,6 +1142,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (b.owner === me && (d.vision ?? 0) >= 20) ring(d.vision!, TEAM_COLOR[b.team]);
       if (d.attack) ring(d.attack.range, '#ffd84a');
       if (d.crossing) ring(d.crossing.radiusKm, '#7fe7ff');
+    }
+    // artillery reach for selected guns: outer = max range, inner = minimum range
+    for (const u of snap.units) {
+      const d = defU.get(u.def);
+      if (!selUnits.has(u.id) || !d?.minRange) continue;
+      rings.push({ type: 'Feature', properties: { color: '#f59e0b' }, geometry: { type: 'LineString', coordinates: circle(posOf(u), d.range, 64) } });
+      rings.push({ type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: circle(posOf(u), d.minRange, 48) } });
+      if (u.bombardTarget) rings.push({ type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: circle(u.bombardTarget, 1, 32) } });
+    }
+    // recon drones' patrol circles
+    (map.getSource('orbits') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.units.filter((u) => selUnits.has(u.id) && u.loiterCenter && u.loiterRadius).map((u) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: circle(u.loiterCenter!, u.loiterRadius!, 48) } })) } as any);
+    // strike smoke, fading over ten minutes
+    (map.getSource('smokes') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.smokes.map((x) => ({ type: 'Feature', properties: { opacity: Math.max(0.18, Math.min(0.85, (x.expiresAt - snap!.time) / 600)) }, geometry: { type: 'Point', coordinates: x.pos } })) } as any);
+    // OpenStreetMap filling stations on our side only
+    if (init.map.fuel?.features && snap.time - lastFuel > 5) {
+      lastFuel = snap.time;
+      const s = snap;
+      (map.getSource('fuel-stations') as GeoJSONSource).setData({ type: 'FeatureCollection', features: init.map.fuel.features.filter((f: any) => distToFrontKm(s.front, f.geometry.coordinates) * (myTeam === 0 ? 1 : -1) > 0) } as any);
     }
     (map.getSource('rings') as GeoJSONSource).setData({ type: 'FeatureCollection', features: rings });
 
@@ -990,15 +1174,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div>`;
         el.querySelector('.glyph')!.textContent = d.icon;
         el.addEventListener('click', (ev) => {
-          if (placing || b.owner !== me) return;
+          if (placing || b.team !== myTeam) return;
           ev.stopPropagation();
+          if (pick.route) {
+            // delivery route picking: first the loading site, then the unloading site
+            if (!pick.route.fromBuilding) {
+              pick.route.fromBuilding = b.id;
+              toast(`Loading at ${d.name}. Now click where to unload.`);
+            } else if (pick.route.fromBuilding === b.id) {
+              toast('Pick a different building to unload at', true);
+            } else {
+              send({ type: 'setRoute', unit: pick.route.unitId, fromBuilding: pick.route.fromBuilding, toBuilding: b.id, resType: pick.route.resType });
+              toast(`Delivery route set: → ${d.name}`);
+              pick.route = null;
+            }
+            return render();
+          }
           selBuilding = b.id;
           selUnits.clear();
           render();
         });
         el.addEventListener('contextmenu', (ev) => {
           // right click on your own training centre with units selected sends them inside
-          if (b.owner !== me || !d.training || !selUnits.size) return;
+          if (b.team !== myTeam || !d.training || !selUnits.size) return;
           ev.preventDefault();
           ev.stopPropagation();
           send({ type: 'enter', units: [...selUnits], building: b.id });
@@ -1010,7 +1208,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       const done = b.progress >= 1;
       m.el.classList.toggle('building', !done);
-      m.el.classList.toggle('mine', b.owner === me);
+      m.el.classList.toggle('mine', b.team === myTeam);
+      m.el.classList.toggle('route-candidate', !!pick.route && pick.route.fromBuilding !== b.id);
+      m.el.classList.toggle('route-from', pick.route?.fromBuilding === b.id);
       m.el.classList.toggle('selected', selBuilding === b.id);
       m.el.style.setProperty('--p', String(b.progress));
       m.el.dataset.n = b.inside?.length ? String(b.inside.length) : '';
@@ -1037,7 +1237,68 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       (map.getSource('grey') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.grey.map((z) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(z.pos, z.r, 40)] } })) });
     }
 
-    snap.points.forEach((p) => pMarkers.get(p.id)?.style.setProperty('--c', TEAM_COLOR[p.owner]));
+    snap.points.forEach((p) => {
+      const el = pMarkers.get(p.id);
+      if (!el) return;
+      el.style.setProperty('--c', TEAM_COLOR[p.owner]);
+      // city structure: a bar appears once a city has been hit
+      const hurt = p.hp !== undefined && p.maxHp !== undefined && p.hp < p.maxHp;
+      el.classList.toggle('hurt', hurt);
+      if (hurt) {
+        const pct = (p.hp! / p.maxHp!) * 100;
+        const bar = el.querySelector('.cp-hp b') as HTMLElement;
+        bar.style.width = `${pct}%`;
+        bar.style.background = pct < 35 ? '#ef4444' : pct < 70 ? '#eab308' : '#22c55e';
+        el.title = `${Math.round(p.hp!)} / ${p.maxHp} structure`;
+      }
+    });
+    drawFog();
+  }
+
+  /** Units: NATO markers on the ground, side-specific drone sprites in the air, all at interpolated positions. */
+  function renderUnits() {
+    if (!init || !snap || !mapReady) return;
+    const myTeam = init.team;
+    const grouped = new Set<number>();
+    for (const g of groups.values()) for (const id of g.ids) grouped.add(id);
+    (map.getSource('units') as GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: snap.units.map((u) => {
+        const d = defU.get(u.def);
+        const own = u.owner === me;
+        const sel = selUnits.has(u.id);
+        const air = d?.kind === 'air';
+        const pos = posOf(u);
+        let icon: string;
+        let bearing = 0;
+        let scale = 1;
+        if (air) {
+          const side = u.team === 0 ? 'ua' : 'ru';
+          const def = u.def === 'drone' ? (u.team === 0 ? 'drone_pd2' : 'drone_orion') : u.def;
+          icon = `drone|${def}|${side}|${sel ? 1 : 0}`;
+          bearing = droneBearing.get(u.id)?.b ?? u.bearing ?? 0;
+          // a strike drone shrinks as it dives on the last 18 km
+          if (isStrikeDrone(d) && u.target) scale = Math.min(1, 0.45 + 0.55 * (distKm(pos, u.target) / 18));
+        } else {
+          icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
+        }
+        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), air, icon, bearing, scale, z: sel ? 4 : air ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: pos } };
+      }),
+    } as any);
+  }
+
+  /** Route lines for the selection: the planned path (along the roads), plus each queued stop. */
+  function renderSelLines() {
+    if (!snap || !mapReady) return;
+    const features: any[] = [];
+    for (const u of snap.units) {
+      if (!selUnits.has(u.id) || !u.target || u.isLoitering) continue;
+      const p = posOf(u);
+      features.push({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [p, ...(u.path?.length ? u.path : [u.target])] } });
+      for (const s of u.route ?? [u.target]) features.push({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: s } });
+      if (features.length > 120) break;
+    }
+    (map.getSource('sel') as GeoJSONSource).setData({ type: 'FeatureCollection', features } as any);
   }
 
   // ---------- front animation (smooth between 5 Hz snapshots) ----------
@@ -1056,6 +1317,36 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       n.lat += dy * 0.18;
       n.v = t.v;
     });
+    // units glide between snapshots (60 fps instead of 5 Hz steps); drones bank smoothly into turns
+    let unitsMoved = false;
+    const alive = new Set<number>();
+    for (const u of snap.units) {
+      alive.add(u.id);
+      const p = unitPos.get(u.id);
+      if (!p) {
+        unitPos.set(u.id, [u.pos[0], u.pos[1]]);
+        unitsMoved = true;
+      } else {
+        const dx = u.pos[0] - p[0], dy = u.pos[1] - p[1];
+        if (dx * dx + dy * dy > 0.05) (p[0] = u.pos[0]), (p[1] = u.pos[1]), (unitsMoved = true);
+        else if (Math.abs(dx) + Math.abs(dy) > 1e-7) (p[0] += dx * 0.28), (p[1] += dy * 0.28), (unitsMoved = true);
+      }
+      if (u.bearing !== undefined && defU.get(u.def)?.kind === 'air') {
+        const st = droneBearing.get(u.id) ?? { b: u.bearing, v: 0 };
+        const diff = ((u.bearing - st.b + 540) % 360) - 180;
+        st.v = Math.max(-2.8, Math.min(2.8, st.v * 0.82 + diff * 0.08));
+        st.b = (st.b + st.v + 360) % 360;
+        droneBearing.set(u.id, st);
+        if (Math.abs(st.v) > 0.03) unitsMoved = true;
+      }
+    }
+    for (const id of unitPos.keys()) if (!alive.has(id)) unitPos.delete(id), droneBearing.delete(id);
+    if (unitsMoved) {
+      renderUnits();
+      if (selUnits.size) renderSelLines();
+      drawFog();
+    }
+
     const pocketKey = snap.pockets.map((k) => `${k.id}:${k.nodes.length}:${k.nodes[0].lng}`).join(',');
     if (pocketKey !== lastPockets) (lastPockets = pocketKey), (moved = true);
     if (!moved && frontDrawn) return;
@@ -1075,6 +1366,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
   let frontDrawn = false;
   let lastGrey = '-';
+  let lastFuel = -10;
   let lastPockets = '';
 
   const ping = setInterval(() => (closed ? clearInterval(ping) : ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'ping' } satisfies ClientMsg))), 15000);
