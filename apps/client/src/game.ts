@@ -646,7 +646,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       fogCanvas = document.createElement('canvas');
       fogCanvas.className = 'fog';
-      mapEl.append(fogCanvas);
+      const canvasContainer = map.getCanvasContainer();
+      if (canvasContainer && map.getCanvas()) {
+        canvasContainer.insertBefore(fogCanvas, map.getCanvas().nextSibling);
+      } else {
+        mapEl.append(fogCanvas);
+      }
 
       map.on('move', renderFog);
       map.on('resize', renderFog);
@@ -2018,9 +2023,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (myTeam !== 0 && myTeam !== 1) return; // Spectator: clear map
     if (gameOver) return; // Victory: full visibility
 
-    // Tactical dark shroud across the map
+    // Tactical dark shroud across the map (70% lighter)
     g.globalCompositeOperation = 'source-over';
-    g.fillStyle = 'rgba(8, 14, 26, 0.65)';
+    g.fillStyle = 'rgba(8, 14, 26, 0.195)';
     g.fillRect(0, 0, w, h);
 
     // Punch soft-feathered vision holes using destination-out

@@ -30,10 +30,11 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 
 /* game */
 .game { position: fixed; inset: 0; }
-.map { position: absolute; inset: 0; --s: 1; }
+.map { position: absolute; inset: 0; --s: 1; z-index: 0; }
 .map.placing { cursor: crosshair; }
 .map.placing .maplibregl-canvas { cursor: crosshair; }
-.hud.top { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 20px; align-items: center; padding: 8px 14px; background: linear-gradient(var(--bg), transparent); pointer-events: none; }
+.maplibregl-marker { z-index: 3; }
+.hud.top { position: absolute; top: 0; left: 0; right: 0; display: flex; gap: 20px; align-items: center; padding: 8px 14px; background: linear-gradient(var(--bg), transparent); pointer-events: none; z-index: 20; }
 .hud.top > * { pointer-events: auto; }
 .res { display: flex; gap: 14px; flex-wrap: wrap; }
 .chip { display: flex; gap: 6px; align-items: baseline; }
@@ -44,7 +45,7 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 .score .teams { display: flex; justify-content: space-between; font-size: 12px; margin-bottom: 4px; }
 .bar { display: flex; height: 3px; background: var(--line); }
 .bar i { display: block; transition: width .5s; }
-.palette, .side { position: absolute; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); padding: 10px; display: flex; flex-direction: column; gap: 6px; border-radius: 3px; }
+.palette, .side { position: absolute; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); padding: 10px; display: flex; flex-direction: column; gap: 6px; border-radius: 3px; z-index: 20; }
 .palette { left: 12px; top: 56px; width: 232px; max-height: calc(100% - 120px); overflow: auto; }
 .side { right: 12px; top: 56px; width: 270px; display: none; }
 .side.open { display: flex; }
@@ -55,12 +56,12 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 .bld .meta { display: flex; flex-direction: column; }
 .bld small { color: var(--muted); font-size: 10px; }
 .stat { font-size: 12px; }
-.hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); color: var(--muted); font-size: 11px; background: var(--panel); padding: 5px 10px; border: 1px solid var(--line); pointer-events: none; white-space: nowrap; }
-.toasts { position: absolute; left: 12px; bottom: 14px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); color: var(--muted); font-size: 11px; background: var(--panel); padding: 5px 10px; border: 1px solid var(--line); pointer-events: none; white-space: nowrap; z-index: 20; }
+.toasts { position: absolute; left: 12px; bottom: 14px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; z-index: 20; }
 .toast { background: var(--panel); border-left: 2px solid var(--accent); padding: 6px 10px; animation: in .25s; }
 .toast.bad { border-color: #ff5a5a; }
-.selbox { position: fixed; display: none; border: 1px solid #fff; background: rgba(255,255,255,.07); pointer-events: none; z-index: 5; }
-.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.6); z-index: 10; }
+.selbox { position: fixed; display: none; border: 1px solid #fff; background: rgba(255,255,255,.07); pointer-events: none; z-index: 25; }
+.overlay { position: fixed; inset: 0; display: grid; place-items: center; background: rgba(0,0,0,.6); z-index: 100; }
 .overlay .card { text-align: center; min-width: 280px; }
 @keyframes in { from { opacity: 0; transform: translateY(6px); } }
 
@@ -132,12 +133,12 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 /* iteration 2: shots overlay, groups, terrain, NATO icons */
 .fog { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 1; }
 .fx { position: absolute; inset: 0; width: 100%; height: 100%; pointer-events: none; z-index: 2; }
-.groups { position: absolute; left: 260px; bottom: 44px; display: flex; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 560px); }
+.groups { position: absolute; left: 260px; bottom: 44px; display: flex; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 560px); z-index: 20; }
 .grp { position: relative; display: flex; gap: 8px; align-items: baseline; background: var(--panel); padding: 5px 10px 7px; overflow: hidden; }
 .grp b { color: var(--accent); }
 .grp.active { border-color: #fff; }
 .grp i { position: absolute; left: 0; bottom: 0; height: 2px; background: var(--ok); }
-.terrain-chip { position: absolute; right: 12px; bottom: 40px; display: none; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); padding: 5px 10px; font-size: 11px; pointer-events: none; }
+.terrain-chip { position: absolute; right: 12px; bottom: 40px; display: none; gap: 10px; align-items: center; background: var(--panel); border: 1px solid var(--line); padding: 5px 10px; font-size: 11px; pointer-events: none; z-index: 20; }
 .terrain-chip i { width: 9px; height: 9px; border-radius: 2px; }
 .terrain-chip span { color: var(--muted); }
 .terrain-chip .pos { color: var(--ok); } .terrain-chip .neg { color: #ff6b6b; } .terrain-chip .road { color: var(--accent); }
@@ -194,7 +195,7 @@ button.ghost.on { color: var(--accent); }
   padding: 8px 16px;
   border-radius: 8px;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.7);
-  z-index: 10;
+  z-index: 20;
   max-width: 95vw;
   flex-wrap: wrap;
 }
