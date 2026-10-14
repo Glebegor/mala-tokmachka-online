@@ -267,22 +267,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }),
       });
       map.addLayer({
-        id: 'roads-casing', type: 'line', source: 'roads',
-        filter: ['==', ['get', 'major'], 1],
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': '#78350f',
-          'line-opacity': 0.6,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.2, 10, 4.8],
-        },
-      });
-      map.addLayer({
         id: 'roads', type: 'line', source: 'roads',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#fde047',
-          'line-opacity': ['case', ['==', ['get', 'major'], 1], 0.85, ['interpolate', ['linear'], ['zoom'], 5, 0.22, 7, 0.45]],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5, ['case', ['==', ['get', 'major'], 1], 1.4, 0.5], 10, ['case', ['==', ['get', 'major'], 1], 3.2, 1.4]],
+          'line-color': ['case', ['==', ['get', 'major'], 1], '#fbbf24', '#f59e0b'],
+          'line-opacity': ['case', ['==', ['get', 'major'], 1], 0.85, ['interpolate', ['linear'], ['zoom'], 5, 0.18, 8, 0.45]],
+          'line-width': ['interpolate', ['linear'], ['zoom'],
+            5, ['case', ['==', ['get', 'major'], 1], 0.85, 0.4],
+            8, ['case', ['==', ['get', 'major'], 1], 1.25, 0.65],
+            11, ['case', ['==', ['get', 'major'], 1], 1.9, 1.0]
+          ],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
