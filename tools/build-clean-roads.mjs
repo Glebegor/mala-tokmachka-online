@@ -9,25 +9,32 @@ const ukr = JSON.parse(readFileSync(ukrPath, 'utf8'));
 const ru = JSON.parse(readFileSync(ruPath, 'utf8'));
 console.log(`Loaded ${ukr.length} Ukraine lines, ${ru.length} Russia lines.`);
 
-// Exclude 'unclassified' to eliminate village grid clutter, dead-end tracks, and alleys
-const allowedClasses = new Set([
-  'motorway', 'trunk', 'primary', 'secondary', 'tertiary',
-  'motorway_link', 'trunk_link', 'primary_link', 'secondary_link', 'tertiary_link'
-]);
+// Ukraine: keep all classified highways, plus connecting unclassified (length > ~1.2km)
+const ukrFiltered = ukr.filter((l) => {
+  if (!l.pts || l.pts.length < 2) return false;
+  if (l.fclass !== 'unclassified') return true;
+  let len = 0;
+  for (let i = 0; i < l.pts.length - 1; i++) {
+    len += Math.hypot(l.pts[i + 1][0] - l.pts[i][0], l.pts[i + 1][1] - l.pts[i][1]);
+  }
+  return len > 0.012; // > ~1.2 km
+});
 
-const raw = [...ukr, ...ru].filter((l) => allowedClasses.has(l.fclass) && l.pts && l.pts.length > 1);
-console.log(`Total candidate road features (without unclassified): ${raw.length}`);
+const ruFiltered = ru.filter((l) => l.pts && l.pts.length >= 2);
+console.log(`Retained ${ukrFiltered.length} Ukraine lines, ${ruFiltered.length} Russia lines.`);
 
-// Set major: 1 for motorway, trunk, AND primary (plus links).
+const raw = [...ukrFiltered, ...ruFiltered];
+
+// Set major: 1 for motorway, trunk, and primary (plus links)
 const majorSet = new Set(['motorway', 'trunk', 'primary', 'motorway_link', 'trunk_link', 'primary_link']);
 for (const l of raw) {
   l.major = majorSet.has(l.fclass) ? 1 : 0;
 }
 
-// 1. Chain continuous segments of the same hierarchy
+// 1. Chaining continuous road segments
 console.log('Chaining continuous road segments...');
 function chainLines(lines) {
-  const ptKey = (p) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)}`;
+  const ptKey = (p) => `${Math.round(p[0] * 2000)},${Math.round(p[1] * 2000)}`; // ~50m snap
   const endpoints = new Map();
 
   lines.forEach((l, idx) => {
@@ -61,7 +68,7 @@ function chainLines(lines) {
       const tailKey = ptKey(pts[pts.length - 1]);
       const cand = endpoints.get(tailKey) || [];
       const viable = cand.filter((c) => canConnect(c.idx));
-      if (viable.length === 1) {
+      if (viable.length >= 1) {
         const c = viable[0];
         used[c.idx] = 1;
         const other = lines[c.idx].pts;
@@ -81,7 +88,7 @@ function chainLines(lines) {
       const headKey = ptKey(pts[0]);
       const cand = endpoints.get(headKey) || [];
       const viable = cand.filter((c) => canConnect(c.idx));
-      if (viable.length === 1) {
+      if (viable.length >= 1) {
         const c = viable[0];
         used[c.idx] = 1;
         const other = lines[c.idx].pts;
@@ -101,11 +108,11 @@ function chainLines(lines) {
 }
 
 const chained = chainLines(raw);
-console.log(`Chained down to ${chained.length} continuous lines.`);
+console.log(`Chained down to ${chained.length} lines.`);
 
-// 2. Spatial snapping and bridging
-console.log('Snapping endpoints and bridging main road gaps...');
-const CELL = 0.05;
+// 2. Spatial Indexing for gap healing
+console.log('Building spatial index for gap healing...');
+const CELL = 0.05; // ~5 km
 const grid = new Map();
 const majorGrid = new Map();
 
@@ -126,24 +133,25 @@ chained.forEach((l, li) => {
   }
 });
 
-const SNAP_STD = 0.008; // ~800 meters
-const SNAP_MAJOR = 0.02; // ~2 km for major highways
-let snappedCount = 0;
+// 3. Gap Healing: bridge broken roads, especially major highways
+console.log('Bridging gaps on highways and connectors...');
+const SNAP_MAJOR = 0.035; // ~3.5 km for major highways
+const SNAP_MINOR = 0.015; // ~1.5 km for minor roads
 const connectors = [];
+let bridgedMajor = 0;
+let bridgedMinor = 0;
 
 chained.forEach((l, li) => {
   const isMajor = l.major === 1;
-  const snapDist = isMajor ? SNAP_MAJOR : SNAP_STD;
+  const maxGap = isMajor ? SNAP_MAJOR : SNAP_MINOR;
   const activeGrid = isMajor ? majorGrid : grid;
 
   for (const end of [0, l.pts.length - 1]) {
     const e = l.pts[end];
     let bestDist2 = Infinity;
     let bestPoint = null;
-    let targetLi = -1;
-    let targetSi = -1;
 
-    const span = Math.ceil(snapDist / CELL);
+    const span = Math.ceil(maxGap / CELL);
     const cx = Math.floor(e[0] / CELL), cy = Math.floor(e[1] / CELL);
     for (let dx = -span; dx <= span; dx++) {
       for (let dy = -span; dy <= span; dy++) {
@@ -158,11 +166,9 @@ chained.forEach((l, li) => {
           const t = Math.max(0, Math.min(1, ((e[0] - a[0]) * vx + (e[1] - a[1]) * vy) / len2));
           const px = a[0] + t * vx, py = a[1] + t * vy;
           const d2 = (e[0] - px) ** 2 + (e[1] - py) ** 2;
-          if (d2 > 1e-10 && d2 < snapDist * snapDist && d2 < bestDist2) {
+          if (d2 > 1e-9 && d2 < maxGap * maxGap && d2 < bestDist2) {
             bestDist2 = d2;
             bestPoint = [Math.round(px * 100000) / 100000, Math.round(py * 100000) / 100000];
-            targetLi = seg.li;
-            targetSi = seg.si;
           }
         }
       }
@@ -170,28 +176,31 @@ chained.forEach((l, li) => {
 
     if (bestPoint) {
       if (bestDist2 < 0.001 * 0.001) {
+        // Snap endpoint directly (< 100m)
         l.pts[end] = bestPoint;
-        chained[targetLi].pts.splice(targetSi + 1, 0, bestPoint);
       } else {
+        // Add connector segment
         connectors.push({ major: l.major, pts: [e, bestPoint] });
-        chained[targetLi].pts.splice(targetSi + 1, 0, bestPoint);
       }
-      snappedCount++;
+      if (isMajor) bridgedMajor++;
+      else bridgedMinor++;
     }
   }
 });
 
-console.log(`Snapped/bridged ${snappedCount} junctions (added ${connectors.length} connectors).`);
-const allLines = [...chained, ...connectors];
+console.log(`Bridged ${bridgedMajor} major highway gaps and ${bridgedMinor} minor gaps.`);
+console.log(`Added ${connectors.length} connector road segments.`);
 
 // Bridges across Dnipro
-allLines.push(
+connectors.push(
   { major: 1, pts: [[32.72006, 46.67277], [32.7203, 46.66961]] },
   { major: 1, pts: [[32.72287, 46.63682], [32.72301, 46.63465]] }
 );
 
-// 3. Douglas-Peucker simplification
-console.log('Simplifying curves (0.00015 deg ~ 15m)...');
+const allLines = [...chained, ...connectors];
+
+// 4. Douglas-Peucker curve simplification
+console.log('Simplifying curves...');
 function simplify(pts, tol) {
   if (pts.length <= 2) return pts;
   const keep = new Uint8Array(pts.length);
@@ -219,100 +228,40 @@ function simplify(pts, tol) {
 
 const simplifiedLines = allLines.map((l) => ({
   major: l.major,
-  pts: simplify(l.pts, 0.00015)
+  pts: simplify(l.pts, 0.00012)
 }));
 
-// 4. Strict graph connectivity with ~100m vertex equivalence
-console.log('Analyzing road network graph connectivity...');
-const vKey = (p) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)}`;
-const vMap = new Map();
-let nextVId = 0;
-const getVId = (p) => {
-  const k = vKey(p);
-  let id = vMap.get(k);
-  if (id === undefined) {
-    id = nextVId++;
-    vMap.set(k, id);
-  }
-  return id;
-};
-
-const adj = [];
+// 5. Remove only detached tiny stubs (< 500m floating sticks with 0 connections)
+console.log('Pruning floating disconnected stubs...');
+const ptBucket = (p) => `${Math.round(p[0] * 500)},${Math.round(p[1] * 500)}`;
+const degree = new Map();
 for (const l of simplifiedLines) {
-  for (let i = 0; i < l.pts.length - 1; i++) {
-    const u = getVId(l.pts[i]);
-    const v = getVId(l.pts[i + 1]);
-    while (adj.length <= Math.max(u, v)) adj.push([]);
-    if (u !== v) {
-      adj[u].push(v);
-      adj[v].push(u);
-    }
-  }
-}
-
-// Connected components
-const comp = new Int32Array(adj.length).fill(-1);
-const compSizes = [];
-for (let i = 0; i < adj.length; i++) {
-  if (comp[i] >= 0) continue;
-  const cId = compSizes.length;
-  let size = 0;
-  const stack = [i];
-  comp[i] = cId;
-  while (stack.length) {
-    const curr = stack.pop();
-    size++;
-    for (const nxt of adj[curr]) {
-      if (comp[nxt] < 0) {
-        comp[nxt] = cId;
-        stack.push(nxt);
-      }
-    }
-  }
-  compSizes.push(size);
-}
-
-const sortedComps = compSizes.map((s, id) => ({ id, size: s })).sort((a, b) => b.size - a.size);
-console.log('Top 5 component sizes:', sortedComps.slice(0, 5));
-
-// Keep components that have >= 200 vertices (removes all isolated stubs and small disconnected artifacts)
-const validCompIds = new Set(sortedComps.filter((c) => c.size >= 200).map((c) => c.id));
-console.log(`Retaining ${validCompIds.size} major connected components (>= 200 vertices each).`);
-
-const connectedLines = simplifiedLines.filter((l) => {
-  if (l.pts.length < 2) return false;
-  return l.pts.some((p) => validCompIds.has(comp[getVId(p)]));
-});
-
-// Drop lines that are completely isolated single segments without any junction
-const degMap = new Map();
-for (const l of connectedLines) {
   for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) {
-    const id = getVId(p);
-    degMap.set(id, (degMap.get(id) || 0) + 1);
+    const k = ptBucket(p);
+    degree.set(k, (degree.get(k) || 0) + 1);
   }
 }
 
-// A line whose BOTH ends have degree 1 and doesn't connect to any other road is a detached stub!
-const finalLines = connectedLines.filter((l) => {
+const cleanLines = simplifiedLines.filter((l) => {
   if (l.pts.length < 2) return false;
-  const d0 = degMap.get(getVId(l.pts[0])) || 0;
-  const d1 = degMap.get(getVId(l.pts[l.pts.length - 1])) || 0;
-  // If both ends touch nothing else and it's short, drop it
-  if (d0 <= 1 && d1 <= 1 && l.pts.length <= 4) {
+  const d0 = degree.get(ptBucket(l.pts[0])) || 0;
+  const d1 = degree.get(ptBucket(l.pts[l.pts.length - 1])) || 0;
+  // If isolated at both ends
+  if (d0 <= 1 && d1 <= 1) {
     let len = 0;
     for (let i = 0; i < l.pts.length - 1; i++) {
       len += Math.hypot(l.pts[i + 1][0] - l.pts[i][0], l.pts[i + 1][1] - l.pts[i][1]);
     }
-    if (len < 0.01) return false; // < 1 km detached stub
+    // Drop only if short stub (< 500m) AND not a major road
+    if (len < 0.005 && l.major !== 1) return false;
   }
   return true;
 });
 
-const totalVertices = finalLines.reduce((a, l) => a + l.pts.length, 0);
-console.log(`Final output: ${finalLines.length} lines, ${totalVertices} vertices.`);
+const totalVertices = cleanLines.reduce((a, l) => a + l.pts.length, 0);
+console.log(`Final output: ${cleanLines.length} lines, ${totalVertices} vertices.`);
 
-const packed = finalLines.map((l) => [l.major, ...l.pts.flat()]);
+const packed = cleanLines.map((l) => [l.major, ...l.pts.flat()]);
 const json = JSON.stringify(packed);
 writeFileSync(outFile, json);
 console.log(`Saved ${(json.length / 1024 / 1024).toFixed(2)} MB to ${outFile}.`);
