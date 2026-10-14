@@ -36,6 +36,8 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | Cancel a training order (full refund) | × on its card in the Production panel (beside the building window) |
 | Fire a missile | select it at the missile factory, right click the target |
 | Drones on a pickup | select small drones next to a pickup, *Load*; select the pickup, *Launch at…* and click the target |
+| Give fuel to another vehicle | select a vehicle or tanker, *Give fuel…*, click the vehicle (yours or an ally's) |
+| Supply troops with ammo | build an Ammo Factory and Ammo Depots, truck *Ammo* from one to the other |
 | Keep your buildings from teammates | top bar *Buildings: shared / private* |
 | Send units into a Training Centre | select them, right click the centre |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |

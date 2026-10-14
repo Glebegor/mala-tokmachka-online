@@ -4,6 +4,8 @@ import { clear, h } from './dom';
 /** Picking state shared with the map: route = two clicks on buildings, barrage and launch = one click on the map. */
 export interface Pickers {
   route: { unitId: number; fromBuilding?: number; resType?: string } | null;
+  /** Click a vehicle to drive over and give it fuel. */
+  fuel: { unitId: number } | null;
   bombard: { unitIds: number[] } | null;
   /** Launch the drones a vehicle carries at the clicked spot. */
   launch: { transport: number } | null;
@@ -17,6 +19,7 @@ export interface HudContext {
   defU: Map<string, UnitDef>;
   defB: Map<string, BuildingDef>;
   roadMult: number;
+  fuelPerKm: number;
   pick: Pickers;
   send(cmd: Command): void;
   toast(text: string, bad?: boolean): void;
@@ -25,7 +28,7 @@ export interface HudContext {
   pos(u: UnitView): LngLat;
 }
 
-const RES_LABEL: Record<string, string> = { ore: 'Ore', metal: 'Metal', fuel: 'Fuel', any: 'Any cargo' };
+const RES_LABEL: Record<string, string> = { ore: 'Ore', metal: 'Metal', fuel: 'Fuel', ammo: 'Ammo', any: 'Any cargo' };
 
 export function formatEta(sec: number): string {
   if (sec < 60) return `${Math.max(1, Math.round(sec))}s`;
@@ -64,7 +67,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
   if (fuelled.length) {
     const avg = fuelled.reduce((a, u) => a + (u.fuel ?? 0), 0) / fuelled.length;
     const d = c.defU.get(fuelled[0].def)!;
-    const burn = (d.kind === 'air' ? 0.08 : 0.04) * d.speed * (list.some((u) => u.sprint) ? 1.5 : 1);
+    const burn = (d.kind === 'air' ? 0.08 : c.fuelPerKm) * d.speed * (list.some((u) => u.sprint) ? 1.5 : 1);
     lines.push(`Fuel for ~${formatEta(avg / Math.max(burn, 1e-4))} of driving`);
   }
   if (first.haul) {
@@ -75,6 +78,9 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
       const eta = etaSeconds(first, d0, c.roadMult, c.pos(first));
       lines.push(`${first.haul.state === 'to_to' ? 'To unloading' : 'To loading'}${res}${eta ? `: ~${formatEta(eta)}` : ''}`);
     }
+  } else if (first.fuelTo) {
+    const t = c.snap.units.find((u) => u.id === first.fuelTo);
+    lines.push(`Taking fuel to ${t ? c.defU.get(t.def)?.name ?? 'a vehicle' : 'a vehicle'}`);
   } else if (first.isLoitering) {
     lines.push('Patrolling a 4 km circle');
   } else if (d0.missile && !first.target) {
@@ -95,7 +101,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
   el.append(h('button', { class: 'hud-btn', title: 'Stop everything (S)', onClick: () => {
     c.send({ type: 'stop', units: ids });
     c.send({ type: 'bombard', units: ids, target: null });
-    c.pick.route = c.pick.bombard = c.pick.launch = null;
+    c.pick.route = c.pick.bombard = c.pick.launch = c.pick.fuel = null;
     c.rerender();
   } }, 'Stop'));
 
@@ -130,6 +136,16 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
       } }, 'Refuel')));
   }
 
+  // 5b. hand fuel to another vehicle (tankers from their load, other vehicles from their own tank)
+  if (single && d0.kind === 'ground' && (d0.fuelOnly || first.fuel !== undefined)) {
+    const picking = c.pick.fuel?.unitId === first.id;
+    el.append(h('button', { class: 'hud-btn sm' + (picking ? ' active' : ''), title: d0.fuelOnly ? 'Drive to a vehicle and fill its tank from your load' : 'Drive to a vehicle and give it fuel from your own tank (keeps a quarter)', onClick: () => {
+      c.pick.fuel = picking ? null : { unitId: first.id };
+      if (!picking) c.toast('Click the vehicle to refuel (yours or an ally’s; right click or Esc cancels)');
+      c.rerender();
+    } }, picking ? 'Cancel' : 'Give fuel…'));
+  }
+
   // 6. trucks: delivery route, cargo, passengers
   if (single && d0.cargoCap) {
     const cargo = first.cargo?.res ?? {};
@@ -137,7 +153,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     let control: HTMLElement;
     if (c.pick.route?.unitId === first.id) {
       const from = c.pick.route.fromBuilding ? c.snap.buildings.find((b) => b.id === c.pick.route!.fromBuilding) : null;
-      const opts = d0.fuelOnly ? [] : ['ore', 'metal', 'any'];
+      const opts = d0.fuelOnly ? [] : ['ore', 'metal', 'ammo', 'any'];
       if (from && opts.length && !c.pick.route.resType) c.pick.route.resType = opts[0];
       control = h('div', { class: 'route-box' },
         h('b', {}, from ? 'Step 2 of 2: click where to unload' : 'Step 1 of 2: click where to load'),

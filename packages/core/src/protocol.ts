@@ -33,6 +33,11 @@ export interface SnapMsg {
   smokes: { id: number; pos: [number, number]; expiresAt: number }[];
   /** Grey zones: contested patches behind the front. */
   grey: { team: Team; pos: [number, number]; r: number }[];
+  /**
+   * Liberated ground still contested, as runs of grid cells (see LIBERATED_CELL): [iy, team that took it, first ix, count, …].
+   * Only sent when it changed (and in the first snapshot); missing = unchanged.
+   */
+  liberated?: number[];
   /** Cauldrons: closed rings around cut-off territory. */
   pockets: { id: number; team: Team; nodes: { lng: number; lat: number }[] }[];
   points: CapturePoint[];

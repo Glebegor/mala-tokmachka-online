@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, distKm, distToFrontKm, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -69,7 +69,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let fx: ShotFx | null = null;
   let fog: FogOverlay | null = null;
   /** Click modes for delivery routes and artillery barrages. */
-  const pick: Pickers = { route: null, bombard: null, launch: null };
+  const pick: Pickers = { route: null, bombard: null, launch: null, fuel: null };
   /** City boundaries per capture point (housing may only go inside a held city). */
   const cityPolys = new Map<string, LngLat[][]>();
   /** Smoothly interpolated unit positions between 5 Hz snapshots. */
@@ -211,10 +211,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.levels) f.push(`Upgradable to level ${d.levels.length + 1}: ${d.levels.map((l) => `+${Math.round((l.defenseMult ?? 0) * 100)}%`).join(', ')}`);
     if (d.attack) f.push(`Hits ${d.attack.targets} targets: ${d.attack.damage} dmg/s, ${d.attack.range} km`);
     if (d.crossing) f.push(`River crossing within ${d.crossing.radiusKm} km`);
+    if (d.supply) f.push(`Units within ${d.supply.radiusKm} km deal +${Math.round((d.supply.damageMult - 1) * 100)}% damage while it holds ammo (${d.supply.perShot} per shot)`);
+    if (d.buildInGrey) f.push('Can be built inside your grey zones, even behind the enemy line');
     if (d.training) f.push(`Courses for ${d.training.minUnits}–${d.training.capacity} units, ${d.training.baseTime + d.training.timePerRank}s and up`);
     if (d.trains?.length) f.push(`Trains ${d.trains.filter((u) => !defU.get(u)?.side || defU.get(u)?.side === (init?.team === 0 ? 'ua' : 'ru')).map((u) => defU.get(u)?.name ?? u).join(', ')}`);
     if (d.storageCap) f.push(`Store ${d.storageCap.toLocaleString('en-US')}`);
-    if (!d.fieldWork && d.id !== 'housing') f.push(`Needs ${init?.ruleset.rules.minBuildSpacing ?? 35} km from other sites`);
+    const partners = init ? init.ruleset.buildings.filter((o) => chained(d, o)).map((o) => o.name) : [];
+    if (partners.length) f.push(`Keep ${init?.ruleset.rules.minBuildSpacing ?? 35} km from: ${partners.join(', ')}`);
     if (d.vision) f.push(`Sees ${d.vision} km`);
     if (d.maxPerPlayer) f.push(`Limit ${d.maxPerPlayer} per player`);
     return f;
@@ -238,6 +241,21 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       `Training ${u.trainTime}s`,
     ];
   }
+  /** Supply-chain partners that must be built far apart (mirrors the server rule). */
+  const chained = (a: BuildingDef, b: BuildingDef) => !!a.spacedFrom?.includes(b.id) || !!b.spacedFrom?.includes(a.id);
+  const spacingBetween = (d: BuildingDef, other: string, inZone: boolean) => {
+    const r = init!.ruleset.rules;
+    const o = defB.get(other);
+    return o && chained(d, o) && !inZone ? r.minBuildSpacing : r.fieldWorkSpacing;
+  };
+  /** Which side holds the ground (same rule as the server: the painted occupied area, cauldrons first). */
+  function sideAt(p: LngLat): 0 | 1 {
+    const pocket = snap!.pockets.find((k) => pointInRing(k.nodes, p));
+    if (pocket) return pocket.team;
+    if (init!.map.occupiedHoles?.some((h) => inPolygon(p, h))) return distToFrontKm(snap!.front, p) >= 0 ? 0 : 1;
+    return inOccupied(snap!.front, init!.map.occupiedClosure, p) ? 1 : 0;
+  }
+
   /** Show a description card beside `el` while the pointer is over it. */
   function describe(el: HTMLElement, title: string, text: string | undefined, facts: string[], side: 'right' | 'left') {
     el.addEventListener('mouseenter', () => {
@@ -357,7 +375,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -400,6 +418,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
       map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
+      // liberated ground the new owner has not yet held for long: grey over the blue or red
+      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#c3c8cf', 'fill-opacity': 0.6, 'fill-antialias': false } }, 'front-zone');
       // grey zone: contested ground behind the line
       map.addLayer({ id: 'grey-fill', type: 'fill', source: 'grey', paint: { 'fill-color': '#b9bfc8', 'fill-opacity': 0.34 } });
       map.addLayer({ id: 'grey-line', type: 'line', source: 'grey', paint: { 'line-color': '#e3e7ec', 'line-width': 1.2, 'line-opacity': 0.7, 'line-dasharray': [2, 2] } });
@@ -491,6 +511,22 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.launch = null;
         return render();
       }
+      if (pick.fuel) {
+        // the vehicle under the cursor: own or allied, any that takes fuel
+        const layers = ['units-loose', 'units-grouped'].filter((l) => map.getLayer(l));
+        const ids = map.queryRenderedFeatures([[e.point.x - 8, e.point.y - 8], [e.point.x + 8, e.point.y + 8]], { layers }).map((f) => Number(f.properties?.id));
+        // among stacked markers: vehicles that need fuel first, then the one nearest the click
+        const away = (u: UnitView) => { const q = map.project(posOf(u)); return Math.hypot(q.x - e.point.x, q.y - e.point.y); };
+        const full = (u: UnitView) => (u.fuel !== undefined && u.maxFuel !== undefined && u.fuel >= u.maxFuel - 0.5 ? 1 : 0);
+        const t = snap?.units
+          .filter((u) => ids.includes(u.id) && u.id !== pick.fuel!.unitId && u.team === init!.team && defU.get(u.def)?.maxFuel && defU.get(u.def)?.kind === 'ground')
+          .sort((a, b) => full(a) - full(b) || away(a) - away(b))[0];
+        if (!t) return toast(map.getZoom() < GROUP_ZOOM ? 'Zoom in and click a vehicle' : 'Click one of your side’s vehicles', true);
+        send({ type: 'giveFuel', unit: pick.fuel.unitId, target: t.id });
+        toast(`Driving over to refuel the ${defU.get(t.def)?.name ?? 'vehicle'}`);
+        pick.fuel = null;
+        return render();
+      }
       if (pick.route) return toast('Click one of your buildings (Esc cancels)');
       if (placing) {
         send({ type: 'build', def: placing.id, pos: p });
@@ -515,7 +551,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.bombard = null;
         return render();
       }
-      if (pick.route || pick.launch) return void ((pick.route = pick.launch = null), render());
+      if (pick.route || pick.launch || pick.fuel) return void ((pick.route = pick.launch = pick.fuel = null), render());
       if (placing) return cancelPlacing();
       if (!selUnits.size) return;
       const ev = e.originalEvent;
@@ -564,7 +600,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     if (e.key === 'Escape') {
-      if (pick.route || pick.bombard || pick.launch) return void ((pick.route = pick.bombard = pick.launch = null), render());
+      if (pick.route || pick.bombard || pick.launch || pick.fuel) return void ((pick.route = pick.bombard = pick.launch = pick.fuel = null), render());
       return cancelPlacing();
     }
     const k = e.key.toLowerCase();
@@ -781,7 +817,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     (map.getSource('zones') as GeoJSONSource).setData({ type: 'FeatureCollection', features: zones.map((z) => ({ type: 'Feature', properties: { color: z.color, name: z.name }, geometry: { type: 'Polygon', coordinates: [z.polygon] } })) } as any);
     const r = init.ruleset.rules;
     const rings = placing && placing.id !== 'housing'
-      ? snap.buildings.filter((b) => b.def !== 'housing').map((b) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(b.pos, placing!.fieldWork || defB.get(b.def)?.fieldWork ? r.fieldWorkSpacing : specialZoneAt(b.pos) ? 0.5 : r.minBuildSpacing, 64)] } }))
+      ? snap.buildings.filter((b) => b.def !== 'housing' && spacingBetween(placing!, b.def, false) > r.fieldWorkSpacing).map((b) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(b.pos, spacingBetween(placing!, b.def, false), 64)] } }))
       : [];
     (map.getSource('restricted') as GeoJSONSource).setData({ type: 'FeatureCollection', features: rings } as any);
   }
@@ -815,12 +851,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const zone = specialZoneAt(p);
     const mySide = init.team === 0 ? 'ua' : 'ru';
     if (zone && zone.side !== mySide) return `${zone.name} belongs to the other side`;
-    if (!zone) {
-      const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
+    // ammo depots may go up on contested ground our side holds, even behind the line
+    const inGrey = !!def.buildInGrey && (snap.grey.some((z) => z.team === init!.team && distKm(z.pos, p) <= z.r) || contestedAt(p) === init.team);
+    if (!zone && !inGrey) {
+      const d = Math.abs(distToFrontKm(snap.front, p));
       const pocket = snap.pockets.find((k) => pointInRing(k.nodes, p));
       if (pocket) return pocket.team === init.team ? 'this ground is encircled' : 'not your territory';
-      if (snap.grey.some((z) => distKm(z.pos, p) <= z.r)) return 'contested ground (grey zone)';
-      if (d < 0) return 'not your territory';
+      if (snap.grey.some((z) => distKm(z.pos, p) <= z.r) || contestedAt(p) !== undefined) return def.buildInGrey ? 'only your side’s grey zones' : 'contested ground (grey zone)';
+      if (sideAt(p) !== init.team) return 'not your territory';
       if (def.id !== 'housing' && d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     }
     if (terrain?.at(p) === 'water') return 'cannot build on water';
@@ -831,9 +869,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (snap.points[init.map.capturePoints.indexOf(city)]?.owner !== init.team) return 'your side must hold the city';
       if (snap.buildings.filter((b) => b.def === 'housing' && cityAt(b.pos) === city).length >= r.cityHousingLimit) return `${city.name} already has ${r.cityHousingLimit} housing blocks`;
     } else {
-      const spacing = zone ? 0.5 : def.fieldWork ? r.fieldWorkSpacing : r.minBuildSpacing;
-      const clash = snap.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, p) < (def.fieldWork || defB.get(b.def)?.fieldWork ? r.fieldWorkSpacing : spacing));
-      if (clash) return def.fieldWork ? 'space occupied' : `too close to another site (${spacing} km apart)`;
+      const clash = snap.buildings.find((b) => b.def !== 'housing' && distKm(b.pos, p) < spacingBetween(def, b.def, !!zone));
+      if (clash) {
+        const other = defB.get(clash.def)!;
+        return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : 'space occupied';
+      }
     }
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
     return null;
@@ -849,7 +889,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!placing || !init) return;
     const problem = placementProblem(placing, p);
     const color = problem ? '#ff5a5a' : '#5ae88a';
-    const radius = placing.attack?.range ?? placing.crossing?.radiusKm ?? placing.defense?.radiusKm ?? placing.aura?.radiusKm ?? (placing.vision && placing.vision > 8 ? placing.vision : 1.2);
+    const radius = placing.supply?.radiusKm ?? placing.attack?.range ?? placing.crossing?.radiusKm ?? placing.defense?.radiusKm ?? placing.aura?.radiusKm ?? (placing.vision && placing.vision > 8 ? placing.vision : 1.2);
     (map.getSource('ghost') as GeoJSONSource).setData({
       type: 'FeatureCollection',
       features: [{ type: 'Feature', properties: { color }, geometry: { type: 'Polygon', coordinates: [circle(p, radius)] } }],
@@ -1150,6 +1190,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function onSnapshot(s: SnapMsg) {
     if (import.meta.env.DEV) s.pockets.push(...((window as any).__sw?.fakePockets ?? [])), s.grey.push(...((window as any).__sw?.fakeGrey ?? [])); // browser tests draw cauldrons this way
     snap = s;
+    if (import.meta.env.DEV && (window as any).__sw?.fakeLiberated) s.liberated = (window as any).__sw.fakeLiberated; // browser tests
+    if (s.liberated) {
+      libRuns = s.liberated;
+      libCells = new Map();
+      for (let k = 0; k < libRuns.length; k += 4) for (let i = 0; i < libRuns[k + 3]; i++) libCells.set(libKey(libRuns[k + 2] + i, libRuns[k]), libRuns[k + 1]);
+      libDirty = true;
+    }
     if (shown.length !== s.front.length) shown = s.front.map((n) => ({ ...n }));
     pruneGroups();
     for (const id of selUnits) if (!s.units.some((u) => u.id === id)) selUnits.delete(id);
@@ -1178,13 +1225,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function renderHud() {
     if (!init || !snap) return;
     renderUnitHud(unitHud, {
-      snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
+      snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, fuelPerKm: init.ruleset.rules.fuelPerKm, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
     });
     routeBanner.style.display = pick.route ? 'block' : 'none';
     routeBanner.textContent = pick.route
       ? pick.route.fromBuilding ? 'Delivery route — step 2: click the building to unload at (Esc cancels)' : 'Delivery route — step 1: click the building to load at (Esc cancels)'
       : '';
-    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch));
+    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch || pick.fuel));
   }
 
   /** Full refresh after a local change (selection, grouping). */
@@ -1250,6 +1297,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (b.owner === me && (d.vision ?? 0) >= 20) ring(d.vision!, TEAM_COLOR[b.team]);
       if (d.attack) ring(d.attack.range, '#ffd84a');
       if (d.crossing) ring(d.crossing.radiusKm, '#7fe7ff');
+      if (d.supply) ring(d.supply.radiusKm, (b.storage?.ammo ?? 0) > 0 ? '#e39b4f' : '#6b7280');
     }
     // artillery reach for selected guns: outer = max range, inner = minimum range
     for (const u of snap.units) {
@@ -1344,6 +1392,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
     }
 
+    if (libDirty) {
+      // liberated ground still contested: grey cells (rows of them merged into rectangles)
+      libDirty = false;
+      const { lng: cw, lat: ch } = LIBERATED_CELL;
+      const features: any[] = [];
+      for (let k = 0; k < libRuns.length; k += 4) {
+        const [iy, team, ix, n] = [libRuns[k], libRuns[k + 1], libRuns[k + 2], libRuns[k + 3]];
+        const x0 = ix * cw, x1 = (ix + n) * cw, y0 = iy * ch, y1 = (iy + 1) * ch;
+        features.push({ type: 'Feature', properties: { team }, geometry: { type: 'Polygon', coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]] } });
+      }
+      (map.getSource('liberated') as GeoJSONSource).setData({ type: 'FeatureCollection', features } as any);
+    }
     const greyKey = snap.grey.map((z) => `${z.pos[0]},${z.pos[1]}`).join('|');
     if (greyKey !== lastGrey) {
       lastGrey = greyKey;
@@ -1482,6 +1542,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
   let frontDrawn = false;
   let lastGrey = '-';
+  /** Contested liberated ground: runs [iy, team, ix, n, …] from the server, and a lookup of its cells. */
+  let libRuns: number[] = [];
+  let libCells = new Map<number, number>();
+  let libDirty = false;
+  const libKey = (ix: number, iy: number) => ix * 100000 + iy;
+  /** Team that took this contested liberated cell, or undefined. */
+  const contestedAt = (p: LngLat) => libCells.get(libKey(Math.floor(p[0] / LIBERATED_CELL.lng), Math.floor(p[1] / LIBERATED_CELL.lat)));
   let lastFuel = -10;
   let lastPockets = '';
 

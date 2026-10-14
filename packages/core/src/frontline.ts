@@ -90,9 +90,69 @@ export function distToFrontKm(front: FrontNode[], p: LngLat): number {
   return Math.sqrt(best) * side;
 }
 
-/** Which team holds the ground at this position. */
+/** Which team holds the ground at this position, by the side of the nearest stretch of front (reliable near the line only). */
 export function sideOf(front: FrontNode[], p: LngLat): Team {
   return distToFrontKm(front, p) >= 0 ? 0 : 1;
+}
+
+/**
+ * Is p inside team 1's area: the ring made of the front line followed by the map's closure points (exactly what the client
+ * paints red)? Ray casting over the nodes and the closure without building the ring.
+ */
+export function inOccupied(front: FrontNode[], closure: LngLat[], p: LngLat): boolean {
+  const n = front.length + closure.length;
+  const at = (i: number): [number, number] => (i < front.length ? [front[i].lng, front[i].lat] : closure[i - front.length]);
+  let inside = false;
+  let [jx, jy] = at(n - 1);
+  for (let i = 0; i < n; i++) {
+    const [ix, iy] = at(i);
+    if (iy > p[1] !== jy > p[1] && p[0] < ((jx - ix) * (p[1] - iy)) / (jy - iy) + ix) inside = !inside;
+    jx = ix;
+    jy = iy;
+  }
+  return inside;
+}
+
+/**
+ * `inOccupied` for many queries: the ring's segments bucketed into latitude bands, so a ray cast only looks at the few
+ * segments that cross the query's latitude. Rebuild it whenever the front moves.
+ */
+export class OccupiedIndex {
+  private bands: number[][] = [];
+  private xs: Float64Array;
+  private ys: Float64Array;
+  private y0 = 0;
+  private static readonly H = 0.05; // degrees of latitude per band
+  constructor(front: FrontNode[], closure: LngLat[]) {
+    const n = front.length + closure.length;
+    this.xs = new Float64Array(n);
+    this.ys = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const q = i < front.length ? [front[i].lng, front[i].lat] : closure[i - front.length];
+      this.xs[i] = q[0];
+      this.ys[i] = q[1];
+    }
+    let lo = Infinity;
+    for (let i = 0; i < n; i++) lo = Math.min(lo, this.ys[i]);
+    this.y0 = lo;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const a = Math.floor((Math.min(this.ys[i], this.ys[j]) - lo) / OccupiedIndex.H);
+      const b = Math.floor((Math.max(this.ys[i], this.ys[j]) - lo) / OccupiedIndex.H);
+      for (let k = a; k <= b; k++) (this.bands[k] ??= []).push(i);
+    }
+  }
+  contains(p: LngLat): boolean {
+    const segs = this.bands[Math.floor((p[1] - this.y0) / OccupiedIndex.H)];
+    if (!segs) return false;
+    const { xs, ys } = this;
+    const n = xs.length;
+    let inside = false;
+    for (const i of segs) {
+      const j = i === 0 ? n - 1 : i - 1;
+      if (ys[i] > p[1] !== ys[j] > p[1] && p[0] < ((xs[j] - xs[i]) * (p[1] - ys[i])) / (ys[j] - ys[i]) + xs[i]) inside = !inside;
+    }
+    return inside;
+  }
 }
 
 /** Index of the front node closest to a position. */
