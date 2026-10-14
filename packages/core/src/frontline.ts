@@ -175,17 +175,17 @@ export function resolveFrontLoops(nodes: FrontNode[], pinchDistKm = 4.0): { main
   const loops: FrontNode[][] = [];
   let found = true;
   let guard = 0;
-  while (found && guard++ < 8) {
+  while (found && guard++ < 12) {
     found = false;
     for (let i = 0; i < cur.length - 2 && !found; i++) {
       const pA: [number, number] = [cur[i].lng, cur[i].lat];
       const pB: [number, number] = [cur[i + 1].lng, cur[i + 1].lat];
-      for (let j = i + 12; j < cur.length - 1 && !found; j++) {
+      for (let j = i + 2; j < cur.length - 1 && !found; j++) {
         const pC: [number, number] = [cur[j].lng, cur[j].lat];
         const pD: [number, number] = [cur[j + 1].lng, cur[j + 1].lat];
 
         let inter = lineSegmentIntersection(pA, pB, pC, pD);
-        if (!inter) {
+        if (!inter && j >= i + 8) {
           const d = distKm(pA, pC);
           if (d < pinchDistKm) {
             inter = [(pA[0] + pC[0]) / 2, (pA[1] + pC[1]) / 2];
@@ -195,14 +195,25 @@ export function resolveFrontLoops(nodes: FrontNode[], pinchDistKm = 4.0): { main
         if (inter) {
           found = true;
           const midNode: FrontNode = { lng: inter[0], lat: inter[1], v: 0 };
-          // The separated loop is the military pocket ("котёл")
-          const loop = [midNode, ...cur.slice(i + 1, j + 1), midNode];
-          loops.push(resample(loop, Math.max(12, Math.min(100, j - i + 2))));
-          // The main frontline bypasses the loop and continues forward cleanly
+          const span = j - i;
+          if (span >= 10) {
+            // Significant pocket ("котёл")
+            const loop = [midNode, ...cur.slice(i + 1, j + 1), midNode];
+            loops.push(resample(loop, Math.max(12, Math.min(100, span + 2))));
+          }
+          // The main frontline bypasses the loop/knot and reconnects cleanly without self-intersections
           cur = [...cur.slice(0, i + 1), midNode, ...cur.slice(j + 1)];
           cur = resample(cur, Math.max(8, cur.length));
         }
       }
+    }
+  }
+
+  // Smooth out any sharp fold kinks to maintain a clean frontline curve
+  for (let pass = 0; pass < 2; pass++) {
+    for (let i = 1; i < cur.length - 1; i++) {
+      cur[i].lng = cur[i].lng * 0.7 + ((cur[i - 1].lng + cur[i + 1].lng) / 2) * 0.3;
+      cur[i].lat = cur[i].lat * 0.7 + ((cur[i - 1].lat + cur[i + 1].lat) / 2) * 0.3;
     }
   }
   return { main: cur, loops };

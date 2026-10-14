@@ -10,7 +10,7 @@ export function applySettings(base: Ruleset, s: RoomSettings): Ruleset {
     ...base,
     rules: {
       ...base.rules,
-      matchSeconds: s.matchMinutes * 60,
+      matchSeconds: s.matchMinutes > 0 ? s.matchMinutes * 60 : 0,
       frontPush: base.rules.frontPush * s.frontSpeed,
       frontMaxSpeed: base.rules.frontMaxSpeed * s.frontSpeed,
       fogOfWar: s.fogOfWar,

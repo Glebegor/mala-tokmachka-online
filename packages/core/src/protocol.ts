@@ -51,7 +51,7 @@ export type BotDifficulty = 'easy' | 'normal' | 'hard';
 
 export interface RoomSettings {
   mapId: string;
-  matchMinutes: number; // 5..90
+  matchMinutes: number; // 0 = 'До победного' (unlimited), or 5..90
   teamSize: number; // 1..8
   fillBots: boolean; // pad teams with bots up to teamSize
   botDifficulty: BotDifficulty;

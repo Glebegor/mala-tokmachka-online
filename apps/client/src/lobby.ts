@@ -42,7 +42,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
     return h('div', { class: 'settings' },
       h('h3', {}, 'Match settings', isHost ? null : h('span', { class: 'muted' }, ' (host only)')),
       select('Map', st.mapId, (maps.length ? maps : [{ id: st.mapId, name: st.mapId }]).map((m) => ({ v: m.id, label: m.name })), !isHost, (v) => set({ mapId: v })),
-      select('Duration', st.matchMinutes, [10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` })), !isHost, (v) => set({ matchMinutes: v })),
+      select('Duration', st.matchMinutes, [{ v: 0, label: 'До победного' }, ...[10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` }))], !isHost, (v) => set({ matchMinutes: v })),
       select('Team size', st.teamSize, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ v: n, label: `${n} v ${n}` })), !isHost, (v) => set({ teamSize: v })),
       toggle('Fill empty slots with bots', st.fillBots, !isHost, (v) => set({ fillBots: v })),
       select<BotDifficulty>('Bot difficulty', st.botDifficulty, [{ v: 'easy', label: 'Easy' }, { v: 'normal', label: 'Normal' }, { v: 'hard', label: 'Hard' }], !isHost, (v) => set({ botDifficulty: v })),
