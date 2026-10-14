@@ -14,6 +14,16 @@ const NO_HOOKS: Hooks = { emit() {} };
 const NO_RANK: RankDef = { id: 'none', name: '', xp: 0, damage: 1, hp: 1, range: 1, cost: {} };
 const OPEN_GROUND: TerrainDef = { id: 'open', name: 'Open', color: '#000', speed: {}, cover: 0, concealment: 1, frontResist: 0 };
 
+export function isReconDrone(d: UnitDef | undefined): boolean {
+  if (!d) return false;
+  return d.droneType === 'recon' || d.id === 'drone' || (d.kind === 'air' && d.droneType !== 'strike');
+}
+
+export function isStrikeDrone(d: UnitDef | undefined): boolean {
+  if (!d) return false;
+  return d.droneType === 'strike';
+}
+
 export class Sim {
   readonly defs: { b: Map<string, BuildingDef>; u: Map<string, UnitDef>; t: Map<string, TerrainDef> };
   readonly map: MapDef;
@@ -161,6 +171,7 @@ export class Sim {
   allowedStorageResources(d: BuildingDef): string[] {
     if (d.id === 'gas_station') return ['fuel'];
     if (d.id === 'oil_refinery') return ['fuel'];
+    if (d.id === 'airfield') return ['fuel'];
     if (d.id === 'mine') return ['ore'];
     if (d.id === 'warehouse') return ['metal', 'fuel', 'ore'];
 
@@ -196,7 +207,7 @@ export class Sim {
     if (allowed.length > 0) {
       storage = {};
       for (const k of allowed) {
-        if (k === 'fuel' && d.id === 'gas_station') storage[k] = 500;
+        if (k === 'fuel' && (d.id === 'gas_station' || d.id === 'airfield')) storage[k] = 500;
         else if (k === 'ore' && d.id === 'metalworks') storage[k] = 0;
         else storage[k] = 500;
       }
@@ -213,6 +224,7 @@ export class Sim {
     const isInfantry = d.kind === 'ground' && d.mobility === 'foot' && !d.maxFuel;
     const maxFuel = isDrone ? (d.maxFuel ?? 100) : (d.maxFuel ?? (isVehicle ? 100 : undefined));
     const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined;
+    const isRecon = isReconDrone(d);
     const u: Unit = {
       id: this.world.nextId++,
       def,
@@ -232,6 +244,9 @@ export class Sim {
       fuel: maxFuel,
       maxFuel,
       cargo,
+      loiterCenter: isRecon ? [pos[0], pos[1]] : undefined,
+      loiterRadius: isRecon ? 4.0 : undefined,
+      isLoitering: isRecon ? true : undefined,
     };
     this.world.units.push(u);
     return u;
@@ -359,7 +374,24 @@ export class Sim {
       }
       case 'stop': {
         const set = new Set(cmd.units);
-        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) (u.target = null), (u.path = []), (u.cap = 0), (u.route = undefined);
+        for (const u of w.units) {
+          if (set.has(u.id) && u.owner === p.id) {
+            u.target = null;
+            u.path = [];
+            u.cap = 0;
+            u.route = undefined;
+            const ud = this.defs.u.get(u.def);
+            if (isReconDrone(ud)) {
+              u.loiterCenter = [u.pos[0], u.pos[1]];
+              u.loiterRadius = 4.0;
+              u.isLoitering = true;
+            } else {
+              u.loiterCenter = undefined;
+              u.loiterRadius = undefined;
+              u.isLoitering = false;
+            }
+          }
+        }
         return ok();
       }
       case 'promote': {
@@ -464,6 +496,26 @@ export class Sim {
         for (const u of w.units) {
           if (!set.has(u.id) || u.owner !== p.id) continue;
           if (u.fuel === undefined) continue;
+          const ud = this.defs.u.get(u.def);
+          if (isStrikeDrone(ud)) continue; // Combat / strike drones CANNOT be refueled!
+
+          if (isReconDrone(ud)) {
+            // Recon drones can ONLY refuel at friendly airfields!
+            let bestAirfield: LngLat | null = null;
+            let bestDist = 1e9;
+            for (const b of w.buildings) {
+              if (b.def === 'airfield' && b.owner === p.id && b.progress >= 1) {
+                const d = distKm(u.pos, b.pos);
+                if (d < bestDist) { bestDist = d; bestAirfield = b.pos; }
+              }
+            }
+            if (bestAirfield) {
+              this.orderMove([u], bestAirfield, false);
+            }
+            continue;
+          }
+
+          // Ground vehicles: refuel from gas stations, fuel trucks, or HQ
           let bestStation: LngLat | null = null;
           let bestDist = 1e9;
           for (const b of w.buildings) {
@@ -524,7 +576,7 @@ export class Sim {
     units.forEach((u, i) => {
       const d = this.defs.u.get(u.def)!;
       u.bombardTarget = undefined; // clear manual bombard target on move
-      if (d.droneType === 'strike') {
+      if (isStrikeDrone(d)) {
         const leg: Waypoint = { p: to, road: false };
         if (append && u.path.length) {
           u.path.push(leg);
@@ -539,9 +591,9 @@ export class Sim {
         u.isLoitering = false;
         return;
       }
-      if (d.droneType === 'recon') {
+      if (isReconDrone(d)) {
         const leg: Waypoint = { p: to, road: false };
-        if (append && u.path.length) {
+        if (append && u.path.length && !u.isLoitering) {
           u.path.push(leg);
         } else {
           u.path = [leg];
@@ -794,50 +846,69 @@ export class Sim {
         }
       }
 
-      // Refueling for vehicles: tanks and vehicles refuel from gas_station storage tank (20k capacity) or fuel truck
-      if (u.fuel !== undefined && u.maxFuel !== undefined && u.fuel < u.maxFuel) {
+      // Refueling logic:
+      // - Combat / strike drones CANNOT refuel.
+      // - Recon drones can ONLY refuel at friendly airfields (<= 12 km).
+      // - Ground vehicles refuel from gas stations (<= 8 km), fuel trucks (<= 5 km), or fallback HQ.
+      if (u.fuel !== undefined && u.maxFuel !== undefined && u.fuel < u.maxFuel && !isStrikeDrone(d)) {
         let refueled = false;
-        // 1. Check if near friendly gas_station (АЗС)
-        for (const b of w.buildings) {
-          if (b.def === 'gas_station' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
-            const avail = b.storage?.fuel ?? 0;
-            if (avail > 0) {
-              const needed = u.maxFuel - u.fuel;
-              const transfer = Math.min(30 * dt, needed, avail);
-              b.storage!.fuel -= transfer;
-              u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
-              refueled = true;
-              break;
-            }
-          }
-        }
-        // 2. Check if near friendly fuel_truck
-        if (!refueled) {
-          for (const ft of w.units) {
-            if (ft.id !== u.id && ft.def === 'fuel_truck' && ft.owner === u.owner && distKm(u.pos, ft.pos) <= 5) {
-              const avail = ft.cargo?.res?.fuel ?? 0;
+        if (isReconDrone(d)) {
+          for (const b of w.buildings) {
+            if (b.def === 'airfield' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 12) {
+              const avail = b.storage?.fuel ?? 0;
               if (avail > 0) {
                 const needed = u.maxFuel - u.fuel;
-                const transfer = Math.min(25 * dt, avail, needed);
-                ft.cargo!.res.fuel -= transfer;
+                const transfer = Math.min(30 * dt, needed, avail);
+                b.storage!.fuel -= transfer;
                 u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
                 refueled = true;
                 break;
               }
             }
           }
-        }
-        // 3. Fallback: HQ emergency refuel
-        if (!refueled) {
+        } else {
+          // 1. Check if near friendly gas_station (АЗС)
           for (const b of w.buildings) {
-            if (b.def === 'hq' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+            if (b.def === 'gas_station' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
               const avail = b.storage?.fuel ?? 0;
               if (avail > 0) {
                 const needed = u.maxFuel - u.fuel;
-                const transfer = Math.min(15 * dt, needed, avail);
+                const transfer = Math.min(30 * dt, needed, avail);
                 b.storage!.fuel -= transfer;
                 u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
+                refueled = true;
                 break;
+              }
+            }
+          }
+          // 2. Check if near friendly fuel_truck
+          if (!refueled) {
+            for (const ft of w.units) {
+              if (ft.id !== u.id && ft.def === 'fuel_truck' && ft.owner === u.owner && distKm(u.pos, ft.pos) <= 5) {
+                const avail = ft.cargo?.res?.fuel ?? 0;
+                if (avail > 0) {
+                  const needed = u.maxFuel - u.fuel;
+                  const transfer = Math.min(25 * dt, avail, needed);
+                  ft.cargo!.res.fuel -= transfer;
+                  u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
+                  refueled = true;
+                  break;
+                }
+              }
+            }
+          }
+          // 3. Fallback: HQ emergency refuel
+          if (!refueled) {
+            for (const b of w.buildings) {
+              if (b.def === 'hq' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+                const avail = b.storage?.fuel ?? 0;
+                if (avail > 0) {
+                  const needed = u.maxFuel - u.fuel;
+                  const transfer = Math.min(15 * dt, needed, avail);
+                  b.storage!.fuel -= transfer;
+                  u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
+                  break;
+                }
               }
             }
           }
@@ -916,7 +987,7 @@ export class Sim {
             u.route.timer = (u.route.timer ?? 4.0) - dt;
             if (u.route.timer <= 0) {
               if (!toB.storage) toB.storage = {};
-              const cap = toB.def === 'gas_station' ? 20000 : 30000;
+              const cap = toB.def === 'gas_station' || toB.def === 'airfield' ? 20000 : 30000;
               const toDef = this.defs.b.get(toB.def)!;
               const allowed = this.allowedStorageResources(toDef);
               if (u.cargo.res) {
@@ -1029,9 +1100,10 @@ export class Sim {
       }
 
       // movement: explicit orders follow their route; idle units close with enemies they can see
+      const isRecon = isReconDrone(d);
       if (u.path.length) {
         this.advance(u, d, dt);
-      } else if (d.droneType === 'recon' && u.loiterCenter) {
+      } else if (isRecon) {
         this.advance(u, d, dt);
       } else if (d.kind !== 'air' && !tu && !tb && canFire && !u.route && !handledBombard) {
         if (d.symbol === 'artillery' || d.minRange) {
@@ -1074,10 +1146,13 @@ export class Sim {
     if (u.fuel !== undefined && u.fuel <= 0) {
       return; // out of fuel
     }
-    if (d.droneType === 'recon' && u.loiterCenter && !u.isLoitering && !u.path.length) {
-      // Reached destination: establish circular orbit route of radius 4.0 km
+    const isRecon = isReconDrone(d);
+    if (isRecon && !u.path.length) {
+      // Reached destination or idle: establish circular orbit route of radius 4.0 km
+      if (!u.loiterCenter) u.loiterCenter = [u.pos[0], u.pos[1]];
+      if (!u.loiterRadius) u.loiterRadius = 4.0;
       u.isLoitering = true;
-      const rKm = u.loiterRadius ?? 4.0;
+      const rKm = u.loiterRadius;
       const startAng = (u.bearing !== undefined ? u.bearing : 0) * (Math.PI / 180);
       const numPts = 32;
       const orbit: Waypoint[] = [];
@@ -1128,14 +1203,16 @@ export class Sim {
         u.pos = nextPos;
         budget -= dist / speed;
         const reachedWp = u.path.shift()!;
-        if (d.droneType === 'recon' && u.isLoitering) {
+        if (isRecon && u.isLoitering) {
           // Endless circular orbit: cycle reached waypoint to end of path
           u.path.push(reachedWp);
         }
-        if (d.droneType === 'recon' && u.loiterCenter && !u.isLoitering && !u.path.length) {
-          // Reached loiter center: start circular orbit!
+        if (isRecon && !u.path.length) {
+          // Reached loiter center or path exhausted: start circular orbit!
+          if (!u.loiterCenter) u.loiterCenter = [u.pos[0], u.pos[1]];
+          if (!u.loiterRadius) u.loiterRadius = 4.0;
           u.isLoitering = true;
-          const rKm = u.loiterRadius ?? 4.0;
+          const rKm = u.loiterRadius;
           const startAng = (u.bearing !== undefined ? u.bearing : 0) * (Math.PI / 180);
           const numPts = 32;
           const orbit: Waypoint[] = [];
@@ -1165,7 +1242,7 @@ export class Sim {
       }
     }
     if (!u.path.length) {
-      if (d.droneType === 'strike') {
+      if (isStrikeDrone(d)) {
         const blastRadius = d.id === 'drone_fire_point' ? 1.2 : 1.8;
         const damage = d.damage || 320;
         let totalDealt = 0;
@@ -1214,7 +1291,7 @@ export class Sim {
         u.cap = 0;
         return;
       }
-      if (d.droneType === 'recon' && u.loiterCenter) {
+      if (isRecon && u.isLoitering) {
         return;
       }
       (u.target = null), (u.cap = 0);
