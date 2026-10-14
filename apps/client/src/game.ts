@@ -262,74 +262,46 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         (map.getSource('city-schematics') as GeoJSONSource).setData(buildCitySchematicsGeoJSON(m.capturePoints));
       }
 
-      // Procedural schematic city layers (Watabou medieval / tactical city style)
+      // Realistic schematic city boundaries and downtown buildings
       map.addLayer({
-        id: 'city-district-fill', type: 'fill', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'district'],
+        id: 'city-boundary-fill', type: 'fill', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'city-boundary-fill'],
         paint: {
-          'fill-color': ['get', 'color'],
-          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.42, 8, 0.55],
+          'fill-color': '#1e293b',
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.28, 7.5, 0.45],
+        },
+      });
+      map.addLayer({
+        id: 'city-boundary-line', type: 'line', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'city-boundary-line'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#64748b',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.0, 8, 1.6, 11, 2.2],
+          'line-dasharray': [4, 2],
+          'line-opacity': 0.75,
+        },
+      });
+      map.addLayer({
+        id: 'city-buildings-fill', type: 'fill', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'building'],
+        minzoom: 6.2,
+        paint: {
+          'fill-color': '#94a3b8',
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 6.2, 0.35, 7.5, 0.75, 9.5, 0.95],
           'fill-outline-color': '#0f172a',
         },
       });
       map.addLayer({
-        id: 'city-block-fill', type: 'fill', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'block'],
-        minzoom: 5.6,
+        id: 'city-buildings-stroke', type: 'line', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'building'],
+        minzoom: 7.0,
         paint: {
-          'fill-color': ['get', 'color'],
-          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 5.6, 0.45, 7.5, 0.85],
-          'fill-outline-color': '#090d16',
+          'line-color': '#0f172a',
+          'line-width': 0.75,
         },
       });
-      map.addLayer({
-        id: 'city-streets', type: 'line', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'street'],
-        minzoom: 5.4,
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': '#f8fafc',
-          'line-opacity': 0.7,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5.4, 0.8, 8, 1.4, 11, 2.2],
-        },
-      });
-      map.addLayer({
-        id: 'city-plaza-fill', type: 'fill', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'plaza'],
-        paint: {
-          'fill-color': '#0b0d10',
-          'fill-opacity': 0.85,
-          'fill-outline-color': '#475569',
-        },
-      });
-      map.addLayer({
-        id: 'city-citadel-fill', type: 'fill', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'citadel'],
-        paint: {
-          'fill-color': '#cbd5e1',
-          'fill-opacity': 0.95,
-          'fill-outline-color': '#0f172a',
-        },
-      });
-      map.addLayer({
-        id: 'city-walls', type: 'line', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'wall'],
-        layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: {
-          'line-color': '#090d16',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.8, 8, 2.8, 11, 3.8],
-        },
-      });
-      map.addLayer({
-        id: 'city-bastions', type: 'circle', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'bastion'],
-        paint: {
-          'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 1.5, 8, 2.8, 11, 4.0],
-          'circle-color': '#0f172a',
-          'circle-stroke-width': 1.0,
-          'circle-stroke-color': '#94a3b8',
-        },
-      });
+
       (map.getSource('roads') as GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: (m.roads ?? []).map((l) => {
@@ -343,9 +315,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         filter: ['!=', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#92400e',
-          'line-opacity': 0.75,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.7, 8, 1.1, 11, 1.6],
+          'line-color': '#64748b',
+          'line-opacity': 0.8,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.65, 8, 1.05, 11, 1.5],
         },
       });
       map.addLayer({
@@ -353,9 +325,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         filter: ['==', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#d97706',
-          'line-opacity': 0.9,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.2, 8, 1.9, 11, 2.8],
+          'line-color': '#cbd5e1',
+          'line-opacity': 0.92,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.15, 8, 1.85, 11, 2.7],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
