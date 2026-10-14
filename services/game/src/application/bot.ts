@@ -29,7 +29,7 @@ export class Bot {
     const w = sim.world;
     const mine = w.buildings.filter((b) => b.owner === p.id);
     if (mine.filter((b) => b.progress < 1).length >= 2) return;
-    const hq = mine.find((b) => b.def === 'military_base' || b.def === 'hq');
+    const hq = mine.find((b) => b.def === 'military_base' || b.def === 'hq') ?? w.buildings.find((b) => b.team === p.team && (b.def === 'military_base' || b.def === 'hq'));
     if (!hq) return;
     const fn = w.front[nearestNode(w.front, hq.pos)];
     const frontPos: LngLat = [fn.lng, fn.lat];
@@ -57,7 +57,7 @@ export class Bot {
     const w = sim.world;
     const mySide = p.team === 0 ? 'ua' : 'ru';
     for (const b of w.buildings) {
-      if (b.owner !== p.id || b.progress < 1) continue;
+      if (b.team !== p.team || b.progress < 1) continue;
       const d = sim.defs.b.get(b.def)!;
       if (!d.trains?.length) continue;
       if (w.queue.filter((q) => q.building === b.id).length >= 2) continue;

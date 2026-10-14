@@ -1180,9 +1180,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function renderSide() {
     if (!init || !snap) return;
+    const myTeam = init.team;
     clear(side);
     if (selBuilding !== null) {
-      const b = snap.buildings.find((x) => x.id === selBuilding && x.owner === me);
+      const b = snap.buildings.find((x) => x.id === selBuilding && x.team === myTeam);
       if (!b) selBuilding = null;
       else {
         const d = defB.get(b.def)!;
@@ -1305,7 +1306,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const q = snap.queue.filter((x) => x.building === b.id);
           if (q.length) side.append(h('div', { class: 'stat' }, 'Queue: ' + q.map((x) => `${defU.get(x.unit)?.name} (${x.remaining}s)`).join(', ')));
         }
-        if (b.def !== 'hq') side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
+        if (b.def !== 'hq' && b.def !== 'military_base') side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
       }
     } else if (selUnits.size) {
       const mine = snap.units.filter((u) => selUnits.has(u.id));
@@ -1385,6 +1386,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function renderUnitHud() {
     if (!init || !snap) return;
+    const myTeam = init.team;
     clear(unitHud);
     if (!selUnits.size) {
       unitHud.style.display = 'none';
@@ -1545,7 +1547,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             title: refuelTitle,
             onClick: () => {
               if (hasReconDrones && selectedList.every((u) => isReconDrone(defU.get(u.def)))) {
-                const hasAirfield = snap?.buildings.some((b) => b.def === 'airfield' && b.owner === me && b.progress >= 1);
+                const hasAirfield = snap?.buildings.some((b) => b.def === 'airfield' && b.team === myTeam && b.progress >= 1);
                 if (!hasAirfield) {
                   toast('Нет доступного аэродрома для дозаправки БПЛА! Постройте аэродром.', true);
                   return;
@@ -1837,11 +1839,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   function renderBuildingHighlights() {
-    if (!snap) return;
+    if (!snap || !init) return;
+    const myTeam = init.team;
     for (const b of snap.buildings) {
       const m = bMarkers.get(b.id);
       if (!m) continue;
-      m.el.classList.toggle('route-candidate', !!routePicker && b.owner === me && routePicker.fromBuilding !== b.id);
+      m.el.classList.toggle('route-candidate', !!routePicker && b.team === myTeam && routePicker.fromBuilding !== b.id);
       m.el.classList.toggle('route-from', routePicker?.fromBuilding === b.id);
     }
   }
@@ -2139,7 +2142,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const rings: any[] = [];
     for (const b of snap.buildings) {
       const d = defB.get(b.def)!;
-      if (b.owner === me && b.progress >= 1 && (d.vision ?? 0) >= 20) rings.push({ type: 'Feature', properties: { color: TEAM_COLOR[b.team] }, geometry: { type: 'LineString', coordinates: circle(b.pos, d.vision!, 64) } });
+      if (b.team === myTeam && b.progress >= 1 && (d.vision ?? 0) >= 20) rings.push({ type: 'Feature', properties: { color: TEAM_COLOR[b.team] }, geometry: { type: 'LineString', coordinates: circle(b.pos, d.vision!, 64) } });
     }
     for (const u of snap.units) {
       if (!selUnits.has(u.id)) continue;
@@ -2216,8 +2219,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
     // Power lines along roads connecting power plants to buildings <= 100km (visible ONLY when a power plant is selected)
     if (map.getSource('power-lines')) {
-      const selectedPowerPlant = selBuilding !== null ? snap.buildings.find((b) => b.id === selBuilding && b.owner === me && b.progress >= 1 && b.def === 'power_plant') : null;
-      const selectedConsumer = (!selectedPowerPlant && selBuilding !== null) ? snap.buildings.find((b) => b.id === selBuilding && b.owner === me && b.progress >= 1) : null;
+      const selectedPowerPlant = selBuilding !== null ? snap.buildings.find((b) => b.id === selBuilding && b.team === myTeam && b.progress >= 1 && b.def === 'power_plant') : null;
+      const selectedConsumer = (!selectedPowerPlant && selBuilding !== null) ? snap.buildings.find((b) => b.id === selBuilding && b.team === myTeam && b.progress >= 1) : null;
       if (!selectedPowerPlant && !selectedConsumer) {
         if (lastPowerLineKey !== 'none') {
           lastPowerLineKey = 'none';
@@ -2301,8 +2304,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           if (placing) return;
           if (routePicker) {
             ev.stopPropagation();
-            if (b.owner !== me) {
-              toast('Маршрут можно задавать только между вашими зданиями!', true);
+            if (b.team !== myTeam) {
+              toast('Маршрут можно задавать только между зданиями вашей команды!', true);
               return;
             }
             if (!routePicker.fromBuilding) {
@@ -2323,7 +2326,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             }
             return;
           }
-          if (b.owner !== me) return;
+          if (b.team !== myTeam) return;
           ev.stopPropagation();
           selBuilding = b.id;
           selUnits.clear();
@@ -2336,10 +2339,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       const done = b.progress >= 1;
       m.el.classList.toggle('building', !done);
-      m.el.classList.toggle('mine', b.owner === me);
+      m.el.classList.toggle('mine', b.team === myTeam);
       m.el.classList.toggle('selected', selBuilding === b.id);
       m.el.classList.toggle('def-housing', b.def === 'housing');
-      m.el.classList.toggle('route-candidate', !!routePicker && b.owner === me && routePicker.fromBuilding !== b.id);
+      m.el.classList.toggle('route-candidate', !!routePicker && b.team === myTeam && routePicker.fromBuilding !== b.id);
       m.el.classList.toggle('route-from', routePicker?.fromBuilding === b.id);
       m.el.style.setProperty('--p', String(b.progress));
       if (done && !m.done) {
