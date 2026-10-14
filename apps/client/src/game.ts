@@ -258,17 +258,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         map.addLayer({ id: 'terrain', type: 'raster', source: 'terrain', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.5, 'raster-resampling': 'nearest', 'raster-fade-duration': 0 } });
       }
 
-      if (m.capturePoints) {
+      if (m.cities) {
+        (map.getSource('city-schematics') as GeoJSONSource).setData(m.cities);
+      } else if (m.capturePoints) {
         (map.getSource('city-schematics') as GeoJSONSource).setData(buildCitySchematicsGeoJSON(m.capturePoints));
       }
 
-      // Realistic schematic city boundaries and downtown buildings
+      // Real OpenStreetMap city boundaries (municipal borders)
       map.addLayer({
         id: 'city-boundary-fill', type: 'fill', source: 'city-schematics',
         filter: ['==', ['get', 'type'], 'city-boundary-fill'],
         paint: {
           'fill-color': '#1e293b',
-          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.28, 7.5, 0.45],
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.22, 7.5, 0.42],
         },
       });
       map.addLayer({
@@ -277,28 +279,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#64748b',
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.0, 8, 1.6, 11, 2.2],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.2, 8, 1.8, 11, 2.4],
           'line-dasharray': [4, 2],
-          'line-opacity': 0.75,
-        },
-      });
-      map.addLayer({
-        id: 'city-buildings-fill', type: 'fill', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'building'],
-        minzoom: 6.2,
-        paint: {
-          'fill-color': '#94a3b8',
-          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 6.2, 0.35, 7.5, 0.75, 9.5, 0.95],
-          'fill-outline-color': '#0f172a',
-        },
-      });
-      map.addLayer({
-        id: 'city-buildings-stroke', type: 'line', source: 'city-schematics',
-        filter: ['==', ['get', 'type'], 'building'],
-        minzoom: 7.0,
-        paint: {
-          'line-color': '#0f172a',
-          'line-width': 0.75,
+          'line-opacity': 0.8,
         },
       });
 
@@ -313,11 +296,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({
         id: 'roads-minor', type: 'line', source: 'roads',
         filter: ['!=', ['get', 'major'], 1],
+        minzoom: 6.0,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#64748b',
-          'line-opacity': 0.8,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.65, 8, 1.05, 11, 1.5],
+          'line-color': '#334155',
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 6.0, 0.25, 8.5, 0.55],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 6.0, 0.5, 8.5, 0.9, 11, 1.4],
         },
       });
       map.addLayer({
@@ -325,9 +309,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         filter: ['==', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#cbd5e1',
-          'line-opacity': 0.92,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.15, 8, 1.85, 11, 2.7],
+          'line-color': '#475569',
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.45, 8, 0.7, 11, 0.85],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.75, 8, 1.35, 11, 2.2],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });

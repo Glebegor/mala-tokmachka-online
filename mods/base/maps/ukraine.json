@@ -16,6 +16,7 @@
   "terrainFile": "ukraine.terrain.json",
   "bordersFile": "borders.geojson",
   "fuelFile": "ukraine.fuel.json",
+  "citiesFile": "ukraine.cities.geojson",
   "front": [
     [
       31.547,
