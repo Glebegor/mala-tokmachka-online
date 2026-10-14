@@ -21,6 +21,9 @@ export interface Building {
   progress: number; // 0..1, 1 = complete
   road: boolean; // connected to the road network
   cooldown: number; // static weapons
+  /** Local stock of physical goods (own team only in snapshots). */
+  storage?: Record<string, number>;
+  lastDamagedTime?: number;
   /** Upgrade level, starting at 1. */
   level: number;
   /** Upgrade to the next level in progress. */
@@ -35,6 +38,28 @@ export type BuildingView = Omit<Building, 'inside'> & {
   /** Own team only: who is inside. */
   inside?: { def: string; rank: number }[];
 };
+
+export interface UnitCargo {
+  res: Record<string, number>;
+  cap: number;
+  passengers?: number[]; // ids of units riding inside
+}
+
+/** A standing delivery order for a truck: load at one building, unload at another, repeat. */
+export interface Haul {
+  fromBuilding: number;
+  toBuilding: number;
+  resType?: string;
+  state?: 'to_from' | 'loading' | 'to_to' | 'unloading';
+  timer?: number;
+}
+
+export interface SmokeCloud {
+  id: number;
+  pos: LngLat;
+  createdAt: number;
+  expiresAt: number;
+}
 
 export interface Unit {
   id: number;
@@ -51,6 +76,19 @@ export interface Unit {
   transport: boolean;
   /** Cut off inside a cauldron: weaker and bleeding strength until relieved or destroyed. */
   encircled: boolean;
+  stamina?: number; // infantry, 0..100
+  sprint?: boolean; // double speed: drains stamina (infantry) or burns 1.5x fuel (vehicles)
+  fireMode?: 'auto' | 'return' | 'hold';
+  fuel?: number;
+  maxFuel?: number;
+  cargo?: UnitCargo;
+  haul?: Haul;
+  embarkedIn?: number; // the transport this unit rides in
+  loiterCenter?: LngLat;
+  loiterRadius?: number;
+  isLoitering?: boolean;
+  bombardTarget?: LngLat | null; // artillery barrage area
+  bearing?: number; // degrees, 0 = north
   /** Seconds spent unopposed on the enemy's side of the front (builds a grey zone). */
   infil: number;
   /** Active buffs and debuffs, refreshed a few times a second (see `Sim.refreshStatus`). */
@@ -70,7 +108,7 @@ export interface Unit {
 export type UnitStatus = [id: string, value: number];
 
 /** Which status ids are debuffs. */
-export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled']);
+export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel']);
 
 export interface Waypoint {
   p: LngLat;
@@ -88,6 +126,8 @@ export interface Shot {
 }
 
 export type UnitView = Omit<Unit, 'path' | 'cap' | 'enter' | 'infil'> & {
+  /** Own units: the planned path (thinned) for route lines and ETA. */
+  path?: LngLat[];
   /** Own units only: the training centre this unit is walking into. */
   entering?: number;
   /** Destinations of the queued move orders, own units only. */
@@ -126,6 +166,9 @@ export interface GreyZone {
 export interface CapturePoint {
   id: string;
   owner: Team;
+  hp?: number;
+  maxHp?: number;
+  lastDamagedTime?: number;
 }
 
 /** Per-player tallies for one match, reported to the profile service when it ends. */
@@ -155,6 +198,7 @@ export interface World {
   nextId: number;
   mapId: string;
   stats: Record<string, PlayerStats>;
+  smokes: SmokeCloud[];
 }
 
 export interface SlotInit {

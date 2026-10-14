@@ -28,6 +28,9 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | Group / ungroup selection | G / U |
 | Numbered group: assign / select / jump to | Ctrl+1-9 / 1-9 / press again |
 | Terrain overlay | T |
+| Real map on / off | M |
+| Delivery route for a truck | select it, *Set delivery route*, click the loading then the unloading building |
+| Artillery barrage | select guns, *Barrage area*, click the target |
 | Send units into a Training Centre | select them, right click the centre |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |
 

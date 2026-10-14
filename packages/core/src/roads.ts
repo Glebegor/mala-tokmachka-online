@@ -197,20 +197,24 @@ export class RoadNetwork {
 
   /** Up to `k` road nodes around p, nearest first, that `accept` (e.g. reachable without crossing a river). */
   private candidates(p: LngLat, maxKm: number, k: number, accept: (node: LngLat) => boolean): { id: number; km: number }[] {
-    const near: { id: number; km: number }[] = [];
-    this.around(p, maxKm, (id) => {
-      const km = distKm(p, this.nodes[id]);
-      if (km <= maxKm) near.push({ id, km });
-    });
-    near.sort((a, b) => a.km - b.km);
-    const out: { id: number; km: number }[] = [];
-    // spread the picks out: neighbours on the same road add nothing, a node on another road might
-    for (const c of near) {
-      if (out.length >= k) break;
-      if (out.some((o) => distKm(this.nodes[o.id], this.nodes[c.id]) < 3)) continue;
-      if (accept(this.nodes[c.id])) out.push(c);
+    // widen the search only when nothing usable is close: the national network is dense, a 45 km disc holds thousands of nodes
+    for (const radius of [Math.min(6, maxKm), Math.min(18, maxKm), maxKm]) {
+      const near: { id: number; km: number }[] = [];
+      this.around(p, radius, (id) => {
+        const km = distKm(p, this.nodes[id]);
+        if (km <= radius) near.push({ id, km });
+      });
+      near.sort((a, b) => a.km - b.km);
+      const out: { id: number; km: number }[] = [];
+      // spread the picks out: neighbours on the same road add nothing, a node on another road might
+      for (const c of near) {
+        if (out.length >= k) break;
+        if (out.some((o) => distKm(this.nodes[o.id], this.nodes[c.id]) < 3)) continue;
+        if (accept(this.nodes[c.id])) out.push(c);
+      }
+      if (out.length >= Math.min(k, 3) || radius >= maxKm) return out;
     }
-    return out;
+    return [];
   }
 
   /**

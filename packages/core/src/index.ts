@@ -8,3 +8,4 @@ export * from './sim';
 export * from './visibility';
 export * from './roads';
 export * from './terrain';
+export * from './specialZones';

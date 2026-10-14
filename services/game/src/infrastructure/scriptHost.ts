@@ -49,7 +49,7 @@ export class ScriptHost implements Hooks {
 
   emit(event: string, data: Record<string, unknown>) {
     try {
-      vm.runInContext(`__dispatch(${JSON.stringify(event)}, ${JSON.stringify(JSON.stringify(data))})`, this.ctx, { timeout: 25 });
+      vm.runInContext(`__dispatch(${JSON.stringify(event)}, ${JSON.stringify(JSON.stringify(data))})`, this.ctx, { timeout: 250 }); // generous: a big match can pause for GC, a runaway loop is still cut off
     } catch (e) {
       console.warn(`[script] event ${event} aborted: ${e}`);
     }

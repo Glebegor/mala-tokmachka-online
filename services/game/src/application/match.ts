@@ -119,6 +119,12 @@ export class Match {
 
     if (msg.t === 'ping') return this.conns.get(playerId)?.send({ t: 'pong' });
     if (msg.t === 'ready') return void this.ready.add(playerId);
+    if (msg.t === 'powerLines') {
+      const team = this.sim.player(playerId)?.team;
+      if (team === undefined || typeof msg.building !== 'number') return;
+      const lines = this.sim.powerLines(team, msg.building).map((l) => l.map(([x, y]) => [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4] as [number, number]));
+      return this.conns.get(playerId)?.send({ t: 'powerLines', building: msg.building, lines });
+    }
     if (this.phase !== 'running') return this.conns.get(playerId)?.send({ t: 'error', reason: 'the match has not started yet' });
     if (msg.t === 'cmd') {
       const res = this.sim.apply(playerId, msg.cmd);

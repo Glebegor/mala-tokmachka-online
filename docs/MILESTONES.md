@@ -87,7 +87,34 @@ loitering, artillery bombardment, aviation plant, power lines, city HP / housing
 (Kremenchuk, Alabuga), shared team buildings, the fog-of-war overlay. The drone sprites are in
 `mods/base/assets/drones` for when those features are ported.
 
-## M7 — Depth (next)
+## M7 — akira's gameplay, ported (v0.8.0)
+Everything from the akira branch now runs on hlib's core:
+- **Logistics economy**: goods (ore, metal, fuel) pile up in the building that makes them and must be trucked.
+  Trucks and fuel trucks run standing delivery routes (click the loading site, then the unloading site). Training takes
+  metal and fuel from the factory's own store; money and people are shared by the whole team.
+- **New buildings**: oil refinery, filling station, machine factory, warehouse, drone factory, airfield, missile factory and
+  aircraft plant (the last two are placeholders). The HQ is now the Military Base and trains every infantry type.
+  Industrial sites must be 35 km apart; field works (trenches, bunkers, air defence, signal posts, crossings) are exempt.
+  Housing only inside cities your side holds, at most 10 per city.
+- **New units**: recon team, assault infantry, anti-tank team, pickup, truck, fuel truck, rescue crew, and side-specific
+  drones (Shahed, Orion, Liutyi, PD-2, Mini Shark, FP-2).
+- **Fuel, stamina, sprint, fire discipline**: vehicles and drones burn fuel (refuel at filling stations, fuel trucks, the
+  base; recon drones only at airfields; strike drones are one-way). Infantry can sprint on stamina. Fire at will / return
+  fire / hold fire.
+- **Drones**: recon drones circle their area; strike drones dive on the target, explode (units, buildings, city
+  structure) and leave smoke. Drawn as turning sprites.
+- **Artillery**: 3–20 km, fires only at what your side can see, barrage a chosen area, never drives up to the front.
+- **Cities and repair**: cities have structure points that strikes wear down; rescue crews repair cities, housing and
+  buildings. Defenders near their own cities take up to 50% less damage.
+- **Power grid**: a power plant powers everything within 100 km (+25% output and training speed, +50% for housing);
+  select a plant to see its power lines along the roads.
+- **Special zones**: Kremenchuk refinery (Ukraine, +50% fuel) and Alabuga (Russia, drones 50% faster).
+- **Theatre limits**: nobody can enter Belarus, Moldova or the EU.
+- **Client**: Map ON/OFF filter (M), visible fog of war, bottom command panel, route lines along the planned path,
+  arrival times, building stores, smooth 60 fps unit movement.
+- **Lobby**: Rejoin is only offered to players who were in the match when it started.
+
+## M8 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.
 - Bridges as destructible objects; engineers.

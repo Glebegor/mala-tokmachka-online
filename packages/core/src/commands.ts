@@ -14,6 +14,15 @@ export type Command =
   | { type: 'release'; building: number }
   | { type: 'demolish'; building: number }
   /** Buy the next level of a building that has `levels` (trenches, bunkers). */
-  | { type: 'upgrade'; building: number };
+  | { type: 'upgrade'; building: number }
+  | { type: 'fireMode'; units: number[]; mode: 'auto' | 'return' | 'hold' }
+  | { type: 'sprint'; units: number[]; active: boolean }
+  /** Standing delivery order for a truck (resType: what to carry, 'any' for anything but fuel). */
+  | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number; resType?: string }
+  | { type: 'board'; unit: number; transport: number }
+  | { type: 'disembark'; transport: number }
+  | { type: 'refuel'; units: number[] }
+  /** Artillery barrage on an area (null stops it). */
+  | { type: 'bombard'; units: number[]; target: [number, number] | null };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

@@ -31,6 +31,10 @@ export interface BuildingDef {
   defense?: { radiusKm: number; mult: number };
   trains?: string[];
   maxPerPlayer?: number;
+  /** Local stock of physical goods (metal, fuel, ore) per resource. Goods arrive by production or by truck. */
+  storageCap?: number;
+  /** Fortifications and other field works ignore the long industrial spacing rule. */
+  fieldWork?: boolean;
   /** Static weapon, e.g. air defence. */
   attack?: { range: number; damage: number; targets: 'air' | 'ground' | 'all'; fx?: string; missRate?: number };
   /** Boats/pontoons: friendly ground units may cross barrier water inside this radius. */
@@ -58,6 +62,22 @@ export interface UnitDef {
   missRate?: number;
   /** Damage multiplier against air units (default: rules.airDamageDefault). */
   airDamage?: number;
+  /** Logistics: how much cargo it hauls, how many infantry it carries, and whether it is a fuel tanker. */
+  cargoCap?: number;
+  passengerCap?: number;
+  fuelOnly?: boolean;
+  /** Fuel tank (vehicles and drones); missing = needs no fuel. */
+  maxFuel?: number;
+  /** Drones: strike drones dive on their target and explode, recon drones circle their area. */
+  droneType?: 'strike' | 'recon';
+  /** Only this side may build it (side-specific drones). */
+  side?: 'ua' | 'ru';
+  /** Indirect fire: cannot hit closer than this (km) and needs a friendly spotter on the target. */
+  minRange?: number;
+  /** How easily it is spotted (<1 stealthy, >1 loud). Default 1 on foot, 1.35 for vehicles. */
+  stealth?: number;
+  /** Can repair cities and buildings. */
+  repairs?: boolean;
   cost: ResourceAmounts;
   trainTime: number;
   hp: number;
@@ -161,6 +181,13 @@ export interface RulesConfig {
   cauldronScore: number; // score per unit destroyed when a cauldron collapses
   courseCostPerTick: number; // money per unit per simulation tick while a course runs
   courseCostPerRank: number; // added per rank the unit already holds
+  powerGridKm: number; // buildings this close to a friendly power plant are on the grid
+  powerGridMult: number; // output and training speed on the grid
+  housingGridMult: number; // housing income on the grid
+  cityHousingLimit: number;
+  storageCap: number; // per resource, per building (default)
+  fieldWorkSpacing: number; // km between fortifications and other field works
+  startStorage: number; // goods a new building starts with
   greyZoneSeconds: number; // unopposed time behind the front before ground turns grey
   greyZoneSoloKm: number; // "unopposed" = no enemy unit this close
   greyZoneRadiusKm: number;
@@ -218,6 +245,13 @@ export const DEFAULT_RULES: RulesConfig = {
   cauldronScore: 40,
   courseCostPerTick: 0.1,
   courseCostPerRank: 0.05,
+  powerGridKm: 100,
+  powerGridMult: 1.25,
+  housingGridMult: 1.5,
+  cityHousingLimit: 10,
+  storageCap: 30000,
+  fieldWorkSpacing: 1.2,
+  startStorage: 500,
   greyZoneSeconds: 10,
   greyZoneSoloKm: 6,
   greyZoneRadiusKm: 5,
