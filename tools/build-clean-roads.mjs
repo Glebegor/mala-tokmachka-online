@@ -114,7 +114,6 @@ console.log(`Chained down to ${chained.length} lines.`);
 console.log('Building spatial index for gap healing...');
 const CELL = 0.05; // ~5 km
 const grid = new Map();
-const majorGrid = new Map();
 
 chained.forEach((l, li) => {
   for (let i = 0; i < l.pts.length - 1; i++) {
@@ -125,26 +124,21 @@ chained.forEach((l, li) => {
       for (let y = minY; y <= maxY; y++) {
         const k = `${x},${y}`;
         (grid.get(k) ?? grid.set(k, []).get(k)).push({ li, si: i });
-        if (l.major === 1) {
-          (majorGrid.get(k) ?? majorGrid.set(k, []).get(k)).push({ li, si: i });
-        }
       }
     }
   }
 });
 
-// 3. Gap Healing: bridge broken roads, especially major highways
+// 3. Gap Healing: bridge broken roads across Ukraine & Russia
 console.log('Bridging gaps on highways and connectors...');
-const SNAP_MAJOR = 0.035; // ~3.5 km for major highways
-const SNAP_MINOR = 0.015; // ~1.5 km for minor roads
+const SNAP_MAJOR = 0.04; // ~4.0 km for major highways
+const SNAP_MINOR = 0.02; // ~2.0 km for minor roads
 const connectors = [];
-let bridgedMajor = 0;
-let bridgedMinor = 0;
+let bridgedCount = 0;
 
 chained.forEach((l, li) => {
   const isMajor = l.major === 1;
   const maxGap = isMajor ? SNAP_MAJOR : SNAP_MINOR;
-  const activeGrid = isMajor ? majorGrid : grid;
 
   for (const end of [0, l.pts.length - 1]) {
     const e = l.pts[end];
@@ -155,7 +149,7 @@ chained.forEach((l, li) => {
     const cx = Math.floor(e[0] / CELL), cy = Math.floor(e[1] / CELL);
     for (let dx = -span; dx <= span; dx++) {
       for (let dy = -span; dy <= span; dy++) {
-        const bucket = activeGrid.get(`${cx + dx},${cy + dy}`) || [];
+        const bucket = grid.get(`${cx + dx},${cy + dy}`) || [];
         for (const seg of bucket) {
           if (seg.li === li) continue;
           const a = chained[seg.li].pts[seg.si];
@@ -175,21 +169,19 @@ chained.forEach((l, li) => {
     }
 
     if (bestPoint) {
-      if (bestDist2 < 0.001 * 0.001) {
-        // Snap endpoint directly (< 100m)
+      if (bestDist2 < 0.0025 * 0.0025) {
+        // Snap endpoint directly if within 250m
         l.pts[end] = bestPoint;
       } else {
         // Add connector segment
         connectors.push({ major: l.major, pts: [e, bestPoint] });
       }
-      if (isMajor) bridgedMajor++;
-      else bridgedMinor++;
+      bridgedCount++;
     }
   }
 });
 
-console.log(`Bridged ${bridgedMajor} major highway gaps and ${bridgedMinor} minor gaps.`);
-console.log(`Added ${connectors.length} connector road segments.`);
+console.log(`Bridged ${bridgedCount} gaps, added ${connectors.length} connectors.`);
 
 // Bridges across Dnipro
 connectors.push(
@@ -231,9 +223,9 @@ const simplifiedLines = allLines.map((l) => ({
   pts: simplify(l.pts, 0.00012)
 }));
 
-// 5. Remove only detached tiny stubs (< 500m floating sticks with 0 connections)
+// 5. Prune disconnected stubs (lines where both endpoints connect to nothing within 400m)
 console.log('Pruning floating disconnected stubs...');
-const ptBucket = (p) => `${Math.round(p[0] * 500)},${Math.round(p[1] * 500)}`;
+const ptBucket = (p) => `${Math.round(p[0] * 250)},${Math.round(p[1] * 250)}`;
 const degree = new Map();
 for (const l of simplifiedLines) {
   for (const p of [l.pts[0], l.pts[l.pts.length - 1]]) {
@@ -244,17 +236,12 @@ for (const l of simplifiedLines) {
 
 const cleanLines = simplifiedLines.filter((l) => {
   if (l.pts.length < 2) return false;
+  // Always keep major roads
+  if (l.major === 1) return true;
   const d0 = degree.get(ptBucket(l.pts[0])) || 0;
   const d1 = degree.get(ptBucket(l.pts[l.pts.length - 1])) || 0;
-  // If isolated at both ends
-  if (d0 <= 1 && d1 <= 1) {
-    let len = 0;
-    for (let i = 0; i < l.pts.length - 1; i++) {
-      len += Math.hypot(l.pts[i + 1][0] - l.pts[i][0], l.pts[i + 1][1] - l.pts[i][1]);
-    }
-    // Drop only if short stub (< 500m) AND not a major road
-    if (len < 0.005 && l.major !== 1) return false;
-  }
+  // If isolated at both ends (no connection within ~400m), drop it
+  if (d0 <= 1 && d1 <= 1) return false;
   return true;
 });
 
