@@ -67,6 +67,12 @@ export interface FrontNode {
   v: number; // km/s along the normal, + = team 0 advancing
 }
 
+export interface Pocket {
+  id: number;
+  team: Team; // team inside the pocket
+  nodes: FrontNode[];
+}
+
 export interface CapturePoint {
   id: string;
   owner: Team;
@@ -80,6 +86,7 @@ export interface World {
   units: Unit[];
   queue: TrainItem[];
   front: FrontNode[];
+  pockets?: Pocket[];
   points: CapturePoint[];
   scores: [number, number];
   winner: Team | null;

@@ -176,7 +176,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'build-restricted']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'build-restricted', 'pockets']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (m.borders) {
         (map.getSource('borders') as GeoJSONSource).setData(m.borders);
@@ -228,6 +228,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({
         id: 'occupied-line', type: 'line', source: 'occupied', layout: { 'line-join': 'round' },
         paint: { 'line-color': '#ff4d4d', 'line-width': 1.6, 'line-opacity': 0.75 },
+      });
+      map.addLayer({ id: 'pockets-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.2 } });
+      map.addLayer({ id: 'pockets-glow', type: 'line', source: 'pockets', layout: { 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 8, 'line-blur': 6, 'line-opacity': 0.5 } });
+      map.addLayer({
+        id: 'pockets-line', type: 'line', source: 'pockets', layout: { 'line-join': 'round' },
+        paint: { 'line-color': ['get', 'color'], 'line-width': 2.2, 'line-dasharray': [4, 2] },
       });
       map.addLayer({ id: 'front-glow', type: 'line', source: 'front', layout: { 'line-join': 'round' }, paint: { 'line-color': '#ff4d4d', 'line-width': 10, 'line-blur': 8, 'line-opacity': 0.55 } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'round' }, paint: { 'line-color': '#ff7b7b', 'line-width': 1.8 } });
@@ -889,6 +895,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         ...(init.map.occupiedHoles ?? [])
       ];
       (map.getSource('occupied') as GeoJSONSource)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: occupiedCoords } } as any);
+      if (snap.pockets && snap.pockets.length > 0) {
+        (map.getSource('pockets') as GeoJSONSource)?.setData({
+          type: 'FeatureCollection',
+          features: snap.pockets.map((pkt) => ({
+            type: 'Feature',
+            properties: { team: pkt.team, color: pkt.team === 0 ? '#4fa3ff' : '#ff4d4d' },
+            geometry: { type: 'Polygon', coordinates: [[...pkt.nodes.map((n) => [n.lng, n.lat]), [pkt.nodes[0].lng, pkt.nodes[0].lat]]] }
+          }))
+        } as any);
+      } else {
+        (map.getSource('pockets') as GeoJSONSource)?.setData(empty());
+      }
       const maxV = init.ruleset.rules.frontMaxSpeed;
       (map.getSource('pressure') as GeoJSONSource)?.setData({
         type: 'FeatureCollection',

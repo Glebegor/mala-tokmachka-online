@@ -42,6 +42,9 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       })),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),
+    pockets: w.pockets?.length
+      ? w.pockets.map((pkt) => ({ id: pkt.id, team: pkt.team, nodes: pkt.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: 0 })) }))
+      : undefined,
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
     queue: w.queue.filter((q) => q.owner === playerId).map((q) => ({ building: q.building, unit: q.unit, remaining: Math.round(q.remaining) })),

@@ -1,10 +1,10 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, type LngLat } from './geo';
-import { buildFront, distToFrontKm, normalAt, resample, sideOf } from './frontline';
+import { buildFront, distToFrontKm, normalAt, pocketCentroid, pocketRadiusKm, resample, resolveFrontLoops, sideOf, sideOfWithPockets } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
-import type { Building, Player, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
+import type { Building, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
@@ -64,6 +64,7 @@ export class Sim {
       units: [],
       queue: [],
       front: buildFront(this.map.front, r.frontNodeSpacingKm),
+      pockets: [],
       points: this.map.capturePoints.map((p) => ({ id: p.id, owner: 0 as Team })),
       scores: [0, 0],
       winner: null,
@@ -136,8 +137,8 @@ export class Sim {
         if (d.maxPerPlayer && countOf(w, p.id, d.id) >= d.maxPerPlayer) return fail('limit reached');
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
-        const dist = distToFrontKm(w.front, cmd.pos) * (p.team === 0 ? 1 : -1);
-        if (dist < 0) return fail('not your territory');
+        if (sideOfWithPockets(w.front, w.pockets, cmd.pos) !== p.team) return fail('not your territory');
+        const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
         if (dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
         if (w.buildings.some((b) => distKm(b.pos, cmd.pos) < r.minBuildSpacing)) return fail('space occupied');
@@ -493,18 +494,60 @@ export class Sim {
       n[i].v = v;
       if (v === 0) continue;
       const [nx, ny] = normalAt(n, i);
-      n[i].lng += (nx * v * dt) / kmPerDegLng(n[i].lat);
-      n[i].lat += (ny * v * dt) / 111.32;
+      const nextLng = n[i].lng + (nx * v * dt) / kmPerDegLng(n[i].lat);
+      const nextLat = n[i].lat + (ny * v * dt) / 111.32;
+      // Impassable water boundary: ground front cannot push into open sea / water
+      if (this.terrainAt([nextLng, nextLat]).id === 'water') {
+        n[i].v = 0;
+        continue;
+      }
+      n[i].lng = nextLng;
+      n[i].lat = nextLat;
     }
     n[0].v = n[n.length - 1].v = 0;
-    if (w.tick % 50 === 0) w.front = resample(n);
+
+    // Detect pinching salients and resolve military cauldrons ("котлы")
+    if (w.tick % 5 === 0) {
+      const { main, loops } = resolveFrontLoops(n);
+      if (loops.length > 0) {
+        if (!w.pockets) w.pockets = [];
+        for (const loop of loops) {
+          const side = sideOf(main, loop[1] ? [loop[1].lng, loop[1].lat] : [loop[0].lng, loop[0].lat]);
+          const encircledTeam: Team = (1 - side) as Team;
+          w.pockets.push({ id: w.nextId++, team: encircledTeam, nodes: loop });
+        }
+      }
+      w.front = main;
+    }
+    if (w.tick % 50 === 0) w.front = resample(w.front);
+    this.updatePockets(dt);
+  }
+
+  private updatePockets(dt: number) {
+    const w = this.world;
+    if (!w.pockets || w.pockets.length === 0) return;
+    w.pockets = w.pockets.filter((pkt) => {
+      const c = pocketCentroid(pkt.nodes);
+      const r = pocketRadiusKm(pkt.nodes);
+      if (r <= 2.0) return false; // cauldron collapsed
+      const shrinkSpeed = 0.2 * dt;
+      for (const node of pkt.nodes) {
+        const dx = c[0] - node.lng, dy = c[1] - node.lat;
+        const d = Math.hypot(dx, dy);
+        if (d > 1e-6) {
+          node.lng += (dx / d) * (shrinkSpeed / kmPerDegLng(node.lat));
+          node.lat += (dy / d) * (shrinkSpeed / 111.32);
+        }
+      }
+      return true;
+    });
   }
 
   private territory(dt: number) {
     const w = this.world;
     const r = this.ruleset.rules;
     this.map.capturePoints.forEach((cp, i) => {
-      const side = sideOf(w.front, cp.pos);
+      const side = sideOfWithPockets(w.front, w.pockets, cp.pos);
       if (w.points[i].owner !== side) {
         w.points[i].owner = side;
         this.hooks.emit('pointCaptured', { id: cp.id, team: side });
@@ -514,7 +557,7 @@ export class Sim {
     // anything the front rolled over is lost (checked a few buildings per tick to spread the cost)
     const lost: Building[] = [];
     for (let i = w.tick % 5; i < w.buildings.length; i += 5) {
-      if (sideOf(w.front, w.buildings[i].pos) !== w.buildings[i].team) lost.push(w.buildings[i]);
+      if (sideOfWithPockets(w.front, w.pockets, w.buildings[i].pos) !== w.buildings[i].team) lost.push(w.buildings[i]);
     }
     if (lost.length) {
       w.buildings = w.buildings.filter((b) => !lost.includes(b));

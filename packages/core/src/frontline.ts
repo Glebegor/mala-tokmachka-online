@@ -1,6 +1,6 @@
 import type { LngLat } from './geo';
 import { distKm, kmPerDegLng } from './geo';
-import type { FrontNode, Team } from './state';
+import type { FrontNode, Pocket, Team } from './state';
 
 const KM = 111.32;
 
@@ -72,6 +72,33 @@ export function sideOf(front: FrontNode[], p: LngLat): Team {
   return distToFrontKm(front, p) >= 0 ? 0 : 1;
 }
 
+/** Check if point p is inside a closed polygon ring using ray-casting. */
+export function pointInPolygon(p: LngLat, ring: (FrontNode | LngLat)[]): boolean {
+  let inside = false;
+  const x = p[0], y = p[1];
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const pi = Array.isArray(ring[i]) ? (ring[i] as LngLat) : [(ring[i] as FrontNode).lng, (ring[i] as FrontNode).lat];
+    const pj = Array.isArray(ring[j]) ? (ring[j] as LngLat) : [(ring[j] as FrontNode).lng, (ring[j] as FrontNode).lat];
+    const xi = pi[0], yi = pi[1];
+    const xj = pj[0], yj = pj[1];
+    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
+    if (intersect) inside = !inside;
+  }
+  return inside;
+}
+
+/** Which team holds ground at position p, accounting for isolated military cauldrons ("котлы"). */
+export function sideOfWithPockets(front: FrontNode[], pockets: Pocket[] | undefined, p: LngLat): Team {
+  if (pockets && pockets.length > 0) {
+    for (const pkt of pockets) {
+      if (pointInPolygon(p, pkt.nodes)) {
+        return pkt.team;
+      }
+    }
+  }
+  return sideOf(front, p);
+}
+
 /** Index of the front node closest to a position. */
 export function nearestNode(front: FrontNode[], p: LngLat): number {
   let best = 0;
@@ -94,4 +121,85 @@ export function normalAt(front: FrontNode[], i: number): [number, number] {
   const ty = (b.lat - a.lat) * KM;
   const len = Math.hypot(tx, ty) || 1;
   return [ty / len, -tx / len];
+}
+
+/** Intersection of line segment AB and CD in (lng, lat) space. */
+export function lineSegmentIntersection(
+  a: [number, number],
+  b: [number, number],
+  c: [number, number],
+  d: [number, number]
+): [number, number] | null {
+  const dx1 = b[0] - a[0], dy1 = b[1] - a[1];
+  const dx2 = d[0] - c[0], dy2 = d[1] - c[1];
+  const det = dx1 * dy2 - dy1 * dx2;
+  if (Math.abs(det) < 1e-12) return null;
+  const s = ((c[0] - a[0]) * dy2 - (c[1] - a[1]) * dx2) / det;
+  const t = ((c[0] - a[0]) * dy1 - (c[1] - a[1]) * dx1) / det;
+  if (s >= 0.02 && s <= 0.98 && t >= 0.02 && t <= 0.98) {
+    return [a[0] + dx1 * s, a[1] + dy1 * s];
+  }
+  return null;
+}
+
+export function pocketCentroid(nodes: FrontNode[]): LngLat {
+  let slng = 0, slat = 0;
+  for (const n of nodes) {
+    slng += n.lng;
+    slat += n.lat;
+  }
+  return [slng / nodes.length, slat / nodes.length];
+}
+
+export function pocketRadiusKm(nodes: FrontNode[]): number {
+  const c = pocketCentroid(nodes);
+  let maxD = 0;
+  for (const n of nodes) {
+    const d = distKm(c, [n.lng, n.lat]);
+    if (d > maxD) maxD = d;
+  }
+  return maxD;
+}
+
+/**
+ * Detects pinching salients or self-intersections along the frontline.
+ * Separates isolated cauldrons ("котлы") into independent closed loops,
+ * and reconnects the main frontline cleanly without self-intersections.
+ */
+export function resolveFrontLoops(nodes: FrontNode[], pinchDistKm = 4.0): { main: FrontNode[]; loops: FrontNode[][] } {
+  let cur = [...nodes];
+  const loops: FrontNode[][] = [];
+  let found = true;
+  let guard = 0;
+  while (found && guard++ < 8) {
+    found = false;
+    for (let i = 0; i < cur.length - 2 && !found; i++) {
+      const pA: [number, number] = [cur[i].lng, cur[i].lat];
+      const pB: [number, number] = [cur[i + 1].lng, cur[i + 1].lat];
+      for (let j = i + 12; j < cur.length - 1 && !found; j++) {
+        const pC: [number, number] = [cur[j].lng, cur[j].lat];
+        const pD: [number, number] = [cur[j + 1].lng, cur[j + 1].lat];
+
+        let inter = lineSegmentIntersection(pA, pB, pC, pD);
+        if (!inter) {
+          const d = distKm(pA, pC);
+          if (d < pinchDistKm) {
+            inter = [(pA[0] + pC[0]) / 2, (pA[1] + pC[1]) / 2];
+          }
+        }
+
+        if (inter) {
+          found = true;
+          const midNode: FrontNode = { lng: inter[0], lat: inter[1], v: 0 };
+          // The separated loop is the military pocket ("котёл")
+          const loop = [midNode, ...cur.slice(i + 1, j + 1), midNode];
+          loops.push(resample(loop, Math.max(12, Math.min(100, j - i + 2))));
+          // The main frontline bypasses the loop and continues forward cleanly
+          cur = [...cur.slice(0, i + 1), midNode, ...cur.slice(j + 1)];
+          cur = resample(cur, Math.max(8, cur.length));
+        }
+      }
+    }
+  }
+  return { main: cur, loops };
 }
