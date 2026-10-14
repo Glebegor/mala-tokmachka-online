@@ -9,7 +9,7 @@ export type Command =
   | { type: 'demolish'; building: number }
   | { type: 'fireMode'; units: number[]; mode: 'auto' | 'return' | 'hold' }
   | { type: 'sprint'; units: number[]; active: boolean }
-  | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number }
+  | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number; resType?: string }
   | { type: 'board'; unit: number; transport: number }
   | { type: 'disembark'; transport: number }
   | { type: 'refuel'; units: number[] };

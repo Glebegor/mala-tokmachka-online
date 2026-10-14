@@ -318,7 +318,7 @@ export class Sim {
         const b1 = w.buildings.find((x) => x.id === cmd.fromBuilding && x.owner === p.id);
         const b2 = w.buildings.find((x) => x.id === cmd.toBuilding && x.owner === p.id);
         if (!b1 || !b2) return fail('building not found');
-        u.route = { fromBuilding: b1.id, toBuilding: b2.id, state: 'to_from' };
+        u.route = { fromBuilding: b1.id, toBuilding: b2.id, resType: cmd.resType, state: 'to_from' };
         this.orderMove([u], b1.pos, false);
         return ok();
       }
@@ -669,9 +669,22 @@ export class Sim {
                   fromB.storage.fuel = avail - toTake;
                   u.cargo.res.fuel = (u.cargo.res.fuel ?? 0) + toTake;
                 } else {
-                  // Only load physical transportable goods (NO money, NO people!)
-                  const resKeys = ['metal', 'fuel', 'ore'];
-                  for (const k of resKeys) {
+                  // Non-fuel trucks: CANNOT take fuel under any circumstances! Only fuel_truck can carry fuel.
+                  let allowedKeys: string[];
+                  if (u.route.resType && u.route.resType !== 'any') {
+                    allowedKeys = [u.route.resType];
+                  } else {
+                    // Prioritize resource produced by fromB if available, otherwise non-fuel goods
+                    const bDef = this.defs.b.get(fromB.def);
+                    const prodKey = bDef?.produces ? Object.keys(bDef.produces)[0] : null;
+                    if (prodKey && prodKey !== 'fuel' && (fromB.storage[prodKey] ?? 0) > 0) {
+                      allowedKeys = [prodKey];
+                    } else {
+                      allowedKeys = ['ore', 'metal', 'ammo'];
+                    }
+                  }
+                  for (const k of allowedKeys) {
+                    if (k === 'fuel') continue; // Strict safety: normal trucks CANNOT take fuel
                     const avail = fromB.storage[k] ?? 0;
                     if (avail > 0) {
                       const toTake = Math.min(u.cargo.cap - curTotal, avail);

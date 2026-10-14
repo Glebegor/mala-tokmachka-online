@@ -7753,8 +7753,8 @@
       "id": "kyiv",
       "name": "Kyiv",
       "pos": [
-        30.52,
-        50.45
+        30.5234,
+        50.4501
       ],
       "value": 5
     },
@@ -7762,8 +7762,8 @@
       "id": "kharkiv",
       "name": "Kharkiv",
       "pos": [
-        36.23,
-        49.99
+        36.2304,
+        49.9935
       ],
       "value": 4
     },
@@ -7771,26 +7771,53 @@
       "id": "dnipro",
       "name": "Dnipro",
       "pos": [
-        35.04,
-        48.46
+        35.0407,
+        48.4647
       ],
-      "value": 3
+      "value": 4
     },
     {
       "id": "odesa",
       "name": "Odesa",
       "pos": [
-        30.73,
-        46.48
+        30.7233,
+        46.4825
       ],
-      "value": 3
+      "value": 4
     },
     {
       "id": "zaporizhzhia",
       "name": "Zaporizhzhia",
       "pos": [
-        35.14,
-        47.84
+        35.1396,
+        47.8388
+      ],
+      "value": 3
+    },
+    {
+      "id": "lviv",
+      "name": "Lviv",
+      "pos": [
+        24.0311,
+        49.8429
+      ],
+      "value": 4
+    },
+    {
+      "id": "kryvyi_rih",
+      "name": "Kryvyi Rih",
+      "pos": [
+        33.3918,
+        47.9105
+      ],
+      "value": 3
+    },
+    {
+      "id": "mykolaiv",
+      "name": "Mykolaiv",
+      "pos": [
+        31.9946,
+        46.975
       ],
       "value": 3
     },
@@ -7798,35 +7825,179 @@
       "id": "kherson",
       "name": "Kherson",
       "pos": [
-        32.62,
-        46.64
+        32.6169,
+        46.6354
       ],
-      "value": 2
-    },
-    {
-      "id": "kryvyi_rih",
-      "name": "Kryvyi Rih",
-      "pos": [
-        33.39,
-        47.91
-      ],
-      "value": 2
+      "value": 3
     },
     {
       "id": "poltava",
       "name": "Poltava",
       "pos": [
-        34.55,
-        49.58
+        34.5514,
+        49.5883
       ],
-      "value": 2
+      "value": 3
+    },
+    {
+      "id": "chernihiv",
+      "name": "Chernihiv",
+      "pos": [
+        31.2893,
+        51.4982
+      ],
+      "value": 3
+    },
+    {
+      "id": "cherkasy",
+      "name": "Cherkasy",
+      "pos": [
+        32.0598,
+        49.4444
+      ],
+      "value": 3
+    },
+    {
+      "id": "zhytomyr",
+      "name": "Zhytomyr",
+      "pos": [
+        28.6684,
+        50.2547
+      ],
+      "value": 3
     },
     {
       "id": "sumy",
       "name": "Sumy",
       "pos": [
-        34.8,
-        50.91
+        34.7981,
+        50.9077
+      ],
+      "value": 3
+    },
+    {
+      "id": "kropyvnytskyi",
+      "name": "Kropyvnytskyi",
+      "pos": [
+        32.2623,
+        48.5079
+      ],
+      "value": 3
+    },
+    {
+      "id": "rivne",
+      "name": "Rivne",
+      "pos": [
+        26.2516,
+        50.6199
+      ],
+      "value": 3
+    },
+    {
+      "id": "lutsk",
+      "name": "Lutsk",
+      "pos": [
+        25.3254,
+        50.7472
+      ],
+      "value": 3
+    },
+    {
+      "id": "ternopil",
+      "name": "Ternopil",
+      "pos": [
+        25.5948,
+        49.5535
+      ],
+      "value": 3
+    },
+    {
+      "id": "khmelnytskyi",
+      "name": "Khmelnytskyi",
+      "pos": [
+        26.9871,
+        49.423
+      ],
+      "value": 3
+    },
+    {
+      "id": "kremenchuk",
+      "name": "Kremenchuk",
+      "pos": [
+        33.4397,
+        49.0703
+      ],
+      "value": 3
+    },
+    {
+      "id": "bila_tserkva",
+      "name": "Bila Tserkva",
+      "pos": [
+        30.1242,
+        49.7989
+      ],
+      "value": 2
+    },
+    {
+      "id": "kamianske",
+      "name": "Kamianske",
+      "pos": [
+        34.6074,
+        48.5133
+      ],
+      "value": 2
+    },
+    {
+      "id": "nikopol",
+      "name": "Nikopol",
+      "pos": [
+        34.3971,
+        47.5762
+      ],
+      "value": 2
+    },
+    {
+      "id": "pavlohrad",
+      "name": "Pavlohrad",
+      "pos": [
+        35.8679,
+        48.5284
+      ],
+      "value": 2
+    },
+    {
+      "id": "kramatorsk",
+      "name": "Kramatorsk",
+      "pos": [
+        37.5639,
+        48.739
+      ],
+      "value": 3
+    },
+    {
+      "id": "sloviansk",
+      "name": "Sloviansk",
+      "pos": [
+        37.6167,
+        48.8534
+      ],
+      "value": 2
+    },
+    {
+      "id": "druzhkivka",
+      "name": "Druzhkivka",
+      "pos": [
+        37.5255,
+        48.6206
+      ],
+      "value": 2
+    },
+    {
+      "id": "kostiantynivka",
+      "name": "Kostiantynivka",
+      "pos": [
+        37.7126,
+        48.5286
       ],
       "value": 2
     },
@@ -7834,8 +8005,8 @@
       "id": "orikhiv",
       "name": "Orikhiv",
       "pos": [
-        35.78,
-        47.57
+        35.7869,
+        47.5684
       ],
       "value": 1
     },
@@ -7843,19 +8014,1504 @@
       "id": "mala_tokmachka",
       "name": "Mala Tokmachka",
       "pos": [
-        35.88,
-        47.53
+        35.8897,
+        47.5342
       ],
       "value": 2
     },
     {
-      "id": "huliaipole",
-      "name": "Huliaipole",
+      "id": "stepnohirsk",
+      "name": "Stepnohirsk",
       "pos": [
-        36.26,
-        47.66
+        35.3621,
+        47.5869
       ],
       "value": 1
+    },
+    {
+      "id": "novodanylivka",
+      "name": "Novodanylivka",
+      "pos": [
+        35.8122,
+        47.519
+      ],
+      "value": 1
+    },
+    {
+      "id": "vilniansk",
+      "name": "Vilniansk",
+      "pos": [
+        35.4328,
+        47.9422
+      ],
+      "value": 1
+    },
+    {
+      "id": "synelnykove",
+      "name": "Synelnykove",
+      "pos": [
+        35.5186,
+        48.3228
+      ],
+      "value": 2
+    },
+    {
+      "id": "marhanets",
+      "name": "Marhanets",
+      "pos": [
+        34.6294,
+        47.6447
+      ],
+      "value": 2
+    },
+    {
+      "id": "novomoskovsk",
+      "name": "Samar",
+      "pos": [
+        35.2289,
+        48.6344
+      ],
+      "value": 2
+    },
+    {
+      "id": "chuhuiv",
+      "name": "Chuhuiv",
+      "pos": [
+        36.6869,
+        49.8356
+      ],
+      "value": 2
+    },
+    {
+      "id": "izium",
+      "name": "Izium",
+      "pos": [
+        37.2801,
+        49.2064
+      ],
+      "value": 2
+    },
+    {
+      "id": "kupiansk",
+      "name": "Kupiansk",
+      "pos": [
+        37.6169,
+        49.7071
+      ],
+      "value": 2
+    },
+    {
+      "id": "balakliia",
+      "name": "Balakliia",
+      "pos": [
+        36.8583,
+        49.4608
+      ],
+      "value": 2
+    },
+    {
+      "id": "lozova",
+      "name": "Lozova",
+      "pos": [
+        36.3181,
+        48.8894
+      ],
+      "value": 2
+    },
+    {
+      "id": "bohodukhiv",
+      "name": "Bohodukhiv",
+      "pos": [
+        35.5319,
+        50.1606
+      ],
+      "value": 1
+    },
+    {
+      "id": "valky",
+      "name": "Valky",
+      "pos": [
+        35.6175,
+        49.8392
+      ],
+      "value": 1
+    },
+    {
+      "id": "lubny",
+      "name": "Lubny",
+      "pos": [
+        33.0039,
+        50.0153
+      ],
+      "value": 2
+    },
+    {
+      "id": "myrhorod",
+      "name": "Myrhorod",
+      "pos": [
+        33.6072,
+        49.9658
+      ],
+      "value": 2
+    },
+    {
+      "id": "hadiach",
+      "name": "Hadiach",
+      "pos": [
+        33.9875,
+        50.3667
+      ],
+      "value": 1
+    },
+    {
+      "id": "romny",
+      "name": "Romny",
+      "pos": [
+        33.4867,
+        50.7444
+      ],
+      "value": 2
+    },
+    {
+      "id": "konotop",
+      "name": "Konotop",
+      "pos": [
+        33.2014,
+        51.2408
+      ],
+      "value": 2
+    },
+    {
+      "id": "shostka",
+      "name": "Shostka",
+      "pos": [
+        33.4869,
+        51.8628
+      ],
+      "value": 2
+    },
+    {
+      "id": "hlukhiv",
+      "name": "Hlukhiv",
+      "pos": [
+        33.9114,
+        51.6778
+      ],
+      "value": 2
+    },
+    {
+      "id": "okhtyrka",
+      "name": "Okhtyrka",
+      "pos": [
+        34.8986,
+        50.3081
+      ],
+      "value": 2
+    },
+    {
+      "id": "lebedyn",
+      "name": "Lebedyn",
+      "pos": [
+        34.4819,
+        50.5828
+      ],
+      "value": 1
+    },
+    {
+      "id": "krolevets",
+      "name": "Krolevets",
+      "pos": [
+        33.3828,
+        51.5542
+      ],
+      "value": 1
+    },
+    {
+      "id": "nizhyn",
+      "name": "Nizhyn",
+      "pos": [
+        31.8847,
+        51.0483
+      ],
+      "value": 2
+    },
+    {
+      "id": "pryluky",
+      "name": "Pryluky",
+      "pos": [
+        32.3867,
+        50.5914
+      ],
+      "value": 2
+    },
+    {
+      "id": "bakhmach",
+      "name": "Bakhmach",
+      "pos": [
+        32.8358,
+        51.1808
+      ],
+      "value": 1
+    },
+    {
+      "id": "mena",
+      "name": "Mena",
+      "pos": [
+        32.2156,
+        51.5222
+      ],
+      "value": 1
+    },
+    {
+      "id": "ichnia",
+      "name": "Ichnia",
+      "pos": [
+        32.3786,
+        50.8589
+      ],
+      "value": 1
+    },
+    {
+      "id": "kozelets",
+      "name": "Kozelets",
+      "pos": [
+        31.1147,
+        50.9136
+      ],
+      "value": 1
+    },
+    {
+      "id": "fastiv",
+      "name": "Fastiv",
+      "pos": [
+        29.9197,
+        50.0781
+      ],
+      "value": 2
+    },
+    {
+      "id": "vasylkiv",
+      "name": "Vasylkiv",
+      "pos": [
+        30.3167,
+        50.1778
+      ],
+      "value": 2
+    },
+    {
+      "id": "obukhiv",
+      "name": "Obukhiv",
+      "pos": [
+        30.6206,
+        50.1161
+      ],
+      "value": 2
+    },
+    {
+      "id": "boryspil",
+      "name": "Boryspil",
+      "pos": [
+        30.9547,
+        50.3517
+      ],
+      "value": 2
+    },
+    {
+      "id": "brovary",
+      "name": "Brovary",
+      "pos": [
+        30.7908,
+        50.5114
+      ],
+      "value": 2
+    },
+    {
+      "id": "irpin",
+      "name": "Irpin",
+      "pos": [
+        30.2444,
+        50.5217
+      ],
+      "value": 2
+    },
+    {
+      "id": "bucha",
+      "name": "Bucha",
+      "pos": [
+        30.2153,
+        50.5489
+      ],
+      "value": 2
+    },
+    {
+      "id": "vyshhorod",
+      "name": "Vyshhorod",
+      "pos": [
+        30.4908,
+        50.5833
+      ],
+      "value": 2
+    },
+    {
+      "id": "pereyaslav",
+      "name": "Pereyaslav",
+      "pos": [
+        31.4489,
+        50.065
+      ],
+      "value": 2
+    },
+    {
+      "id": "yahotyn",
+      "name": "Yahotyn",
+      "pos": [
+        31.7761,
+        50.2583
+      ],
+      "value": 1
+    },
+    {
+      "id": "berdychiv",
+      "name": "Berdychiv",
+      "pos": [
+        28.5808,
+        49.8925
+      ],
+      "value": 2
+    },
+    {
+      "id": "korosten",
+      "name": "Korosten",
+      "pos": [
+        28.6472,
+        50.9525
+      ],
+      "value": 2
+    },
+    {
+      "id": "zviahel",
+      "name": "Zviahel",
+      "pos": [
+        27.6322,
+        50.5847
+      ],
+      "value": 2
+    },
+    {
+      "id": "malyn",
+      "name": "Malyn",
+      "pos": [
+        29.2392,
+        50.7711
+      ],
+      "value": 1
+    },
+    {
+      "id": "korostyshiv",
+      "name": "Korostyshiv",
+      "pos": [
+        29.0558,
+        50.315
+      ],
+      "value": 1
+    },
+    {
+      "id": "radomyshl",
+      "name": "Radomyshl",
+      "pos": [
+        29.2319,
+        50.4939
+      ],
+      "value": 1
+    },
+    {
+      "id": "uman",
+      "name": "Uman",
+      "pos": [
+        30.2217,
+        48.7483
+      ],
+      "value": 2
+    },
+    {
+      "id": "smila",
+      "name": "Smila",
+      "pos": [
+        31.8711,
+        49.2158
+      ],
+      "value": 2
+    },
+    {
+      "id": "zolotonosha",
+      "name": "Zolotonosha",
+      "pos": [
+        32.0353,
+        49.6672
+      ],
+      "value": 1
+    },
+    {
+      "id": "kaniv",
+      "name": "Kaniv",
+      "pos": [
+        31.4589,
+        49.7547
+      ],
+      "value": 1
+    },
+    {
+      "id": "shpola",
+      "name": "Shpola",
+      "pos": [
+        31.3969,
+        49.0044
+      ],
+      "value": 1
+    },
+    {
+      "id": "zvenyhorodka",
+      "name": "Zvenyhorodka",
+      "pos": [
+        30.9678,
+        49.0714
+      ],
+      "value": 1
+    },
+    {
+      "id": "koziatyn",
+      "name": "Koziatyn",
+      "pos": [
+        28.8353,
+        49.7183
+      ],
+      "value": 1
+    },
+    {
+      "id": "haisyn",
+      "name": "Haisyn",
+      "pos": [
+        29.3892,
+        48.8106
+      ],
+      "value": 1
+    },
+    {
+      "id": "khmilnyk",
+      "name": "Khmilnyk",
+      "pos": [
+        27.9622,
+        49.5569
+      ],
+      "value": 1
+    },
+    {
+      "id": "oleksandriia",
+      "name": "Oleksandriia",
+      "pos": [
+        33.1097,
+        48.6714
+      ],
+      "value": 2
+    },
+    {
+      "id": "svitlovodsk",
+      "name": "Svitlovodsk",
+      "pos": [
+        33.2081,
+        49.0519
+      ],
+      "value": 2
+    },
+    {
+      "id": "znamianka",
+      "name": "Znamianka",
+      "pos": [
+        32.6733,
+        48.7119
+      ],
+      "value": 1
+    },
+    {
+      "id": "novoukrainka",
+      "name": "Novoukrainka",
+      "pos": [
+        31.5283,
+        48.315
+      ],
+      "value": 1
+    },
+    {
+      "id": "voznesensk",
+      "name": "Voznesensk",
+      "pos": [
+        31.3167,
+        47.5622
+      ],
+      "value": 2
+    },
+    {
+      "id": "yuzhnoukrainsk",
+      "name": "Yuzhnoukrainsk",
+      "pos": [
+        31.1733,
+        47.8219
+      ],
+      "value": 2
+    },
+    {
+      "id": "pervomaisk_myk",
+      "name": "Pervomaisk",
+      "pos": [
+        30.8525,
+        48.0442
+      ],
+      "value": 2
+    },
+    {
+      "id": "ochakiv",
+      "name": "Ochakiv",
+      "pos": [
+        31.55,
+        46.6186
+      ],
+      "value": 1
+    },
+    {
+      "id": "bashtanka",
+      "name": "Bashtanka",
+      "pos": [
+        32.4447,
+        47.4069
+      ],
+      "value": 1
+    },
+    {
+      "id": "novyi_buh",
+      "name": "Novyi Buh",
+      "pos": [
+        32.5028,
+        47.6833
+      ],
+      "value": 1
+    },
+    {
+      "id": "chornomorsk",
+      "name": "Chornomorsk",
+      "pos": [
+        30.6558,
+        46.2997
+      ],
+      "value": 2
+    },
+    {
+      "id": "bilhorod_dnistrovskyi",
+      "name": "Bilhorod-Dnistrovskyi",
+      "pos": [
+        30.3444,
+        46.1839
+      ],
+      "value": 2
+    },
+    {
+      "id": "izmail",
+      "name": "Izmail",
+      "pos": [
+        28.8361,
+        45.3486
+      ],
+      "value": 2
+    },
+    {
+      "id": "yuzhne",
+      "name": "Pivdenne",
+      "pos": [
+        31.1008,
+        46.6217
+      ],
+      "value": 1
+    },
+    {
+      "id": "dubno",
+      "name": "Dubno",
+      "pos": [
+        25.7428,
+        50.4181
+      ],
+      "value": 1
+    },
+    {
+      "id": "sarny",
+      "name": "Sarny",
+      "pos": [
+        26.6083,
+        51.3375
+      ],
+      "value": 2
+    },
+    {
+      "id": "moscow",
+      "name": "Moscow",
+      "pos": [
+        37.6173,
+        55.7558
+      ],
+      "value": 5
+    },
+    {
+      "id": "saint_petersburg",
+      "name": "Saint Petersburg",
+      "pos": [
+        30.3351,
+        59.9343
+      ],
+      "value": 5
+    },
+    {
+      "id": "nizhny_novgorod",
+      "name": "Nizhny Novgorod",
+      "pos": [
+        44.0059,
+        56.3269
+      ],
+      "value": 4
+    },
+    {
+      "id": "kazan",
+      "name": "Kazan",
+      "pos": [
+        49.1221,
+        55.7887
+      ],
+      "value": 4
+    },
+    {
+      "id": "samara",
+      "name": "Samara",
+      "pos": [
+        50.15,
+        53.2
+      ],
+      "value": 4
+    },
+    {
+      "id": "rostov",
+      "name": "Rostov-on-Don",
+      "pos": [
+        39.7203,
+        47.2357
+      ],
+      "value": 4
+    },
+    {
+      "id": "voronezh",
+      "name": "Voronezh",
+      "pos": [
+        39.2003,
+        51.672
+      ],
+      "value": 3
+    },
+    {
+      "id": "ulyanovsk",
+      "name": "Ulyanovsk",
+      "pos": [
+        48.4,
+        54.32
+      ],
+      "value": 3
+    },
+    {
+      "id": "tolyatti",
+      "name": "Tolyatti",
+      "pos": [
+        49.42,
+        53.51
+      ],
+      "value": 3
+    },
+    {
+      "id": "yaroslavl",
+      "name": "Yaroslavl",
+      "pos": [
+        39.87,
+        57.62
+      ],
+      "value": 3
+    },
+    {
+      "id": "ryazan",
+      "name": "Ryazan",
+      "pos": [
+        39.74,
+        54.63
+      ],
+      "value": 3
+    },
+    {
+      "id": "tula",
+      "name": "Tula",
+      "pos": [
+        37.62,
+        54.2
+      ],
+      "value": 3
+    },
+    {
+      "id": "lipetsk",
+      "name": "Lipetsk",
+      "pos": [
+        39.6,
+        52.61
+      ],
+      "value": 3
+    },
+    {
+      "id": "penza",
+      "name": "Penza",
+      "pos": [
+        45,
+        53.2
+      ],
+      "value": 3
+    },
+    {
+      "id": "cheboksary",
+      "name": "Cheboksary",
+      "pos": [
+        47.25,
+        56.13
+      ],
+      "value": 3
+    },
+    {
+      "id": "kaluga",
+      "name": "Kaluga",
+      "pos": [
+        36.27,
+        54.53
+      ],
+      "value": 3
+    },
+    {
+      "id": "kursk",
+      "name": "Kursk",
+      "pos": [
+        36.193,
+        51.7304
+      ],
+      "value": 3
+    },
+    {
+      "id": "belgorod",
+      "name": "Belgorod",
+      "pos": [
+        36.5983,
+        50.5997
+      ],
+      "value": 3
+    },
+    {
+      "id": "orel",
+      "name": "Orel",
+      "pos": [
+        36.08,
+        52.97
+      ],
+      "value": 3
+    },
+    {
+      "id": "bryansk",
+      "name": "Bryansk",
+      "pos": [
+        34.3717,
+        53.2521
+      ],
+      "value": 3
+    },
+    {
+      "id": "smolensk",
+      "name": "Smolensk",
+      "pos": [
+        32.0453,
+        54.7818
+      ],
+      "value": 3
+    },
+    {
+      "id": "tver",
+      "name": "Tver",
+      "pos": [
+        35.9,
+        56.86
+      ],
+      "value": 3
+    },
+    {
+      "id": "ivanovo",
+      "name": "Ivanovo",
+      "pos": [
+        40.97,
+        57
+      ],
+      "value": 3
+    },
+    {
+      "id": "vladimir",
+      "name": "Vladimir",
+      "pos": [
+        40.4,
+        56.13
+      ],
+      "value": 3
+    },
+    {
+      "id": "tambov",
+      "name": "Tambov",
+      "pos": [
+        41.45,
+        52.72
+      ],
+      "value": 3
+    },
+    {
+      "id": "saransk",
+      "name": "Saransk",
+      "pos": [
+        45.18,
+        54.18
+      ],
+      "value": 3
+    },
+    {
+      "id": "kostroma",
+      "name": "Kostroma",
+      "pos": [
+        40.93,
+        57.77
+      ],
+      "value": 2
+    },
+    {
+      "id": "yoshkar_ola",
+      "name": "Yoshkar-Ola",
+      "pos": [
+        47.89,
+        56.63
+      ],
+      "value": 2
+    },
+    {
+      "id": "novgorod",
+      "name": "Veliky Novgorod",
+      "pos": [
+        31.27,
+        58.52
+      ],
+      "value": 3
+    },
+    {
+      "id": "pskov",
+      "name": "Pskov",
+      "pos": [
+        28.33,
+        57.82
+      ],
+      "value": 3
+    },
+    {
+      "id": "cherepovets",
+      "name": "Cherepovets",
+      "pos": [
+        37.9,
+        59.13
+      ],
+      "value": 3
+    },
+    {
+      "id": "vologda",
+      "name": "Vologda",
+      "pos": [
+        39.89,
+        59.22
+      ],
+      "value": 3
+    },
+    {
+      "id": "taganrog",
+      "name": "Taganrog",
+      "pos": [
+        38.92,
+        47.22
+      ],
+      "value": 2
+    },
+    {
+      "id": "shakhty",
+      "name": "Shakhty",
+      "pos": [
+        40.21,
+        47.71
+      ],
+      "value": 2
+    },
+    {
+      "id": "novocherkassk",
+      "name": "Novocherkassk",
+      "pos": [
+        40.09,
+        47.42
+      ],
+      "value": 2
+    },
+    {
+      "id": "volgodonsk",
+      "name": "Volgodonsk",
+      "pos": [
+        42.17,
+        47.51
+      ],
+      "value": 2
+    },
+    {
+      "id": "bataysk",
+      "name": "Bataysk",
+      "pos": [
+        39.75,
+        47.14
+      ],
+      "value": 2
+    },
+    {
+      "id": "kamensk_shakhtinsky",
+      "name": "Kamensk-Shakhtinsky",
+      "pos": [
+        40.26,
+        48.32
+      ],
+      "value": 2
+    },
+    {
+      "id": "millerovo",
+      "name": "Millerovo",
+      "pos": [
+        40.4,
+        48.92
+      ],
+      "value": 2
+    },
+    {
+      "id": "donetsk_ru",
+      "name": "Donetsk (RF)",
+      "pos": [
+        39.95,
+        48.33
+      ],
+      "value": 1
+    },
+    {
+      "id": "morozovsk",
+      "name": "Morozovsk",
+      "pos": [
+        41.83,
+        48.35
+      ],
+      "value": 1
+    },
+    {
+      "id": "salsk",
+      "name": "Salsk",
+      "pos": [
+        41.5,
+        46.47
+      ],
+      "value": 2
+    },
+    {
+      "id": "azov",
+      "name": "Azov",
+      "pos": [
+        39.42,
+        47.11
+      ],
+      "value": 2
+    },
+    {
+      "id": "stary_oskol",
+      "name": "Stary Oskol",
+      "pos": [
+        37.83,
+        51.3
+      ],
+      "value": 2
+    },
+    {
+      "id": "gubkin",
+      "name": "Gubkin",
+      "pos": [
+        37.55,
+        51.28
+      ],
+      "value": 2
+    },
+    {
+      "id": "shebekino",
+      "name": "Shebekino",
+      "pos": [
+        36.9,
+        50.41
+      ],
+      "value": 1
+    },
+    {
+      "id": "valuyki",
+      "name": "Valuyki",
+      "pos": [
+        38.12,
+        50.19
+      ],
+      "value": 1
+    },
+    {
+      "id": "alekseevka",
+      "name": "Alekseevka",
+      "pos": [
+        38.69,
+        50.63
+      ],
+      "value": 1
+    },
+    {
+      "id": "rylsk",
+      "name": "Rylsk",
+      "pos": [
+        35.27,
+        51.57
+      ],
+      "value": 1
+    },
+    {
+      "id": "kurchatov",
+      "name": "Kurchatov",
+      "pos": [
+        35.65,
+        51.66
+      ],
+      "value": 2
+    },
+    {
+      "id": "lgov",
+      "name": "Lgov",
+      "pos": [
+        35.26,
+        51.67
+      ],
+      "value": 1
+    },
+    {
+      "id": "sudzha",
+      "name": "Sudzha",
+      "pos": [
+        35.27,
+        51.19
+      ],
+      "value": 1
+    },
+    {
+      "id": "zheleznogorsk",
+      "name": "Zheleznogorsk",
+      "pos": [
+        35.37,
+        52.33
+      ],
+      "value": 2
+    },
+    {
+      "id": "klintsy",
+      "name": "Klintsy",
+      "pos": [
+        32.23,
+        52.75
+      ],
+      "value": 2
+    },
+    {
+      "id": "novozybkov",
+      "name": "Novozybkov",
+      "pos": [
+        31.93,
+        52.53
+      ],
+      "value": 2
+    },
+    {
+      "id": "unecha",
+      "name": "Unecha",
+      "pos": [
+        32.68,
+        52.84
+      ],
+      "value": 1
+    },
+    {
+      "id": "starodub",
+      "name": "Starodub",
+      "pos": [
+        32.6,
+        52.58
+      ],
+      "value": 1
+    },
+    {
+      "id": "karachev",
+      "name": "Karachev",
+      "pos": [
+        34.98,
+        53.12
+      ],
+      "value": 1
+    },
+    {
+      "id": "dyatkovo",
+      "name": "Dyatkovo",
+      "pos": [
+        34.33,
+        53.6
+      ],
+      "value": 1
+    },
+    {
+      "id": "pochep",
+      "name": "Pochep",
+      "pos": [
+        33.45,
+        52.93
+      ],
+      "value": 1
+    },
+    {
+      "id": "roslavl",
+      "name": "Roslavl",
+      "pos": [
+        32.86,
+        53.95
+      ],
+      "value": 2
+    },
+    {
+      "id": "vyazma",
+      "name": "Vyazma",
+      "pos": [
+        34.3,
+        55.21
+      ],
+      "value": 2
+    },
+    {
+      "id": "yartsevo",
+      "name": "Yartsevo",
+      "pos": [
+        32.7,
+        55.07
+      ],
+      "value": 1
+    },
+    {
+      "id": "safonovo",
+      "name": "Safonovo",
+      "pos": [
+        33.23,
+        55.11
+      ],
+      "value": 1
+    },
+    {
+      "id": "desnogorsk",
+      "name": "Desnogorsk",
+      "pos": [
+        33.28,
+        54.15
+      ],
+      "value": 2
+    },
+    {
+      "id": "yelets",
+      "name": "Yelets",
+      "pos": [
+        38.5,
+        52.62
+      ],
+      "value": 2
+    },
+    {
+      "id": "gryazi",
+      "name": "Gryazi",
+      "pos": [
+        39.94,
+        52.5
+      ],
+      "value": 1
+    },
+    {
+      "id": "rossosh",
+      "name": "Rossosh",
+      "pos": [
+        39.57,
+        50.2
+      ],
+      "value": 2
+    },
+    {
+      "id": "liski",
+      "name": "Liski",
+      "pos": [
+        39.5,
+        50.98
+      ],
+      "value": 2
+    },
+    {
+      "id": "ostrogozhsk",
+      "name": "Ostrogozhsk",
+      "pos": [
+        39.04,
+        50.86
+      ],
+      "value": 1
+    },
+    {
+      "id": "pavlovsk_vrn",
+      "name": "Pavlovsk",
+      "pos": [
+        40.07,
+        50.46
+      ],
+      "value": 1
+    },
+    {
+      "id": "boguchar",
+      "name": "Boguchar",
+      "pos": [
+        40.55,
+        49.93
+      ],
+      "value": 1
+    },
+    {
+      "id": "buturlinovka",
+      "name": "Buturlinovka",
+      "pos": [
+        40.58,
+        50.83
+      ],
+      "value": 1
+    },
+    {
+      "id": "novovoronezh",
+      "name": "Novovoronezh",
+      "pos": [
+        39.22,
+        51.31
+      ],
+      "value": 2
+    },
+    {
+      "id": "borisoglebsk",
+      "name": "Borisoglebsk",
+      "pos": [
+        42.08,
+        51.37
+      ],
+      "value": 2
+    },
+    {
+      "id": "michurinsk",
+      "name": "Michurinsk",
+      "pos": [
+        40.49,
+        52.89
+      ],
+      "value": 2
+    },
+    {
+      "id": "morshansk",
+      "name": "Morshansk",
+      "pos": [
+        41.81,
+        53.44
+      ],
+      "value": 1
+    },
+    {
+      "id": "kotovsk",
+      "name": "Kotovsk",
+      "pos": [
+        41.5,
+        52.59
+      ],
+      "value": 1
+    },
+    {
+      "id": "livny",
+      "name": "Livny",
+      "pos": [
+        37.61,
+        52.42
+      ],
+      "value": 2
+    },
+    {
+      "id": "mtsensk",
+      "name": "Mtsensk",
+      "pos": [
+        36.57,
+        53.28
+      ],
+      "value": 2
+    },
+    {
+      "id": "novomoskovsk_tula",
+      "name": "Novomoskovsk (RF)",
+      "pos": [
+        38.29,
+        54.03
+      ],
+      "value": 2
+    },
+    {
+      "id": "efremov",
+      "name": "Efremov",
+      "pos": [
+        38.12,
+        53.14
+      ],
+      "value": 1
+    },
+    {
+      "id": "obninsk",
+      "name": "Obninsk",
+      "pos": [
+        36.61,
+        55.1
+      ],
+      "value": 2
+    },
+    {
+      "id": "murom",
+      "name": "Murom",
+      "pos": [
+        42.05,
+        55.57
+      ],
+      "value": 2
+    },
+    {
+      "id": "kovrov",
+      "name": "Kovrov",
+      "pos": [
+        41.31,
+        56.36
+      ],
+      "value": 2
+    },
+    {
+      "id": "donetsk",
+      "name": "Donetsk",
+      "pos": [
+        37.8028,
+        48.0159
+      ],
+      "value": 4
+    },
+    {
+      "id": "luhansk",
+      "name": "Luhansk",
+      "pos": [
+        39.3078,
+        48.574
+      ],
+      "value": 3
+    },
+    {
+      "id": "makiivka",
+      "name": "Makiivka",
+      "pos": [
+        37.9614,
+        48.0556
+      ],
+      "value": 3
+    },
+    {
+      "id": "horlivka",
+      "name": "Horlivka",
+      "pos": [
+        38.0028,
+        48.3061
+      ],
+      "value": 2
+    },
+    {
+      "id": "mariupol",
+      "name": "Mariupol",
+      "pos": [
+        37.555,
+        47.0958
+      ],
+      "value": 3
+    },
+    {
+      "id": "melitopol",
+      "name": "Melitopol",
+      "pos": [
+        35.3686,
+        46.8489
+      ],
+      "value": 3
+    },
+    {
+      "id": "berdiansk",
+      "name": "Berdiansk",
+      "pos": [
+        36.7864,
+        46.7556
+      ],
+      "value": 2
+    },
+    {
+      "id": "alchevsk",
+      "name": "Alchevsk",
+      "pos": [
+        38.8167,
+        48.4833
+      ],
+      "value": 2
+    },
+    {
+      "id": "sievierodonetsk",
+      "name": "Sievierodonetsk",
+      "pos": [
+        38.4833,
+        48.95
+      ],
+      "value": 2
+    },
+    {
+      "id": "lysychansk",
+      "name": "Lysychansk",
+      "pos": [
+        38.4333,
+        48.8833
+      ],
+      "value": 2
+    },
+    {
+      "id": "bakhmut",
+      "name": "Bakhmut",
+      "pos": [
+        38,
+        48.6
+      ],
+      "value": 2
     },
     {
       "id": "pokrovsk",
@@ -7867,229 +9523,31 @@
       "value": 2
     },
     {
-      "id": "kramatorsk",
-      "name": "Kramatorsk",
+      "id": "avdiivka",
+      "name": "Avdiivka",
       "pos": [
-        37.56,
-        48.74
-      ],
-      "value": 3
-    },
-    {
-      "id": "kupiansk",
-      "name": "Kupiansk",
-      "pos": [
-        37.62,
-        49.71
-      ],
-      "value": 2
-    },
-    {
-      "id": "nova_kakhovka",
-      "name": "Nova Kakhovka",
-      "pos": [
-        33.37,
-        46.76
+        37.74,
+        48.14
       ],
       "value": 1
     },
     {
-      "id": "enerhodar",
-      "name": "Enerhodar",
+      "id": "svatove",
+      "name": "Svatove",
       "pos": [
-        34.65,
-        47.5
-      ],
-      "value": 2
-    },
-    {
-      "id": "tokmak",
-      "name": "Tokmak",
-      "pos": [
-        35.71,
-        47.25
-      ],
-      "value": 2
-    },
-    {
-      "id": "polohy",
-      "name": "Polohy",
-      "pos": [
-        36.26,
-        47.48
+        38.15,
+        49.41
       ],
       "value": 1
     },
     {
-      "id": "melitopol",
-      "name": "Melitopol",
+      "id": "starobilsk",
+      "name": "Starobilsk",
       "pos": [
-        35.37,
-        46.84
-      ],
-      "value": 3
-    },
-    {
-      "id": "mariupol",
-      "name": "Mariupol",
-      "pos": [
-        37.55,
-        47.1
-      ],
-      "value": 3
-    },
-    {
-      "id": "donetsk",
-      "name": "Donetsk",
-      "pos": [
-        37.8,
-        48
-      ],
-      "value": 4
-    },
-    {
-      "id": "bakhmut",
-      "name": "Bakhmut",
-      "pos": [
-        38,
-        48.6
-      ],
-      "value": 1
-    },
-    {
-      "id": "luhansk",
-      "name": "Luhansk",
-      "pos": [
-        39.3,
-        48.57
-      ],
-      "value": 3
-    },
-    {
-      "id": "simferopol",
-      "name": "Simferopol",
-      "pos": [
-        34.1,
-        44.95
-      ],
-      "value": 3
-    },
-    {
-      "id": "sevastopol",
-      "name": "Sevastopol",
-      "pos": [
-        33.52,
-        44.61
-      ],
-      "value": 3
-    },
-    {
-      "id": "belgorod",
-      "name": "Belgorod",
-      "pos": [
-        36.59,
-        50.6
+        38.9,
+        49.27
       ],
       "value": 2
-    },
-    {
-      "id": "kursk",
-      "name": "Kursk",
-      "pos": [
-        36.19,
-        51.73
-      ],
-      "value": 2
-    },
-    {
-      "id": "voronezh",
-      "name": "Voronezh",
-      "pos": [
-        39.2,
-        51.67
-      ],
-      "value": 3
-    },
-    {
-      "id": "rostov",
-      "name": "Rostov-on-Don",
-      "pos": [
-        39.72,
-        47.23
-      ],
-      "value": 3
-    },
-    {
-      "id": "bryansk",
-      "name": "Bryansk",
-      "pos": [
-        34.37,
-        53.25
-      ],
-      "value": 2
-    },
-    {
-      "id": "smolensk",
-      "name": "Smolensk",
-      "pos": [
-        32.05,
-        54.78
-      ],
-      "value": 2
-    },
-    {
-      "id": "moscow",
-      "name": "Moscow",
-      "pos": [
-        37.62,
-        55.75
-      ],
-      "value": 5
-    },
-    {
-      "id": "saint_petersburg",
-      "name": "Saint Petersburg",
-      "pos": [
-        30.33,
-        59.93
-      ],
-      "value": 5
-    },
-    {
-      "id": "nizhny_novgorod",
-      "name": "Nizhny Novgorod",
-      "pos": [
-        44,
-        56.32
-      ],
-      "value": 3
-    },
-    {
-      "id": "kazan",
-      "name": "Kazan",
-      "pos": [
-        49.12,
-        55.79
-      ],
-      "value": 3
-    },
-    {
-      "id": "ulyanovsk",
-      "name": "Ulyanovsk",
-      "pos": [
-        48.4,
-        54.32
-      ],
-      "value": 2
-    },
-    {
-      "id": "samara",
-      "name": "Samara",
-      "pos": [
-        50.15,
-        53.2
-      ],
-      "value": 3
     }
   ],
   "spawns": [

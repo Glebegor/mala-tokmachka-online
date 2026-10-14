@@ -32,6 +32,7 @@ export interface UnitCargo {
 export interface UnitRoute {
   fromBuilding: number;
   toBuilding: number;
+  resType?: string;
   state?: 'to_from' | 'loading' | 'to_to' | 'unloading';
   timer?: number;
 }
