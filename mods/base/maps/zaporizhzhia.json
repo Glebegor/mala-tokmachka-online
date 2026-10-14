@@ -12,6 +12,7 @@
     47.3
   ],
   "zoom": 7.4,
+  "bordersFile": "borders.geojson",
   "front": [
     [
       35.1,

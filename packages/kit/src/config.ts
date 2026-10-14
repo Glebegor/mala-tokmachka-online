@@ -1,3 +1,5 @@
+import { fileURLToPath } from 'node:url';
+
 const env = (k: string, d: string) => process.env[k] ?? d;
 
 export const config = {
@@ -16,6 +18,6 @@ export const config = {
     game: env('GAME_URL', 'http://localhost:4003'),
     profile: env('PROFILE_URL', 'http://localhost:4004'),
   },
-  modsDir: env('SW_MODS_DIR', new URL('../../../mods', import.meta.url).pathname),
-  dataDir: env('SW_DATA_DIR', new URL('../../../data', import.meta.url).pathname),
+  modsDir: env('SW_MODS_DIR', fileURLToPath(new URL('../../../mods', import.meta.url))),
+  dataDir: env('SW_DATA_DIR', fileURLToPath(new URL('../../../data', import.meta.url))),
 };

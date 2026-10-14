@@ -1,7 +1,7 @@
 {
   "name": "mala-tokmachka-online",
   "private": true,
-  "version": "0.6.0",
+  "version": "0.7.0",
   "workspaces": [
     "packages/*",
     "services/*",
@@ -9,7 +9,7 @@
   ],
   "scripts": {
     "dev": "concurrently -n auth,lobby,game,profile,gateway,client -c blue,cyan,green,white,yellow,magenta \"npm run dev -w @sw/auth\" \"npm run dev -w @sw/lobby\" \"npm run dev -w @sw/game\" \"npm run dev -w @sw/profile\" \"npm run dev -w @sw/gateway\" \"npm run dev -w @sw/client\"",
-    "typecheck": "tsc -b --noEmit false 2>&1 || true",
+    "typecheck": "tsc --noEmit",
     "test": "tsx packages/core/test/training.test.ts && tsx packages/core/test/sim.test.ts",
     "docker:up": "docker compose up -d --build",
     "docker:down": "docker compose down",

@@ -1,9 +1,10 @@
+import { fileURLToPath } from 'node:url';
 // Training centre flow, rivers and waypoints, checked against the real base mod.
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { distKm, offsetKm, Sim, type LngLat } from '../src';
 
-const rs = await loadRuleset(new URL('../../../mods', import.meta.url).pathname);
+const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const sim = new Sim(rs, 'ukraine', [
   { id: 'a', name: 'a', team: 0, bot: false },
   { id: 'b', name: 'b', team: 1, bot: false },
@@ -56,12 +57,20 @@ console.log(`training ok: 4 units, ${terms.seconds}s, ${terms.perSecond}/s while
 
 // --- waypoints ---
 const scout = squad[0];
-const p1 = offsetKm(scout.pos, 3, 0), p2 = offsetKm(scout.pos, 3, 3);
+// pick a direction with open ground for both legs (the map has rivers everywhere)
+const open = (a: LngLat, b: LngLat) => (sim as any).lineClear(a, b, []) as boolean;
+let p1: LngLat = scout.pos, p2: LngLat = scout.pos;
+for (let k = 0; k < 16; k++) {
+  const ang = (k / 16) * Math.PI * 2;
+  p1 = offsetKm(scout.pos, 3 * Math.cos(ang), 3 * Math.sin(ang));
+  p2 = offsetKm(p1, -3 * Math.sin(ang), 3 * Math.cos(ang));
+  if (open(scout.pos, p1) && open(p1, p2)) break;
+}
 sim.apply('a', { type: 'move', units: [scout.id], to: p1 });
 sim.apply('a', { type: 'move', units: [scout.id], to: p2, queue: true });
 assert.equal(scout.path.filter((w) => w.end).length, 2, 'two queued orders');
 run(120);
-assert.ok(distKm(scout.pos, p2) < 0.5, 'reached the last waypoint');
+assert.ok(distKm(scout.pos, p2) < 0.5, `reached the last waypoint (${distKm(scout.pos, p2).toFixed(2)} km off, ${scout.path.length} legs left, on ${sim.terrainAt(scout.pos).id}, enter=${scout.enter}, hp=${scout.hp.toFixed(0)}, alive=${sim.world.units.includes(scout)})`);
 
 // --- rivers: no walking through the Dnipro, bridges and pontoons only ---
 const west: LngLat = [33.25, 46.95], east: LngLat = [33.6, 46.6]; // either side of the lower Dnipro

@@ -408,7 +408,7 @@ export class Sim {
         // the group shares one plan; stragglers (and units the shared plan cannot reach) plan their own, bounded per order
         const near = distKm(from, centre) <= 15 && this.lineClear(from, shared?.[0]?.p ?? to, this.crossings(u.team));
         if (shared && near) leg = shared.map((w) => ({ ...w }));
-        else if (own++ < 24) leg = this.plan(u.team, from, to, d.speed, direct);
+        else if (own++ < 8) leg = this.plan(u.team, from, to, d.speed, direct);
         else leg = null;
         if (leg) leg[leg.length - 1] = { p: dest, road: false };
       }
@@ -453,7 +453,7 @@ export class Sim {
     if (w.tick % r.tickRate === 0) this.greyZones();
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
-    if (w.time >= r.matchSeconds && w.winner === null) {
+    if (r.matchSeconds > 0 && w.time >= r.matchSeconds && w.winner === null) {
       w.winner = w.scores[0] === w.scores[1] ? null : w.scores[0] > w.scores[1] ? 0 : 1;
       w.winReason = 'time limit';
     }

@@ -72,6 +72,21 @@
   10 s behind the enemy line with no enemy within 6 km turns a 5 km patch grey. Nobody can build there, the front is
   easier to push at that spot, and the patch fades 20 s after the troops leave.
 
+## Merge of `akira` (v0.7.0)
+Taken from akira: the expanded Eastern Europe map (DeepState line of contact, 200 cities as capture points, Sea of
+Azov cut-out), the full OpenStreetMap road network (25k roads), state borders with country labels, real city
+boundaries, fuel-station data, the map-building tools, Windows path fixes, "Until victory" (no time limit), and the
+anti-tank / assault NATO icons. Kept from hlib where both branches did the same thing differently: the simulation
+core (cauldrons, roads/rivers routing, training, fortifications, grey zones), the client game screen, buildings,
+units, rules and economy, lobby flow. Spawns were regenerated as 12 mirrored pairs on the new front and
+capture-point value equalised per side (196 / 196).
+
+Not taken (they live inside akira's version of the simulation and client, which conflicts with hlib's): logistics
+(trucks, warehouses, fuel supply), military base and new infantry types, side-specific drones with sprites and
+loitering, artillery bombardment, aviation plant, power lines, city HP / housing limits / rescuers, special zones
+(Kremenchuk, Alabuga), shared team buildings, the fog-of-war overlay. The drone sprites are in
+`mods/base/assets/drones` for when those features are ported.
+
 ## M7 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.

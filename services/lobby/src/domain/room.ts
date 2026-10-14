@@ -39,7 +39,7 @@ export function sanitizeSettings(input: Partial<RoomSettings> | undefined, base:
   const oneOf = <T,>(v: unknown, allowed: readonly T[], d: T): T => (allowed.includes(v as T) ? (v as T) : d);
   return {
     mapId: typeof i.mapId === 'string' && i.mapId.length < 40 ? i.mapId : base.mapId,
-    matchMinutes: Math.min(90, Math.max(5, Math.round(Number(i.matchMinutes ?? base.matchMinutes)) || base.matchMinutes)),
+    matchMinutes: Number(i.matchMinutes) === 0 ? 0 : Math.min(90, Math.max(5, Math.round(Number(i.matchMinutes ?? base.matchMinutes)) || base.matchMinutes)),
     teamSize: Math.min(MAX_TEAM_SIZE, Math.max(1, Math.round(Number(i.teamSize ?? base.teamSize)) || base.teamSize)),
     fillBots: typeof i.fillBots === 'boolean' ? i.fillBots : base.fillBots,
     botDifficulty: oneOf(i.botDifficulty, ['easy', 'normal', 'hard'] as const, base.botDifficulty),

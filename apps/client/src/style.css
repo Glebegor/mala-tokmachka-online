@@ -183,3 +183,6 @@ button.ghost.on { color: var(--accent); }
 .tile span { color: var(--muted); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; }
 .result { font-weight: 700; flex: 0 0 52px !important; }
 .result.win { color: var(--ok); } .result.loss { color: #ff6b6b; } .result.draw { color: var(--muted); }
+
+.country-label { color: #8ab5de; font-size: 13px; letter-spacing: .4em; text-transform: uppercase; opacity: .55; pointer-events: none; text-shadow: 0 0 6px #000; }
+.far .country-label { font-size: 11px; }

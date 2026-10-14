@@ -19,6 +19,34 @@ export class RoadNetwork {
   private adj: Edge[][] = [];
   private index = new Map<string, number>();
   private grid = new Map<string, number[]>();
+  // search scratch space, reused between queries: an entry is only valid when its stamp equals the current epoch
+  private g = new Float64Array(0);
+  private prev = new Int32Array(0);
+  private stamp = new Uint32Array(0);
+  private closed = new Uint32Array(0);
+  private epoch = 0;
+
+  /** Start a new search without clearing (or reallocating) arrays the size of the whole graph. */
+  private begin() {
+    const n = this.nodes.length;
+    if (this.g.length !== n) {
+      this.g = new Float64Array(n);
+      this.prev = new Int32Array(n);
+      this.stamp = new Uint32Array(n);
+      this.closed = new Uint32Array(n);
+      this.epoch = 0;
+    }
+    this.epoch++;
+    return this.epoch;
+  }
+  private cost(i: number) {
+    return this.stamp[i] === this.epoch ? this.g[i] : Infinity;
+  }
+  private setCost(i: number, c: number, from: number) {
+    this.stamp[i] = this.epoch;
+    this.g[i] = c;
+    this.prev[i] = from;
+  }
 
   constructor(lines: RoadLine[], maxSegmentKm = 4) {
     for (const line of lines) {
@@ -141,33 +169,30 @@ export class RoadNetwork {
   /** A* over the graph. Returns node ids from a to b, or null when not connected. */
   path(a: number, b: number): { nodes: number[]; km: number } | null {
     if (a === b) return { nodes: [a], km: 0 };
-    const n = this.nodes.length;
-    const g = new Float64Array(n).fill(Infinity);
-    const from = new Int32Array(n).fill(-1);
-    const done = new Uint8Array(n);
+    const epoch = this.begin();
     const goal = this.nodes[b];
     const heap = new MinHeap();
-    g[a] = 0;
+    this.setCost(a, 0, -1);
     heap.push(a, distKm(this.nodes[a], goal));
     while (heap.size) {
       const cur = heap.pop();
       if (cur === b) break;
-      if (done[cur]) continue;
-      done[cur] = 1;
+      if (this.closed[cur] === epoch) continue;
+      this.closed[cur] = epoch;
+      const gc = this.g[cur];
       for (const e of this.adj[cur]) {
-        const cost = g[cur] + e.km;
-        if (cost < g[e.to]) {
-          g[e.to] = cost;
-          from[e.to] = cur;
-          heap.push(e.to, cost + distKm(this.nodes[e.to], goal));
+        const c = gc + e.km;
+        if (c < this.cost(e.to)) {
+          this.setCost(e.to, c, cur);
+          heap.push(e.to, c + distKm(this.nodes[e.to], goal));
         }
       }
     }
-    if (g[b] === Infinity) return null;
+    if (this.cost(b) === Infinity) return null;
     const nodes: number[] = [];
-    for (let c = b; c !== -1; c = from[c]) nodes.push(c);
+    for (let c = b; c !== -1; c = this.prev[c]) nodes.push(c);
     nodes.reverse();
-    return { nodes, km: g[b] };
+    return { nodes, km: this.g[b] };
   }
 
   /** Up to `k` road nodes around p, nearest first, that `accept` (e.g. reachable without crossing a river). */
@@ -205,16 +230,13 @@ export class RoadNetwork {
     if (!entries.length || !exits.length) return null;
     const exitCost = new Map(exits.map((e) => [e.id, e.km / o.offSpeed]));
 
-    const n = this.nodes.length;
-    const g = new Float64Array(n).fill(Infinity);
-    const prev = new Int32Array(n).fill(-1);
-    const done = new Uint8Array(n);
+    const epoch = this.begin();
     const heap = new MinHeap();
     const h = (id: number) => distKm(this.nodes[id], to) / o.roadSpeed;
     for (const e of entries) {
       const c = e.km / o.offSpeed;
-      if (c < g[e.id]) {
-        g[e.id] = c;
+      if (c < this.cost(e.id)) {
+        this.setCost(e.id, c, -1);
         heap.push(e.id, c + h(e.id));
       }
     }
@@ -222,26 +244,26 @@ export class RoadNetwork {
     let bestNode = -1;
     while (heap.size) {
       const cur = heap.pop();
-      if (done[cur]) continue;
-      done[cur] = 1;
-      if (g[cur] + h(cur) >= best) break; // nothing left can beat the best finished trip
+      if (this.closed[cur] === epoch) continue;
+      this.closed[cur] = epoch;
+      const gc = this.g[cur];
+      if (gc + h(cur) >= best) break; // nothing left can beat the best finished trip
       const out = exitCost.get(cur);
-      if (out !== undefined && g[cur] + out < best) {
-        best = g[cur] + out;
+      if (out !== undefined && gc + out < best) {
+        best = gc + out;
         bestNode = cur;
       }
       for (const e of this.adj[cur]) {
-        const cost = g[cur] + e.km / o.roadSpeed;
-        if (cost < g[e.to]) {
-          g[e.to] = cost;
-          prev[e.to] = cur;
-          heap.push(e.to, cost + h(e.to));
+        const c = gc + e.km / o.roadSpeed;
+        if (c < this.cost(e.to)) {
+          this.setCost(e.to, c, cur);
+          heap.push(e.to, c + h(e.to));
         }
       }
     }
     if (bestNode < 0) return null;
     const points: LngLat[] = [];
-    for (let c = bestNode; c !== -1; c = prev[c]) points.push(this.nodes[c]);
+    for (let c = bestNode; c !== -1; c = this.prev[c]) points.push(this.nodes[c]);
     points.reverse();
     return { points, seconds: best };
   }
@@ -291,5 +313,46 @@ class MinHeap {
       keys[i] = key;
     }
     return top;
+  }
+}
+
+/**
+ * Light "is there a road near here" lookup for clients: a grid of road vertices (long segments subdivided),
+ * without the routing graph, so it stays small even for a dense national network.
+ */
+export class RoadIndex {
+  private grid = new Map<string, number[]>(); // flat lng,lat pairs per cell
+
+  constructor(lines: RoadLine[], stepKm = 2) {
+    for (const line of lines) {
+      for (let i = 1; i + 1 < line.length; i += 2) {
+        const p: LngLat = [line[i], line[i + 1]];
+        this.add(p);
+        if (i + 3 < line.length) {
+          const q: LngLat = [line[i + 2], line[i + 3]];
+          const steps = Math.floor(distKm(p, q) / stepKm);
+          for (let k = 1; k <= steps; k++) this.add([p[0] + ((q[0] - p[0]) * k) / (steps + 1), p[1] + ((q[1] - p[1]) * k) / (steps + 1)]);
+        }
+      }
+    }
+  }
+
+  private add(p: LngLat) {
+    const key = cellKey(p[0], p[1]);
+    const b = this.grid.get(key);
+    b ? b.push(p[0], p[1]) : this.grid.set(key, [p[0], p[1]]);
+  }
+
+  isNear(p: LngLat, km: number): boolean {
+    const span = Math.ceil(km / 111 / CELL / Math.max(0.3, Math.cos((p[1] * Math.PI) / 180))) + 1;
+    const cx = Math.floor(p[0] / CELL), cy = Math.floor(p[1] / CELL);
+    for (let x = cx - span; x <= cx + span; x++) {
+      for (let y = cy - span; y <= cy + span; y++) {
+        const b = this.grid.get(`${x},${y}`);
+        if (!b) continue;
+        for (let i = 0; i < b.length; i += 2) if (distKm(p, [b[i], b[i + 1]]) <= km) return true;
+      }
+    }
+    return false;
   }
 }

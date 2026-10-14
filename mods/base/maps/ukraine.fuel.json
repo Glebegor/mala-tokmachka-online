@@ -1,0 +1,1025 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30.4248,
+          50.504
+        ]
+      },
+      "properties": {
+        "id": "fuel_1",
+        "name": "БРСМ-Нафта",
+        "city": "Kyiv"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.3655,
+          49.9572
+        ]
+      },
+      "properties": {
+        "id": "fuel_2",
+        "name": "Дніпронефть",
+        "city": "Kharkiv"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.0624,
+          48.4232
+        ]
+      },
+      "properties": {
+        "id": "fuel_3",
+        "name": "Ukrnafta",
+        "city": "Dnipro"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30.7456,
+          46.4554
+        ]
+      },
+      "properties": {
+        "id": "fuel_4",
+        "name": "Іксоіл",
+        "city": "Odesa"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.1087,
+          47.863
+        ]
+      },
+      "properties": {
+        "id": "fuel_5",
+        "name": "UPG",
+        "city": "Zaporizhzhia"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.7614,
+          46.6261
+        ]
+      },
+      "properties": {
+        "id": "fuel_6",
+        "name": "WOG",
+        "city": "Kherson"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          33.4299,
+          47.9257
+        ]
+      },
+      "properties": {
+        "id": "fuel_7",
+        "name": "ОККО",
+        "city": "Kryvyi Rih"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.5168,
+          49.5815
+        ]
+      },
+      "properties": {
+        "id": "fuel_8",
+        "name": "BVS",
+        "city": "Poltava"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.7529,
+          50.9285
+        ]
+      },
+      "properties": {
+        "id": "fuel_9",
+        "name": "ОККО",
+        "city": "Sumy"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.773,
+          47.5945
+        ]
+      },
+      "properties": {
+        "id": "fuel_10",
+        "name": "АЗС",
+        "city": "Orikhiv"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.1768,
+          47.4906
+        ]
+      },
+      "properties": {
+        "id": "fuel_11",
+        "name": "UPG",
+        "city": "Huliaipole"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.1813,
+          48.26
+        ]
+      },
+      "properties": {
+        "id": "fuel_12",
+        "name": "ГазНафта",
+        "city": "Pokrovsk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.5997,
+          48.7515
+        ]
+      },
+      "properties": {
+        "id": "fuel_13",
+        "name": "Respect",
+        "city": "Kramatorsk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.6368,
+          49.6854
+        ]
+      },
+      "properties": {
+        "id": "fuel_14",
+        "name": "Заправка",
+        "city": "Kupiansk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          33.381,
+          46.7565
+        ]
+      },
+      "properties": {
+        "id": "fuel_15",
+        "name": "WOG",
+        "city": "Nova Kakhovka"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.6475,
+          47.4843
+        ]
+      },
+      "properties": {
+        "id": "fuel_16",
+        "name": "Укрнафта",
+        "city": "Enerhodar"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.7235,
+          47.2708
+        ]
+      },
+      "properties": {
+        "id": "fuel_17",
+        "name": "АЗС",
+        "city": "Tokmak"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.3475,
+          46.8236
+        ]
+      },
+      "properties": {
+        "id": "fuel_18",
+        "name": "WOG",
+        "city": "Melitopol"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.6272,
+          47.1076
+        ]
+      },
+      "properties": {
+        "id": "fuel_19",
+        "name": "Pit-Lane",
+        "city": "Mariupol"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.8323,
+          48.0165
+        ]
+      },
+      "properties": {
+        "id": "fuel_20",
+        "name": "ТОВ Анкор",
+        "city": "Donetsk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          38.0606,
+          48.6982
+        ]
+      },
+      "properties": {
+        "id": "fuel_21",
+        "name": "WOG",
+        "city": "Bakhmut"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.3511,
+          48.5794
+        ]
+      },
+      "properties": {
+        "id": "fuel_22",
+        "name": "АЗС",
+        "city": "Luhansk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.1383,
+          44.9259
+        ]
+      },
+      "properties": {
+        "id": "fuel_23",
+        "name": "TES",
+        "city": "Simferopol"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          33.4866,
+          44.5918
+        ]
+      },
+      "properties": {
+        "id": "fuel_24",
+        "name": "АТАН Россия №65",
+        "city": "Sevastopol"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.4723,
+          50.5375
+        ]
+      },
+      "properties": {
+        "id": "fuel_25",
+        "name": "Газпром",
+        "city": "Belgorod"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.179,
+          51.7729
+        ]
+      },
+      "properties": {
+        "id": "fuel_26",
+        "name": "Ultra",
+        "city": "Kursk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.2603,
+          51.6219
+        ]
+      },
+      "properties": {
+        "id": "fuel_27",
+        "name": "Калина-Ойл",
+        "city": "Voronezh"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.8199,
+          47.2681
+        ]
+      },
+      "properties": {
+        "id": "fuel_28",
+        "name": "Shell",
+        "city": "Rostov-on-Don"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.5193,
+          53.1991
+        ]
+      },
+      "properties": {
+        "id": "fuel_29",
+        "name": "Independent",
+        "city": "Bryansk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.0744,
+          54.8832
+        ]
+      },
+      "properties": {
+        "id": "fuel_30",
+        "name": "Русснефть",
+        "city": "Smolensk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.5324,
+          55.8161
+        ]
+      },
+      "properties": {
+        "id": "fuel_31",
+        "name": "Лукойл",
+        "city": "Moscow"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30.3196,
+          59.8237
+        ]
+      },
+      "properties": {
+        "id": "fuel_32",
+        "name": "Газпромнефть",
+        "city": "Saint Petersburg"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          43.8803,
+          56.3406
+        ]
+      },
+      "properties": {
+        "id": "fuel_33",
+        "name": "Газпромнефть",
+        "city": "Nizhny Novgorod"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          49.0221,
+          55.8277
+        ]
+      },
+      "properties": {
+        "id": "fuel_34",
+        "name": "ТАИФ-НК",
+        "city": "Kazan"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          48.3585,
+          54.3538
+        ]
+      },
+      "properties": {
+        "id": "fuel_35",
+        "name": "Лукойл",
+        "city": "Ulyanovsk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          50.2249,
+          53.2514
+        ]
+      },
+      "properties": {
+        "id": "fuel_36",
+        "name": "Олви",
+        "city": "Samara"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          23.9752,
+          49.8348
+        ]
+      },
+      "properties": {
+        "id": "fuel_37",
+        "name": "ОККО",
+        "city": "Lviv"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          28.6734,
+          50.2307
+        ]
+      },
+      "properties": {
+        "id": "fuel_38",
+        "name": "WOG",
+        "city": "Zhytomyr"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          28.4259,
+          49.2324
+        ]
+      },
+      "properties": {
+        "id": "fuel_39",
+        "name": "ОККО",
+        "city": "Vinnytsia"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.0203,
+          49.4075
+        ]
+      },
+      "properties": {
+        "id": "fuel_40",
+        "name": "БРСМ-Нафта",
+        "city": "Cherkasy"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          31.3887,
+          51.5355
+        ]
+      },
+      "properties": {
+        "id": "fuel_41",
+        "name": "Ukrnafta",
+        "city": "Chernihiv"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.2308,
+          48.4937
+        ]
+      },
+      "properties": {
+        "id": "fuel_42",
+        "name": "Метан",
+        "city": "Kropyvnytskyi"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          32.0759,
+          46.9633
+        ]
+      },
+      "properties": {
+        "id": "fuel_43",
+        "name": "UPG",
+        "city": "Mykolaiv"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.6574,
+          46.8027
+        ]
+      },
+      "properties": {
+        "id": "fuel_44",
+        "name": "Prime",
+        "city": "Berdyansk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.4546,
+          45.3336
+        ]
+      },
+      "properties": {
+        "id": "fuel_45",
+        "name": "Атан",
+        "city": "Kerch"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.2572,
+          44.9703
+        ]
+      },
+      "properties": {
+        "id": "fuel_46",
+        "name": "НК",
+        "city": "Feodosia"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          34.2656,
+          44.5433
+        ]
+      },
+      "properties": {
+        "id": "fuel_47",
+        "name": "Т~Нефть",
+        "city": "Yalta"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.4673,
+          54.1635
+        ]
+      },
+      "properties": {
+        "id": "fuel_48",
+        "name": "БензоТочка",
+        "city": "Tula"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          36.2829,
+          54.5462
+        ]
+      },
+      "properties": {
+        "id": "fuel_49",
+        "name": "Газпромнефть",
+        "city": "Kaluga"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.9652,
+          52.8862
+        ]
+      },
+      "properties": {
+        "id": "fuel_50",
+        "name": "Роснефть",
+        "city": "Orel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.5466,
+          52.6188
+        ]
+      },
+      "properties": {
+        "id": "fuel_51",
+        "name": "Лукойл",
+        "city": "Lipetsk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          41.3951,
+          52.7655
+        ]
+      },
+      "properties": {
+        "id": "fuel_52",
+        "name": "Октан",
+        "city": "Tambov"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.7131,
+          54.6022
+        ]
+      },
+      "properties": {
+        "id": "fuel_53",
+        "name": "Газпромнефть",
+        "city": "Ryazan"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          40.2417,
+          56.0706
+        ]
+      },
+      "properties": {
+        "id": "fuel_54",
+        "name": "City Oil",
+        "city": "Vladimir"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          35.8201,
+          56.8408
+        ]
+      },
+      "properties": {
+        "id": "fuel_55",
+        "name": "Сургутнефтегаз",
+        "city": "Tver"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          31.2316,
+          58.525
+        ]
+      },
+      "properties": {
+        "id": "fuel_56",
+        "name": "Роснефть",
+        "city": "Veliky Novgorod"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          28.3539,
+          57.8426
+        ]
+      },
+      "properties": {
+        "id": "fuel_57",
+        "name": "Автогаз-Маркет",
+        "city": "Pskov"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          44.9453,
+          53.225
+        ]
+      },
+      "properties": {
+        "id": "fuel_58",
+        "name": "АГЗС KR-GAS",
+        "city": "Penza"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          45.1649,
+          54.2047
+        ]
+      },
+      "properties": {
+        "id": "fuel_59",
+        "name": "М1",
+        "city": "Saransk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          46.0635,
+          51.568
+        ]
+      },
+      "properties": {
+        "id": "fuel_60",
+        "name": "Лукойл",
+        "city": "Saratov"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          44.4258,
+          48.6273
+        ]
+      },
+      "properties": {
+        "id": "fuel_61",
+        "name": "Лукойл",
+        "city": "Volgograd"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.0242,
+          45.0199
+        ]
+      },
+      "properties": {
+        "id": "fuel_62",
+        "name": "Лукойл",
+        "city": "Krasnodar"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          37.7232,
+          44.7656
+        ]
+      },
+      "properties": {
+        "id": "fuel_63",
+        "name": "Уфимнефть",
+        "city": "Novorossiysk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          39.7081,
+          43.6332
+        ]
+      },
+      "properties": {
+        "id": "fuel_64",
+        "name": "Роснефть",
+        "city": "Sochi"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          31.0313,
+          52.3489
+        ]
+      },
+      "properties": {
+        "id": "fuel_65",
+        "name": "Белоруснефть",
+        "city": "Gomel"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30.2538,
+          53.8573
+        ]
+      },
+      "properties": {
+        "id": "fuel_66",
+        "name": "Белоруснефть",
+        "city": "Mogilev"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          30.2509,
+          55.176
+        ]
+      },
+      "properties": {
+        "id": "fuel_67",
+        "name": "Газпромнефть",
+        "city": "Vitebsk"
+      }
+    },
+    {
+      "type": "Feature",
+      "geometry": {
+        "type": "Point",
+        "coordinates": [
+          27.6434,
+          53.9643
+        ]
+      },
+      "properties": {
+        "id": "fuel_68",
+        "name": "А-100",
+        "city": "Minsk"
+      }
+    }
+  ]
+}
