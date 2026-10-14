@@ -539,17 +539,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
       });
 
-      // Power lines along roads (offset alongside road with 50% reduced opacity)
+      // Power lines along roads (offset alongside road with soft subtle opacity)
       map.addLayer({
         id: 'power-lines-glow',
         type: 'line',
         source: 'power-lines',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#38bdf8',
-          'line-width': 3.0,
-          'line-blur': 2,
-          'line-opacity': 0.22,
+          'line-color': '#0284c7',
+          'line-width': 2.0,
+          'line-blur': 1.5,
+          'line-opacity': 0.16,
           'line-offset': 3.5,
         },
       });
@@ -559,10 +559,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         source: 'power-lines',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#7dd3fc',
-          'line-width': 1.2,
-          'line-dasharray': [3, 2],
-          'line-opacity': 0.42,
+          'line-color': '#38bdf8',
+          'line-width': 1.0,
+          'line-dasharray': [4, 3],
+          'line-opacity': 0.35,
           'line-offset': 3.5,
         },
       });
@@ -1070,6 +1070,36 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return `${h}ч ${remM}м`;
   }
 
+  function allowedStorageResources(d: BuildingDef): string[] {
+    if (d.id === 'gas_station') return ['fuel'];
+    if (d.id === 'oil_refinery') return ['fuel'];
+    if (d.id === 'mine') return ['ore'];
+    if (d.id === 'warehouse') return ['metal', 'fuel', 'ore'];
+
+    const res = new Set<string>();
+    if (d.produces) {
+      for (const k of Object.keys(d.produces)) {
+        if (k !== 'money' && k !== 'people' && k !== 'energy') res.add(k);
+      }
+    }
+    if (d.consumes) {
+      for (const k of Object.keys(d.consumes)) {
+        if (k !== 'money' && k !== 'people' && k !== 'energy') res.add(k);
+      }
+    }
+    if (d.trains) {
+      for (const uid of d.trains) {
+        const u = defU.get(uid);
+        if (u?.cost) {
+          for (const k of Object.keys(u.cost)) {
+            if (k !== 'money' && k !== 'people' && k !== 'energy') res.add(k);
+          }
+        }
+      }
+    }
+    return [...res];
+  }
+
   function renderSide() {
     if (!init || !snap) return;
     clear(side);
@@ -1096,18 +1126,39 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
 
-        // Building local storage
+        // Building local storage (only relevant goods for this building)
         const stor = b.storage ?? {};
-        const isGasStation = b.def === 'gas_station';
-        const storBox = h('div', { class: 'storage-box' },
-          h('b', { style: { fontSize: '11px', color: '#94a3b8' } }, isGasStation ? 'Резервуар АЗС (до 20,000 л топлива):' : 'Склад сырья (до 30,000 на ресурс):'),
-          h('div', { class: 'storage-grid' },
-            h('div', { class: 'storage-item' }, h('span', {}, '🔩 Металл'), h('b', {}, `${Math.floor(stor.metal ?? 0)}`)),
-            h('div', { class: 'storage-item' }, h('span', {}, '⛽ Топливо'), h('b', {}, `${Math.floor(stor.fuel ?? 0)}${isGasStation ? ' / 20k' : ''}`)),
-            h('div', { class: 'storage-item' }, h('span', {}, '⛏ Руда'), h('b', {}, `${Math.floor(stor.ore ?? 0)}`)),
-          )
-        );
-        side.append(storBox);
+        const allowedRes = allowedStorageResources(d);
+        if (allowedRes.length > 0) {
+          const isGasStation = b.def === 'gas_station';
+          const title = isGasStation
+            ? 'Резервуар АЗС (до 20,000 л топлива):'
+            : d.id === 'mine'
+            ? 'Склад руды (до 30,000):'
+            : d.id === 'oil_refinery'
+            ? 'Резервуар топлива (до 30,000 л):'
+            : 'Склад сырья (до 30,000 на ресурс):';
+
+          const resMeta: Record<string, { name: string; icon: string }> = {
+            metal: { name: 'Металл', icon: '🔩' },
+            fuel: { name: 'Топливо', icon: '⛽' },
+            ore: { name: 'Руда', icon: '⛏' },
+          };
+
+          const items: HTMLElement[] = [];
+          for (const k of allowedRes) {
+            const meta = resMeta[k] ?? { name: k, icon: '📦' };
+            const isFuelOnGasStation = isGasStation && k === 'fuel';
+            const valText = `${Math.floor(stor[k] ?? 0)}${isFuelOnGasStation ? ' / 20k' : ''}`;
+            items.push(h('div', { class: 'storage-item' }, h('span', {}, `${meta.icon} ${meta.name}`), h('b', {}, valText)));
+          }
+
+          const storBox = h('div', { class: 'storage-box' },
+            h('b', { style: { fontSize: '11px', color: '#94a3b8' } }, title),
+            h('div', { class: 'storage-grid' }, ...items)
+          );
+          side.append(storBox);
+        }
 
         if (b.def === 'aircraft_plant' && b.progress >= 1) {
           side.append(h('div', { class: 'muted', style: { fontStyle: 'italic', padding: '6px 8px', background: 'rgba(255,255,255,0.04)', borderRadius: '4px', marginTop: '6px' } }, '🛩 Завод готов к переоборудованию. Производство пилотируемой авиации и вертолётов будет доступно в ближайшем обновлении.'));
@@ -1963,38 +2014,42 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       });
     }
 
-    // Power lines along roads connecting power plants to buildings <= 100km
+    // Power lines along roads connecting power plants to buildings <= 100km (visible ONLY when a power plant is selected)
     if (map.getSource('power-lines')) {
-      const powerPlants = snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1 && b.def === 'power_plant');
-      const pKey = powerPlants.map((p) => p.id).sort().join(',') + '|' + snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1).map((b) => `${b.id}:${b.pos[0].toFixed(3)},${b.pos[1].toFixed(3)}`).sort().join(';');
-      if (pKey !== lastPowerLineKey) {
-        lastPowerLineKey = pKey;
-        const powerLineFeatures: any[] = [];
-        if (powerPlants.length > 0) {
+      const selectedPowerPlant = selBuilding !== null ? snap.buildings.find((b) => b.id === selBuilding && b.owner === me && b.progress >= 1 && b.def === 'power_plant') : null;
+      if (!selectedPowerPlant) {
+        if (lastPowerLineKey !== 'none') {
+          lastPowerLineKey = 'none';
+          (map.getSource('power-lines') as GeoJSONSource).setData(empty());
+        }
+      } else {
+        const pp = selectedPowerPlant;
+        const pKey = `${pp.id}|` + snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1).map((b) => `${b.id}:${b.pos[0].toFixed(3)},${b.pos[1].toFixed(3)}`).sort().join(';');
+        if (pKey !== lastPowerLineKey) {
+          lastPowerLineKey = pKey;
+          const powerLineFeatures: any[] = [];
           const friendlyBuildings = snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1 && b.def !== 'power_plant');
-          for (const pp of powerPlants) {
-            for (const b of friendlyBuildings) {
-              const d = distKm(pp.pos, b.pos);
-              if (d <= 100) {
-                let coords: LngLat[] = [];
-                if (roads) {
-                  coords = roads.powerRoute(pp.pos, b.pos, 35);
-                }
-                if (coords.length >= 2) {
-                  powerLineFeatures.push({
-                    type: 'Feature',
-                    properties: { from: pp.id, to: b.id },
-                    geometry: { type: 'LineString', coordinates: coords },
-                  });
-                }
+          for (const b of friendlyBuildings) {
+            const d = distKm(pp.pos, b.pos);
+            if (d <= 100) {
+              let coords: LngLat[] = [];
+              if (roads) {
+                coords = roads.powerRoute(pp.pos, b.pos, 35);
+              }
+              if (coords.length >= 2) {
+                powerLineFeatures.push({
+                  type: 'Feature',
+                  properties: { from: pp.id, to: b.id },
+                  geometry: { type: 'LineString', coordinates: coords },
+                });
               }
             }
           }
+          (map.getSource('power-lines') as GeoJSONSource).setData({
+            type: 'FeatureCollection',
+            features: powerLineFeatures,
+          });
         }
-        (map.getSource('power-lines') as GeoJSONSource).setData({
-          type: 'FeatureCollection',
-          features: powerLineFeatures,
-        });
       }
     }
 

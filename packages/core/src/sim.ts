@@ -158,14 +158,49 @@ export class Sim {
     return w;
   }
 
+  allowedStorageResources(d: BuildingDef): string[] {
+    if (d.id === 'gas_station') return ['fuel'];
+    if (d.id === 'oil_refinery') return ['fuel'];
+    if (d.id === 'mine') return ['ore'];
+    if (d.id === 'warehouse') return ['metal', 'fuel', 'ore'];
+
+    const res = new Set<string>();
+    if (d.produces) {
+      for (const k of Object.keys(d.produces)) {
+        if (k !== 'money' && k !== 'people' && k !== 'energy') res.add(k);
+      }
+    }
+    if (d.consumes) {
+      for (const k of Object.keys(d.consumes)) {
+        if (k !== 'money' && k !== 'people' && k !== 'energy') res.add(k);
+      }
+    }
+    if (d.trains) {
+      for (const uid of d.trains) {
+        const u = this.defs.u.get(uid);
+        if (u?.cost) {
+          for (const k of Object.keys(u.cost)) {
+            if (k !== 'money' && k !== 'people' && k !== 'energy') res.add(k);
+          }
+        }
+      }
+    }
+    return [...res];
+  }
+
   private spawnBuilding(def: string, p: Player, pos: LngLat, done = false): Building {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
-    const storage: Record<string, number> = {
-      metal: 500,
-      fuel: 500,
-      ore: def === 'metalworks' ? 0 : 500,
-    };
+    const allowed = this.allowedStorageResources(d);
+    let storage: Record<string, number> | undefined;
+    if (allowed.length > 0) {
+      storage = {};
+      for (const k of allowed) {
+        if (k === 'fuel' && d.id === 'gas_station') storage[k] = 500;
+        else if (k === 'ore' && d.id === 'metalworks') storage[k] = 0;
+        else storage[k] = 500;
+      }
+    }
     const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, storage };
     this.world.buildings.push(b);
     return b;
@@ -882,9 +917,13 @@ export class Sim {
             if (u.route.timer <= 0) {
               if (!toB.storage) toB.storage = {};
               const cap = toB.def === 'gas_station' ? 20000 : 30000;
+              const toDef = this.defs.b.get(toB.def)!;
+              const allowed = this.allowedStorageResources(toDef);
               if (u.cargo.res) {
                 for (const [k, v] of Object.entries(u.cargo.res)) {
-                  toB.storage[k] = Math.min(cap, (toB.storage[k] ?? 0) + v);
+                  if (allowed.length === 0 || allowed.includes(k)) {
+                    toB.storage[k] = Math.min(cap, (toB.storage[k] ?? 0) + v);
+                  }
                 }
                 u.cargo.res = {};
               }
