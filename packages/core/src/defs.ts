@@ -96,6 +96,8 @@ export interface MapDef {
   front: LngLat[];
   /** Points appended after the last front node to close team 1's territory into a polygon (rendering only). */
   occupiedClosure: LngLat[];
+  /** Optional interior hole rings (e.g. Sea of Azov) for team 1's territory polygon (rendering only). */
+  occupiedHoles?: LngLat[][];
   /** Road network (see tools/build-roads.mjs). In map JSON use `roadsFile` instead. */
   roads?: RoadLine[];
   /** Terrain grid (see tools/build-terrain.mjs). In map JSON use `terrainFile` instead. */
@@ -162,7 +164,7 @@ export const DEFAULT_RULES: RulesConfig = {
   energyDeficitMult: 0.4,
   pointScorePerSec: 1,
   minBuildDistanceFromFront: 3,
-  minBuildSpacing: 1.2,
+  minBuildSpacing: 35,
   fogOfWar: true,
   roadSpeedMult: 2.4,
   roadAccessKm: 5,

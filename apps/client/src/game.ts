@@ -176,7 +176,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'build-restricted']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (m.borders) {
         (map.getSource('borders') as GeoJSONSource).setData(m.borders);
@@ -225,8 +225,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
+      map.addLayer({
+        id: 'occupied-line', type: 'line', source: 'occupied', layout: { 'line-join': 'round' },
+        paint: { 'line-color': '#ff4d4d', 'line-width': 1.6, 'line-opacity': 0.75 },
+      });
       map.addLayer({ id: 'front-glow', type: 'line', source: 'front', layout: { 'line-join': 'round' }, paint: { 'line-color': '#ff4d4d', 'line-width': 10, 'line-blur': 8, 'line-opacity': 0.55 } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'round' }, paint: { 'line-color': '#ff7b7b', 'line-width': 1.8 } });
+      map.addLayer({ id: 'build-restricted-fill', type: 'fill', source: 'build-restricted', paint: { 'fill-color': '#ff3333', 'fill-opacity': 0.11 } });
+      map.addLayer({
+        id: 'build-restricted-line', type: 'line', source: 'build-restricted',
+        paint: { 'line-color': '#ff4444', 'line-width': 1.6, 'line-opacity': 0.75, 'line-dasharray': [3, 2] },
+      });
       map.addLayer({
         id: 'pressure', type: 'circle', source: 'pressure',
         paint: {
@@ -466,12 +475,30 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   // ---------- placement ----------
+  function updateRestrictedZones() {
+    if (!placing || !init || !snap) {
+      (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData(empty());
+      return;
+    }
+    const r = init.ruleset.rules.minBuildSpacing; // 35 km
+    const features = snap.buildings.map((b) => ({
+      type: 'Feature',
+      properties: {},
+      geometry: { type: 'Polygon', coordinates: [circle(b.pos, r, 64)] },
+    }));
+    (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }
+
   function cancelPlacing() {
     if (!placing) return;
     placing = null;
     hint.textContent = HINT;
     mapEl.classList.remove('placing');
     (map.getSource('ghost') as GeoJSONSource | undefined)?.setData(empty());
+    updateRestrictedZones();
     buildPalette();
   }
 
@@ -486,7 +513,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d < 0) return 'not your territory';
     if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     if (terrain?.at(p) === 'water') return 'cannot build on water';
-    if (snap.buildings.some((b) => distKm(b.pos, p) < r.minBuildSpacing)) return 'space occupied';
+    if (snap.buildings.some((b) => distKm(b.pos, p) < r.minBuildSpacing)) return `too close to another building (min ${r.minBuildSpacing}km)`;
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
     return null;
   }
@@ -529,6 +556,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             placing = b;
             mapEl.classList.add('placing');
             hint.textContent = `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
+            updateRestrictedZones();
             buildPalette();
           } },
             h('span', { class: 'ico' }, b.icon),
@@ -856,7 +884,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       frontDrawn = true;
       const line: LngLat[] = shown.map((n) => [n.lng, n.lat]);
       (map.getSource('front') as GeoJSONSource)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } as any);
-      (map.getSource('occupied') as GeoJSONSource)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [[...line, ...init.map.occupiedClosure, line[0]]] } } as any);
+      const occupiedCoords = [
+        [...line, ...init.map.occupiedClosure, line[0]],
+        ...(init.map.occupiedHoles ?? [])
+      ];
+      (map.getSource('occupied') as GeoJSONSource)?.setData({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: occupiedCoords } } as any);
       const maxV = init.ruleset.rules.frontMaxSpeed;
       (map.getSource('pressure') as GeoJSONSource)?.setData({
         type: 'FeatureCollection',

@@ -17,8 +17,14 @@ const allowedClasses = new Set([
 const raw = [...ukr, ...ru].filter((l) => allowedClasses.has(l.fclass) && l.pts && l.pts.length > 1);
 console.log(`Total candidate road features: ${raw.length}`);
 
-// 1. Chain continuous segments of the exact same road class
-console.log('Chaining continuous segments of the same road class...');
+// Set major: 1 for motorway, trunk, AND primary (plus links).
+const majorSet = new Set(['motorway', 'trunk', 'primary', 'motorway_link', 'trunk_link', 'primary_link']);
+for (const l of raw) {
+  l.major = majorSet.has(l.fclass) ? 1 : 0;
+}
+
+// 1. Chain continuous segments of the same hierarchy
+console.log('Chaining continuous road segments...');
 function chainLines(lines) {
   const ptKey = (p) => `${Math.round(p[0] * 100000)},${Math.round(p[1] * 100000)}`;
   const endpoints = new Map();
@@ -36,9 +42,16 @@ function chainLines(lines) {
   for (let i = 0; i < lines.length; i++) {
     if (used[i]) continue;
     used[i] = 1;
-    const fclass = lines[i].fclass;
     const major = lines[i].major;
+    const fclass = lines[i].fclass;
     const pts = [...lines[i].pts];
+
+    const canConnect = (otherIdx) => {
+      if (used[otherIdx]) return false;
+      const other = lines[otherIdx];
+      if (major === 1) return other.major === 1;
+      return other.fclass === fclass;
+    };
 
     // Grow forward
     let growing = true;
@@ -46,7 +59,7 @@ function chainLines(lines) {
       growing = false;
       const tailKey = ptKey(pts[pts.length - 1]);
       const cand = endpoints.get(tailKey) || [];
-      const viable = cand.filter((c) => !used[c.idx] && lines[c.idx].fclass === fclass);
+      const viable = cand.filter((c) => canConnect(c.idx));
       if (viable.length === 1) {
         const c = viable[0];
         used[c.idx] = 1;
@@ -66,7 +79,7 @@ function chainLines(lines) {
       growing = false;
       const headKey = ptKey(pts[0]);
       const cand = endpoints.get(headKey) || [];
-      const viable = cand.filter((c) => !used[c.idx] && lines[c.idx].fclass === fclass);
+      const viable = cand.filter((c) => canConnect(c.idx));
       if (viable.length === 1) {
         const c = viable[0];
         used[c.idx] = 1;
@@ -80,7 +93,7 @@ function chainLines(lines) {
       }
     }
 
-    merged.push({ major, pts, fclass });
+    merged.push({ major, pts });
   }
 
   return merged;
@@ -89,9 +102,9 @@ function chainLines(lines) {
 const chained = chainLines(raw);
 console.log(`Chained down to ${chained.length} continuous lines.`);
 
-// 2. Spatial snapping of endpoints that end within 300m (~0.003 deg) of another road
-// This seamlessly connects cross-border links (UA-RU) and joins intersections
-console.log('Snapping endpoints within 300m...');
+// 2. Spatial snapping of dead ends within 600m (~0.006 deg)
+// If an endpoint is within 600m of a road segment, snap it directly to that segment!
+console.log('Snapping endpoints within 600m...');
 const CELL = 0.05;
 const grid = new Map();
 
@@ -109,8 +122,9 @@ chained.forEach((l, li) => {
   }
 });
 
-const SNAP = 0.003; // ~300 meters
+const SNAP = 0.006; // ~600 meters
 let snappedCount = 0;
+const connectors = [];
 
 chained.forEach((l, li) => {
   for (const end of [0, l.pts.length - 1]) {
@@ -145,16 +159,31 @@ chained.forEach((l, li) => {
     }
 
     if (bestPoint) {
-      l.pts[end] = bestPoint;
-      chained[targetLi].pts.splice(targetSi + 1, 0, bestPoint);
+      // If endpoint is within 100m, snap it directly
+      if (bestDist2 < 0.001 * 0.001) {
+        l.pts[end] = bestPoint;
+        chained[targetLi].pts.splice(targetSi + 1, 0, bestPoint);
+      } else {
+        // Otherwise insert a connector segment bridging the gap!
+        connectors.push({ major: l.major, pts: [e, bestPoint] });
+        chained[targetLi].pts.splice(targetSi + 1, 0, bestPoint);
+      }
       snappedCount++;
     }
   }
 });
-console.log(`Snapped ${snappedCount} junctions within 300m.`);
+console.log(`Snapped/bridged ${snappedCount} junctions within 600m (added ${connectors.length} connectors).`);
+const allLines = [...chained, ...connectors];
+
+// Explicitly ensure Antonivsky Bridge at Kherson [32.72, 46.65] is bridged
+// Bridgeway ends at [32.7203, 46.66961] and approach is at [32.72006, 46.67277]
+// South end is at [32.72287, 46.63682] and approach is at [32.72301, 46.63465]
+allLines.push(
+  { major: 1, pts: [[32.72006, 46.67277], [32.7203, 46.66961]] },
+  { major: 1, pts: [[32.72287, 46.63682], [32.72301, 46.63465]] }
+);
 
 // 3. Douglas-Peucker simplification (tol 0.00015 deg ~ 15m)
-// Keeps every single turn and curve accurate to the OSM basemap, while stripping redundant straight-line points
 console.log('Simplifying curves (0.00015 deg ~ 15m)...');
 function simplify(pts, tol) {
   if (pts.length <= 2) return pts;
@@ -181,14 +210,112 @@ function simplify(pts, tol) {
   return pts.filter((_, i) => keep[i]);
 }
 
-const lines = chained.map((l) => ({
+const simplifiedLines = allLines.map((l) => ({
   major: l.major,
   pts: simplify(l.pts, 0.00015)
 }));
 
+// 4. Remove isolated disconnected road stubs!
+// Connect vertices closer than 1.5 km (0.015 deg) into virtual edges to accurately reflect RoadNetwork graph
+console.log('Analyzing road network connectivity (bridging up to 1.5km before filtering stubs)...');
+const vKey = (p) => `${Math.round(p[0] * 1000)},${Math.round(p[1] * 1000)}`;
+const vMap = new Map();
+const vCoords = [];
+let nextVId = 0;
+const getVId = (p) => {
+  const k = vKey(p);
+  let id = vMap.get(k);
+  if (id === undefined) {
+    id = nextVId++;
+    vMap.set(k, id);
+    vCoords.push(p);
+  }
+  return id;
+};
+
+const adj = [];
+for (const l of simplifiedLines) {
+  for (let i = 0; i < l.pts.length - 1; i++) {
+    const u = getVId(l.pts[i]);
+    const v = getVId(l.pts[i + 1]);
+    while (adj.length <= Math.max(u, v)) adj.push([]);
+    if (u !== v) {
+      adj[u].push(v);
+      adj[v].push(u);
+    }
+  }
+}
+
+// Spatial hash for 1.5km gap bridging
+const vGrid = new Map();
+for (let i = 0; i < vCoords.length; i++) {
+  const [x, y] = vCoords[i];
+  const k = `${Math.floor(x / 0.1)},${Math.floor(y / 0.1)}`;
+  (vGrid.get(k) ?? vGrid.set(k, []).get(k)).push(i);
+}
+
+// Virtual bridging of endpoints within 1.5 km (~0.015 deg)
+for (let i = 0; i < adj.length; i++) {
+  if (adj[i].length === 1) { // dead end
+    const [px, py] = vCoords[i];
+    const cx = Math.floor(px / 0.1), cy = Math.floor(py / 0.1);
+    for (let dx = -1; dx <= 1; dx++) {
+      for (let dy = -1; dy <= 1; dy++) {
+        const bucket = vGrid.get(`${cx + dx},${cy + dy}`) || [];
+        for (const other of bucket) {
+          if (other === i || other === adj[i][0]) continue;
+          const [ox, oy] = vCoords[other];
+          if ((px - ox) ** 2 + (py - oy) ** 2 < 0.015 * 0.015) {
+            adj[i].push(other);
+            adj[other].push(i);
+          }
+        }
+      }
+    }
+  }
+}
+
+// Connected components
+const comp = new Int32Array(adj.length).fill(-1);
+const compSizes = [];
+for (let i = 0; i < adj.length; i++) {
+  if (comp[i] >= 0) continue;
+  const cId = compSizes.length;
+  let size = 0;
+  const stack = [i];
+  comp[i] = cId;
+  while (stack.length) {
+    const curr = stack.pop();
+    size++;
+    for (const nxt of adj[curr]) {
+      if (comp[nxt] < 0) {
+        comp[nxt] = cId;
+        stack.push(nxt);
+      }
+    }
+  }
+  compSizes.push(size);
+}
+
+console.log(`Graph has ${adj.length} vertices across ${compSizes.length} components.`);
+const sortedCompSizes = [...compSizes].sort((a, b) => b - a);
+console.log('Top component sizes:', sortedCompSizes.slice(0, 5));
+
+// Keep only lines belonging to the primary network Component 0 (or components with >= 100 nodes)
+// Any tiny disconnected 1-5 node stubs in fields are filtered out!
+const connectedLines = simplifiedLines.filter((l) => {
+  if (l.pts.length < 2) return false;
+  // If ANY vertex in the line belongs to a primary component, keep it
+  return l.pts.some((p) => {
+    const id = getVId(p);
+    const cId = comp[id];
+    return cId >= 0 && compSizes[cId] >= 100;
+  });
+});
+
 // Filter micro-segments (< 50m)
 const minDeg = 0.0005;
-const validLines = lines.filter((l) => {
+const validLines = connectedLines.filter((l) => {
   if (l.pts.length < 2) return false;
   let d = 0;
   for (let i = 0; i < l.pts.length - 1; i++) {
