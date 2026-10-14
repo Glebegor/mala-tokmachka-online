@@ -1,7 +1,8 @@
+import { fileURLToPath } from 'node:url';
 // Prints how much of each map's water counts as a movement barrier.
 import { loadRuleset } from '../services/game/src/infrastructure/modLoader';
 import { TerrainGrid } from '../packages/core/src';
-const rs = await loadRuleset(new URL('../mods', import.meta.url).pathname);
+const rs = await loadRuleset(fileURLToPath(new URL('../mods', import.meta.url)));
 const barriers: Record<string, number> = {};
 for (const t of rs.terrain) if (t.barrier) barriers[t.id] = t.barrier.minCells;
 for (const m of rs.maps) {

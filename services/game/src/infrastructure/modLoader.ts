@@ -62,18 +62,21 @@ export async function loadRuleset(modsDir: string, only?: string[]): Promise<Rul
   return rs;
 }
 
-/** Maps keep their heavy data (roads, terrain grid) in sibling files referenced by `roadsFile` / `terrainFile`. */
+/** Maps keep their heavy data (roads, terrain grid, borders, fuel) in sibling files referenced by `roadsFile` / `terrainFile` / `bordersFile` / `fuelFile`. */
 async function loadMap(file: string): Promise<MapDef> {
-  const raw = await readJson<MapDef & { roadsFile?: string; terrainFile?: string }>(file);
-  const { roadsFile, terrainFile, ...map } = raw;
+  const raw = await readJson<MapDef & { roadsFile?: string; terrainFile?: string; bordersFile?: string; fuelFile?: string; citiesFile?: string }>(file);
+  const { roadsFile, terrainFile, bordersFile, fuelFile, citiesFile, ...map } = raw;
   if (roadsFile) map.roads = await readJson(join(dirname(file), roadsFile));
   if (terrainFile) map.terrain = await readJson(join(dirname(file), terrainFile));
+  if (bordersFile) map.borders = await readJson(join(dirname(file), bordersFile));
+  if (fuelFile) map.fuel = await readJson(join(dirname(file), fuelFile));
+  if (citiesFile) map.cities = await readJson(join(dirname(file), citiesFile));
   if (!Array.isArray(map.occupiedClosure)) throw new Error(`map ${map.id} needs occupiedClosure`);
   return map;
 }
 
 function validate(rs: Ruleset) {
-  if (!rs.buildings.some((b) => b.id === 'hq')) throw new Error('ruleset needs a building with id "hq"');
+  if (!rs.buildings.some((b) => b.id === 'military_base' || b.id === 'hq')) throw new Error('ruleset needs a building with id "military_base" or "hq"');
   if (!rs.maps.length) throw new Error('ruleset has no maps');
   const units = new Set(rs.units.map((u) => u.id));
   for (const b of rs.buildings) for (const u of b.trains ?? []) if (!units.has(u)) throw new Error(`building ${b.id} trains unknown unit ${u}`);

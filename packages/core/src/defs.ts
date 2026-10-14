@@ -114,6 +114,14 @@ export interface MapDef {
   front: LngLat[];
   /** Points appended after the last front node to close team 1's territory into a polygon (rendering only). */
   occupiedClosure: LngLat[];
+  /** Holes cut out of team 1's territory polygon, e.g. the Sea of Azov (rendering only). */
+  occupiedHoles?: LngLat[][];
+  /** State borders (LineString features) and country labels (Point features). In map JSON use `bordersFile`. */
+  borders?: any;
+  /** City boundaries from OpenStreetMap (fill + line features). In map JSON use `citiesFile`. */
+  cities?: any;
+  /** Fuel stations (loaded, not used by the base rules yet). In map JSON use `fuelFile`. */
+  fuel?: any;
   /** Road network (see tools/build-roads.mjs). In map JSON use `roadsFile` instead. */
   roads?: RoadLine[];
   /** Terrain grid (see tools/build-terrain.mjs). In map JSON use `terrainFile` instead. */

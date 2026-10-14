@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, distKm, distToFrontKm, offsetKm, pointInRing, RoadNetwork, TerrainGrid,
+  DEBUFFS, distKm, distToFrontKm, offsetKm, pointInRing, RoadIndex, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -66,7 +66,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let fx: ShotFx | null = null;
   let arrows: FrontArrows | null = null;
   let terrain: TerrainGrid | null = null;
-  let roads: RoadNetwork | null = null;
+  let roads: RoadIndex | null = null;
   let defB = new Map<string, BuildingDef>();
   let defU = new Map<string, UnitDef>();
   let closed = false;
@@ -188,7 +188,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const barriers: Record<string, number> = {};
         for (const t of msg.ruleset.terrain) if (t.barrier) barriers[t.id] = t.barrier.minCells;
         terrain = msg.map.terrain ? new TerrainGrid(msg.map.terrain, barriers) : null;
-        roads = msg.map.roads?.length ? new RoadNetwork(msg.map.roads) : null;
+        roads = msg.map.roads?.length ? new RoadIndex(msg.map.roads) : null;
         document.getElementById('mod-theme')!.textContent = msg.ruleset.themes.map((t) => t.css).join('\n');
         terrainBtn.style.display = terrain ? '' : 'none';
         buildMap();
@@ -253,7 +253,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'held', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -267,14 +267,28 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           return { type: 'Feature', properties: { major: l[0] }, geometry: { type: 'LineString', coordinates: coords } };
         }),
       });
+      // city boundaries (OpenStreetMap) under everything else
+      if (m.cities) (map.getSource('cities') as GeoJSONSource).setData(m.cities);
+      map.addLayer({ id: 'city-fill', type: 'fill', source: 'cities', filter: ['==', ['get', 'type'], 'city-boundary-fill'], paint: { 'fill-color': '#1e293b', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.22, 7.5, 0.42] } });
+      map.addLayer({ id: 'city-line', type: 'line', source: 'cities', filter: ['==', ['get', 'type'], 'city-boundary-line'], layout: { 'line-join': 'round' }, paint: { 'line-color': '#64748b', 'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.8, 8, 1.4, 11, 2], 'line-dasharray': [4, 2], 'line-opacity': 0.75 } });
+      // roads: the dense local network only appears once zoomed in, highways always
       map.addLayer({
-        id: 'roads', type: 'line', source: 'roads',
-        paint: {
-          'line-color': '#e8c35a',
-          'line-opacity': ['case', ['==', ['get', 'major'], 1], 0.5, 0.26],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5, ['case', ['==', ['get', 'major'], 1], 0.9, 0.4], 10, ['case', ['==', ['get', 'major'], 1], 2.6, 1.4]],
-        },
+        id: 'roads-minor', type: 'line', source: 'roads', filter: ['!=', ['get', 'major'], 1], minzoom: 6,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#8a7a4a', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.2, 8.5, 0.45], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 8.5, 0.9, 11, 1.4] },
       });
+      map.addLayer({
+        id: 'roads', type: 'line', source: 'roads', filter: ['==', ['get', 'major'], 1],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#e8c35a', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.35, 8, 0.6], 'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.7, 8, 1.6, 11, 2.6] },
+      });
+      // state borders
+      if (m.borders) (map.getSource('borders') as GeoJSONSource).setData(m.borders);
+      map.addLayer({ id: 'borders-line', type: 'line', source: 'borders', filter: ['==', ['get', 'type'], 'border'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#8ab5de', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 1, 8, 1.8, 12, 2.6], 'line-dasharray': [4, 3], 'line-opacity': 0.75 } });
+      for (const f of m.borders?.features ?? []) {
+        if (f.properties?.type !== 'country_label') continue;
+        new maplibregl.Marker({ element: h('div', { class: 'country-label' }, f.properties.name) }).setLngLat(f.geometry.coordinates).addTo(map);
+      }
       // blue zone: ground held by team 0, the mirror image of the red occupied zone
       map.addLayer({ id: 'held-fill', type: 'fill', source: 'held', paint: { 'fill-color': TEAM_COLOR[0], 'fill-opacity': 0.09, 'fill-antialias': false } });
       // front: flat occupied tint, a hard-edged contact zone, and a crisp cased line with sharp corners (no blur, no rounding)
@@ -680,13 +694,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function renderScore() {
     if (!init || !snap) return;
     const total = Math.max(1, snap.scores[0] + snap.scores[1]);
-    const left = Math.max(0, init.ruleset.rules.matchSeconds - snap.time);
+    // an unlimited match ("until victory") shows the time played instead of the time left
+    const unlimited = init.ruleset.rules.matchSeconds <= 0;
+    const left = unlimited ? snap.time : Math.max(0, init.ruleset.rules.matchSeconds - snap.time);
     const held = [0, 1].map((t) => snap!.points.filter((p) => p.owner === t).length);
     clear(scoreBar);
     scoreBar.append(
       h('div', { class: 'teams' },
         h('span', { style: { color: TEAM_COLOR[0] } }, `${TEAM_NAME[0]} ${held[0]}`),
-        h('b', {}, `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`),
+        h('b', { title: unlimited ? 'No time limit: played so far' : 'Time left' }, `${unlimited ? '∞ ' : ''}${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`),
         h('span', { style: { color: TEAM_COLOR[1] } }, `${held[1]} ${TEAM_NAME[1]}`),
       ),
       h('div', { class: 'bar' }, h('i', { style: { width: `${(snap.scores[0] / total) * 100}%`, background: TEAM_COLOR[0] } }), h('i', { style: { width: `${(snap.scores[1] / total) * 100}%`, background: TEAM_COLOR[1] } })),
@@ -1048,9 +1064,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // cauldrons: rings of team 0 ground inside the occupied area are holes in it; rings of team 1 ground are extra patches
     const ring = (k: SnapMsg['pockets'][number]): LngLat[] => [...k.nodes.map((n): LngLat => [n.lng, n.lat]), [k.nodes[0].lng, k.nodes[0].lat]];
     const holes = snap.pockets.filter((k) => k.team === 0).map(ring);
+    const mapHoles = init.map.occupiedHoles ?? []; // e.g. the Sea of Azov: not occupied, but not a front either
     const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
     (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: [line, ...holes, ...patches] } } as any);
-    (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes], ...patches.map((p) => [p])] } } as any);
+    (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes, ...mapHoles], ...patches.map((p) => [p])] } } as any);
     // everything outside the occupied area (inside a box well beyond the map) is the blue zone
     const world: LngLat[] = [[5, 30], [65, 30], [65, 65], [5, 65], [5, 30]];
     (map.getSource('held') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[world, [...line, ...init.map.occupiedClosure, line[0]], ...patches], ...holes.map((p) => [p])] } } as any);

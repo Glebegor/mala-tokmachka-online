@@ -118,6 +118,20 @@ export function drawNato(spec: NatoSpec): ImageData {
     case 'recon':
       line(-dx, dy, dx, -dy);
       break;
+    case 'antitank':
+      g.beginPath();
+      g.moveTo(cx - 8, cy + 6);
+      g.lineTo(cx, cy - 6);
+      g.lineTo(cx + 8, cy + 6);
+      g.stroke();
+      break;
+    case 'assault':
+      line(-hw, -hh, hw, hh);
+      line(-hw, hh, hw, -hh);
+      g.beginPath();
+      g.arc(cx, cy, 3.5, 0, Math.PI * 2);
+      g.fill();
+      break;
     case 'antiair':
       g.beginPath();
       g.ellipse(cx, cy + hh, hw, hh * 0.9, 0, Math.PI, 0);

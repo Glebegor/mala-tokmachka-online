@@ -1,7 +1,7 @@
 {
   "id": "base",
   "name": "Base Game",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "author": "state-war",
   "content": {
     "rules": "rules.json",
