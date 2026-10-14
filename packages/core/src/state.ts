@@ -52,7 +52,7 @@ export interface Shot {
   to: LngLat;
 }
 
-export type UnitView = Omit<Unit, 'path' | 'cap'>;
+export type UnitView = Omit<Unit, 'path' | 'cap'> & { path?: LngLat[] };
 
 export interface TrainItem {
   building: number;

@@ -237,8 +237,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       });
       map.addLayer({ id: 'rings', type: 'line', source: 'rings', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.4, 'line-dasharray': [2, 3] } });
       map.addLayer({ id: 'ghost-fill', type: 'fill', source: 'ghost', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 } });
-      map.addLayer({ id: 'ghost-line', type: 'line', source: 'ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [3, 2] } });
-      map.addLayer({ id: 'sel-line', type: 'line', source: 'sel', paint: { 'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.5, 'line-dasharray': [1, 3] } });
+      map.addLayer({
+        id: 'sel-line-glow', type: 'line', source: 'sel',
+        paint: { 'line-color': '#42d7f5', 'line-width': 3.5, 'line-blur': 2.5, 'line-opacity': 0.45 },
+      });
+      map.addLayer({
+        id: 'sel-line', type: 'line', source: 'sel',
+        paint: { 'line-color': '#ffffff', 'line-width': 1.6, 'line-opacity': 0.85, 'line-dasharray': [3, 2] },
+      });
 
       const iconSize: any = ['interpolate', ['linear'], ['zoom'], 5, 0.4, 8, 0.58, 11, 0.85];
       const symbol = (id: string, filter: any, extra: Record<string, unknown> = {}) =>
@@ -706,13 +712,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function renderSelLines() {
     if (!init || !snap || !mapReady) return;
-    (map.getSource('sel') as GeoJSONSource)?.setData({
-      type: 'FeatureCollection',
-      features: snap.units.filter((u) => selUnits.has(u.id) && u.target).slice(0, 60).map((u) => ({
+    const features: any[] = [];
+    for (const u of snap.units) {
+      if (!selUnits.has(u.id) || !u.target) continue;
+      const p = curPos(u);
+      let coords: LngLat[];
+      if (u.path && u.path.length > 0) {
+        coords = [p, ...u.path];
+      } else if (roads && defU.get(u.def)?.kind !== 'air') {
+        const r = roads.route(p, u.target, init.ruleset.rules.roadSpeedMult);
+        coords = r.length > 0 ? [p, ...r, u.target] : [p, u.target];
+      } else {
+        coords = [p, u.target];
+      }
+      features.push({
         type: 'Feature',
         properties: {},
-        geometry: { type: 'LineString', coordinates: [curPos(u), u.target] },
-      })),
+        geometry: { type: 'LineString', coordinates: coords },
+      });
+      if (features.length >= 60) break;
+    }
+    (map.getSource('sel') as GeoJSONSource)?.setData({
+      type: 'FeatureCollection',
+      features,
     });
   }
 
