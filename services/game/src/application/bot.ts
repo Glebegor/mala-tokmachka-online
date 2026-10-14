@@ -2,7 +2,7 @@ import { type BotDifficulty, type Building, distKm, isReconDrone, isStrikeDrone,
 
 const BUILD_ORDER = [
   'power_plant', 'housing', 'machine_factory', 'mine', 'drone_factory', 'metalworks', 'oil_refinery', 'trench', 'gas_station', 'housing',
-  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'rail_station', 'trench', 'warehouse', 'bunker',
+  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'rail_station', 'trench', 'warehouse', 'bunker', 'missile_factory',
 ];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
@@ -75,7 +75,7 @@ export class Bot {
     const count = (id: string) => w.units.filter((u) => u.owner === p.id && u.def === id).length;
     for (const b of w.buildings) {
       // factories are shared by the team; the barracks a bot uses are its own
-      if (b.team !== p.team || b.progress < 1 || (b.owner !== p.id && b.def !== 'machine_factory' && b.def !== 'drone_factory')) continue;
+      if (b.team !== p.team || b.progress < 1 || !sim.usable(b, p.id) || (b.owner !== p.id && b.def !== 'machine_factory' && b.def !== 'drone_factory' && b.def !== 'missile_factory')) continue;
       const d = sim.defs.b.get(b.def)!;
       if (b.def === 'machine_factory') {
         // a small logistics fleet: trucks for ore and metal, a tanker, a rescue crew
@@ -83,7 +83,17 @@ export class Bot {
         if (want && !w.queue.some((q) => q.building === b.id)) sim.apply(p.id, { type: 'train', building: b.id, unit: want });
         continue;
       }
+      if (b.def === 'missile_factory') {
+        // a missile or two in reserve; they go for enemy sites like strike drones
+        const options = (d.trains ?? []).filter((id) => sim.defs.u.get(id)?.side === mySide);
+        const stock = w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)!.missile).length;
+        const pick = options[Math.floor(Math.random() * options.length)];
+        if (pick && stock < 2 && !w.queue.some((q) => q.building === b.id)) sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
+        continue;
+      }
       if (b.def === 'drone_factory') {
+        // a handful of drones is plenty: idle ones only pile up at the factory
+        if (w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)!.kind === 'air' && !sim.defs.u.get(u.def)!.missile).length >= 6) continue;
         const options = (d.trains ?? []).filter((id) => sim.defs.u.get(id)?.side === mySide);
         const pick = options[Math.floor(Math.random() * options.length)];
         if (pick && w.queue.filter((q) => q.building === b.id).length < 2) sim.apply(p.id, { type: 'train', building: b.id, unit: pick });

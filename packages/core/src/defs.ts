@@ -70,6 +70,18 @@ export interface UnitDef {
   maxFuel?: number;
   /** Drones: strike drones dive on their target and explode, recon drones circle their area. */
   droneType?: 'strike' | 'recon';
+  /** Missiles are one-way strike craft: cruise missiles fly low and can be intercepted, ballistic ones are hard to stop. */
+  missile?: 'cruise' | 'ballistic';
+  /** Strike craft: blast radius on impact (km). Default 1.8. */
+  blastKm?: number;
+  /** Aircraft: how fast it can turn, degrees per second. Default 30. */
+  turnRate?: number;
+  /** Share of anti-air shots that actually hit it, 0..1. Default 1. */
+  interceptChance?: number;
+  /** Small drone that can ride on a vehicle with `droneCap` and be launched from it. */
+  launchable?: boolean;
+  /** Vehicles: how many launchable drones it carries. */
+  droneCap?: number;
   /** Only this side may build it (side-specific drones). */
   side?: 'ua' | 'ru';
   /** Indirect fire: cannot hit closer than this (km) and needs a friendly spotter on the target. */
@@ -193,6 +205,10 @@ export interface RulesConfig {
   greyZoneRadiusKm: number;
   greyZoneTtl: number; // seconds a grey zone lasts after the troops leave
   greyZonePush: number; // extra force for the infiltrating side on front nodes at the zone
+  peaceSeconds: number; // ceasefire at the start: build and deploy, but nobody may fight or cross the front
+  sandbox: boolean; // test mode: endless resources, stocked stores, no victory or time limit
+  buildTimeMult: number; // multiplies every build, upgrade and course time
+  trainTimeMult: number; // multiplies every training time
 }
 
 export interface ScriptSource {
@@ -257,4 +273,8 @@ export const DEFAULT_RULES: RulesConfig = {
   greyZoneRadiusKm: 5,
   greyZoneTtl: 20,
   greyZonePush: 5,
+  peaceSeconds: 0,
+  sandbox: false,
+  buildTimeMult: 1,
+  trainTimeMult: 1,
 };

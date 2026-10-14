@@ -1,10 +1,12 @@
 import { distKm, isReconDrone, isStrikeDrone, type BuildingDef, type Command, type LngLat, type SnapMsg, type UnitDef, type UnitView } from '@sw/core';
 import { clear, h } from './dom';
 
-/** Picking state shared with the map: route = two clicks on buildings, barrage = one click on the map. */
+/** Picking state shared with the map: route = two clicks on buildings, barrage and launch = one click on the map. */
 export interface Pickers {
   route: { unitId: number; fromBuilding?: number; resType?: string } | null;
   bombard: { unitIds: number[] } | null;
+  /** Launch the drones a vehicle carries at the clicked spot. */
+  launch: { transport: number } | null;
 }
 
 export interface HudContext {
@@ -31,14 +33,14 @@ export function formatEta(sec: number): string {
   return m < 60 ? `${m}m ${Math.round(sec % 60)}s` : `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
-/** Rough arrival time along the planned path (roads are faster, so ground units get a blended speed). */
+/** Rough arrival time along the planned path: road speed while driving in column, a cross-country average otherwise. */
 export function etaSeconds(u: UnitView, d: UnitDef, roadMult: number, from: LngLat): number | null {
   const pts = u.path?.length ? u.path : u.target ? [u.target] : [];
   if (!pts.length) return null;
   let km = 0;
   let prev = from;
   for (const p of pts) (km += distKm(prev, p)), (prev = p);
-  const speed = d.speed * (d.kind === 'air' ? 1 : (1 + roadMult) / 2) * (u.sprint ? 2 : 1);
+  const speed = d.speed * (d.kind === 'air' ? 1 : u.transport ? roadMult : 0.7) * (u.sprint ? 2 : 1);
   return speed > 0 ? km / speed : null;
 }
 
@@ -75,6 +77,8 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     }
   } else if (first.isLoitering) {
     lines.push('Patrolling a 4 km circle');
+  } else if (d0.missile && !first.target) {
+    lines.push('On the launcher: right click a target to fire');
   } else {
     const etas = list.map((u) => etaSeconds(u, c.defU.get(u.def)!, c.roadMult, c.pos(u)) ?? 0);
     const eta = Math.max(...etas);
@@ -91,7 +95,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
   el.append(h('button', { class: 'hud-btn', title: 'Stop everything (S)', onClick: () => {
     c.send({ type: 'stop', units: ids });
     c.send({ type: 'bombard', units: ids, target: null });
-    c.pick.route = c.pick.bombard = null;
+    c.pick.route = c.pick.bombard = c.pick.launch = null;
     c.rerender();
   } }, 'Stop'));
 
@@ -176,7 +180,36 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     }
   }
 
-  // 8. artillery barrage
+  // 8. small drones: ride on the nearest vehicle with a free launcher, or launch the ones on board
+  const small = list.filter((u) => c.defU.get(u.def)!.launchable);
+  if (small.length) {
+    const at = c.pos(small[0]);
+    const carrier = c.snap.units
+      .filter((t) => t.owner === c.me && (c.defU.get(t.def)?.droneCap ?? 0) > (t.cargo?.drones?.length ?? 0) && distKm(at, c.pos(t)) <= 10)
+      .sort((a, b) => distKm(at, c.pos(a)) - distKm(at, c.pos(b)))[0];
+    if (carrier) {
+      const td = c.defU.get(carrier.def)!;
+      const n = Math.min((td.droneCap ?? 0) - (carrier.cargo?.drones?.length ?? 0), small.length);
+      el.append(h('button', { class: 'hud-btn sm', title: `Put ${n} drone${n === 1 ? '' : 's'} on the ${td.name}'s launcher`, onClick: () => {
+        for (const u of small.slice(0, n)) c.send({ type: 'board', unit: u.id, transport: carrier.id });
+      } }, `Load on ${td.name} (${n})`));
+    } else el.append(h('div', { class: 'hud-line' }, 'Fits a pickup launcher: bring a pickup within 10 km to load it'));
+  }
+  if (single && d0.droneCap) {
+    const carried = (first.cargo?.drones ?? []).length;
+    const picking = c.pick.launch?.transport === first.id;
+    el.append(h('div', { class: 'hud-sec col' },
+      h('div', { class: 'hud-line' }, `Drone launcher: ${carried}/${d0.droneCap}${carried ? '' : ' · select small drones next to it and press Load'}`),
+      carried ? h('div', { class: 'row' },
+        h('button', { class: 'hud-btn sm' + (picking ? ' active' : ''), title: 'Click the spot to send them to: strike drones dive on it, recon drones circle it', onClick: () => {
+          c.pick.launch = picking ? null : { transport: first.id };
+          if (!picking) c.toast('Click where to send the drones (right click or Esc cancels)');
+          c.rerender();
+        } }, picking ? 'Cancel' : 'Launch at…'),
+        h('button', { class: 'hud-btn sm', title: 'Launch them here: recon drones circle the vehicle, strike drones wait for orders', onClick: () => c.send({ type: 'launch', transport: first.id }) }, 'Launch here')) : null));
+  }
+
+  // 9. artillery barrage
   const guns = list.filter((u) => c.defU.get(u.def)!.minRange);
   if (guns.length) {
     const dg = c.defU.get(guns[0].def)!;

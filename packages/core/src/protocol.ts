@@ -38,6 +38,8 @@ export interface SnapMsg {
   points: CapturePoint[];
   scores: [number, number];
   queue: { building: number; unit: string; remaining: number }[];
+  /** Players who keep their buildings to themselves (teammates cannot use them). */
+  closed: string[];
 }
 
 export type ServerMsg =
@@ -58,6 +60,8 @@ export interface RoomSlot {
 }
 
 export type BotDifficulty = 'easy' | 'normal' | 'hard';
+/** standard: a normal match; sandbox: a test range with endless resources, fast building and no victory. */
+export type GameMode = 'standard' | 'sandbox';
 
 export interface RoomSettings {
   mapId: string;
@@ -68,7 +72,12 @@ export interface RoomSettings {
   startResources: 'low' | 'normal' | 'high';
   frontSpeed: 0.5 | 1 | 2;
   fogOfWar: boolean;
+  mode: GameMode;
+  /** Ceasefire at the start (minutes): build and deploy, no fighting, the front is closed. */
+  peaceMinutes: number;
 }
+
+export const PEACE_OPTIONS = [0, 5, 10, 15, 20, 30] as const;
 
 export const DEFAULT_SETTINGS: RoomSettings = {
   mapId: 'ukraine',
@@ -79,6 +88,8 @@ export const DEFAULT_SETTINGS: RoomSettings = {
   startResources: 'normal',
   frontSpeed: 1,
   fogOfWar: true,
+  mode: 'standard',
+  peaceMinutes: 15,
 };
 
 export interface RoomInfo {

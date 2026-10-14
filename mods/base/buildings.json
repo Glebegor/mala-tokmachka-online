@@ -374,7 +374,9 @@
       "drone_liutyi",
       "drone_pd2",
       "drone_mini_shark",
-      "drone_fire_point"
+      "drone_fire_point",
+      "drone_lancet",
+      "drone_zala"
     ]
   },
   {
@@ -382,14 +384,20 @@
     "name": "Missile Factory",
     "category": "military",
     "icon": "⇑",
-    "description": "Missile production line. Missiles are not in the game yet: this site is ready for a coming update.",
+    "description": "Builds your side's missiles: Iskander-M and Kh-101 for Russia, Neptune and Flamingo for Ukraine. A finished missile waits at the factory: select it and right click a target to launch. Metal and fuel come from the factory's own store.",
     "cost": {
       "money": 850,
       "metal": 75
     },
     "buildTime": 28,
     "hp": 1100,
-    "vision": 6
+    "vision": 6,
+    "trains": [
+      "missile_iskander",
+      "missile_kh101",
+      "missile_neptune",
+      "missile_flamingo"
+    ]
   },
   {
     "id": "airfield",

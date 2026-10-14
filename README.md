@@ -11,6 +11,8 @@ npm run dev        # auth :4001, lobby :4002, game :4003, profile :4004, gateway
 ```
 
 Open http://localhost:5173, register, create a room, add bots with `+ Bot` if you want opponents, and start.
+In the room settings, *Game type: Sandbox* opens a test range (endless resources, ten times faster building and training,
+no victory), and *Ceasefire at start* gives everyone time to build up before the front opens (15 min by default).
 The basemap uses CARTO's free dark tiles, so it needs internet access.
 
 `npm test` runs a headless 8v8 bot match against the simulation (`npm test -- zaporizhzhia` for the small map).
@@ -31,6 +33,9 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | Real map on / off | M |
 | Delivery route for a truck | select it, *Set delivery route*, click the loading then the unloading building |
 | Artillery barrage | select guns, *Barrage area*, click the target |
+| Fire a missile | select it at the missile factory, right click the target |
+| Drones on a pickup | select small drones next to a pickup, *Load*; select the pickup, *Launch at…* and click the target |
+| Keep your buildings from teammates | top bar *Buildings: shared / private* |
 | Send units into a Training Centre | select them, right click the centre |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |
 

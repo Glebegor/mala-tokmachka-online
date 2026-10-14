@@ -70,7 +70,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           fireMode: own ? u.fireMode : undefined,
           fuel: own && u.fuel !== undefined ? Math.round(u.fuel) : undefined,
           maxFuel: own ? u.maxFuel : undefined,
-          cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers } : undefined,
+          cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers, drones: u.cargo.drones } : undefined,
           haul: own ? u.haul : undefined,
           loiterCenter: own && u.loiterCenter ? p4(u.loiterCenter) : undefined,
           loiterRadius: own ? u.loiterRadius : undefined,
@@ -85,6 +85,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     pockets: w.pockets.map((p) => ({ id: p.id, team: p.team, nodes: p.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat) })) })),
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
+    closed: w.players.filter((p) => p.team === team && !p.share).map((p) => p.id),
     queue: w.queue.filter((q) => w.buildings.find((b) => b.id === q.building)?.team === team).map((q) => ({ building: q.building, unit: q.unit, remaining: Math.round(q.remaining) })),
   };
 }
