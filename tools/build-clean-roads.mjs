@@ -9,18 +9,18 @@ const ukr = JSON.parse(readFileSync(ukrPath, 'utf8'));
 const ru = JSON.parse(readFileSync(ruPath, 'utf8'));
 console.log(`Loaded ${ukr.length} Ukraine lines, ${ru.length} Russia lines.`);
 
-// Major highways: motorways, trunks, primary, and secondary (plus links)
+// Major highways: motorways, trunks, primary, secondary
 const majorSet = new Set([
   'motorway', 'trunk', 'primary', 'secondary',
   'motorway_link', 'trunk_link', 'primary_link', 'secondary_link'
 ]);
 
-// Connectors: tertiary and links
+// Connectors: tertiary
 const connectorSet = new Set([
   'tertiary', 'tertiary_link'
 ]);
 
-// 1. Filter: Drop village unclassified clutter, keep major arterial highways and tertiary connectors
+// 1. Filter: Ukraine drops village unclassified clutter, keeps major + tertiary connectors
 const ukrFiltered = ukr.filter((l) => {
   if (!l.pts || l.pts.length < 2) return false;
   return majorSet.has(l.fclass) || connectorSet.has(l.fclass);
@@ -31,14 +31,14 @@ const ruFiltered = ru.filter((l) => {
   return majorSet.has(l.fclass) || connectorSet.has(l.fclass);
 });
 
-console.log(`Retained ${ukrFiltered.length} Ukraine arterial lines, ${ruFiltered.length} Russia arterial lines.`);
+console.log(`Retained ${ukrFiltered.length} Ukraine lines, ${ruFiltered.length} Russia lines.`);
 
 const raw = [...ukrFiltered, ...ruFiltered];
 for (const l of raw) {
   l.major = majorSet.has(l.fclass) ? 1 : 0;
 }
 
-// 2. Chaining continuous road segments
+// 2. Chaining continuous road segments (avoiding 180° hairpin reversals)
 console.log('Pass 1: Chaining continuous road segments...');
 function chainLines(lines, snapMeters = 80) {
   const factor = 111320 / snapMeters;
@@ -73,19 +73,44 @@ function chainLines(lines, snapMeters = 80) {
     let growing = true;
     while (growing) {
       growing = false;
-      const tailKey = ptKey(pts[pts.length - 1]);
+      const n = pts.length;
+      const tailKey = ptKey(pts[n - 1]);
       const cand = endpoints.get(tailKey) || [];
       const viable = cand.filter((c) => canConnect(c.idx));
+
       if (viable.length >= 1) {
-        const c = viable[0];
-        used[c.idx] = 1;
-        const other = lines[c.idx].pts;
-        if (c.atStart) {
-          for (let k = 1; k < other.length; k++) pts.push(other[k]);
-        } else {
-          for (let k = other.length - 2; k >= 0; k--) pts.push(other[k]);
+        // Pick viable candidate that does not do a sharp hairpin U-turn reversal
+        const curDirX = pts[n - 1][0] - pts[n - 2][0];
+        const curDirY = pts[n - 1][1] - pts[n - 2][1];
+        const curLen = Math.hypot(curDirX, curDirY) || 1e-9;
+
+        let bestC = null;
+        let bestDot = -Infinity;
+
+        for (const c of viable) {
+          const other = lines[c.idx].pts;
+          const otherDirX = c.atStart ? (other[1][0] - other[0][0]) : (other[other.length - 2][0] - other[other.length - 1][0]);
+          const otherDirY = c.atStart ? (other[1][1] - other[0][1]) : (other[other.length - 2][1] - other[other.length - 1][1]);
+          const otherLen = Math.hypot(otherDirX, otherDirY) || 1e-9;
+          const dot = (curDirX * otherDirX + curDirY * otherDirY) / (curLen * otherLen);
+
+          // Avoid acute U-turns into opposite carriageways
+          if (dot > -0.6 && dot > bestDot) {
+            bestDot = dot;
+            bestC = c;
+          }
         }
-        growing = true;
+
+        if (bestC) {
+          used[bestC.idx] = 1;
+          const other = lines[bestC.idx].pts;
+          if (bestC.atStart) {
+            for (let k = 1; k < other.length; k++) pts.push(other[k]);
+          } else {
+            for (let k = other.length - 2; k >= 0; k--) pts.push(other[k]);
+          }
+          growing = true;
+        }
       }
     }
 
@@ -96,16 +121,38 @@ function chainLines(lines, snapMeters = 80) {
       const headKey = ptKey(pts[0]);
       const cand = endpoints.get(headKey) || [];
       const viable = cand.filter((c) => canConnect(c.idx));
+
       if (viable.length >= 1) {
-        const c = viable[0];
-        used[c.idx] = 1;
-        const other = lines[c.idx].pts;
-        if (!c.atStart) {
-          for (let k = other.length - 2; k >= 0; k--) pts.unshift(other[k]);
-        } else {
-          for (let k = 1; k < other.length; k++) pts.unshift(other[k]);
+        const curDirX = pts[0][0] - pts[1][0];
+        const curDirY = pts[0][1] - pts[1][1];
+        const curLen = Math.hypot(curDirX, curDirY) || 1e-9;
+
+        let bestC = null;
+        let bestDot = -Infinity;
+
+        for (const c of viable) {
+          const other = lines[c.idx].pts;
+          const otherDirX = !c.atStart ? (other[other.length - 2][0] - other[other.length - 1][0]) : (other[1][0] - other[0][0]);
+          const otherDirY = !c.atStart ? (other[other.length - 2][1] - other[other.length - 1][1]) : (other[1][1] - other[0][1]);
+          const otherLen = Math.hypot(otherDirX, otherDirY) || 1e-9;
+          const dot = (curDirX * otherDirX + curDirY * otherDirY) / (curLen * otherLen);
+
+          if (dot > -0.6 && dot > bestDot) {
+            bestDot = dot;
+            bestC = c;
+          }
         }
-        growing = true;
+
+        if (bestC) {
+          used[bestC.idx] = 1;
+          const other = lines[bestC.idx].pts;
+          if (!bestC.atStart) {
+            for (let k = other.length - 2; k >= 0; k--) pts.unshift(other[k]);
+          } else {
+            for (let k = 1; k < other.length; k++) pts.unshift(other[k]);
+          }
+          growing = true;
+        }
       }
     }
 
@@ -131,12 +178,11 @@ chained1.forEach((l, li) => {
   }
 });
 
-const SNAP_MAJOR_EP = 0.0055; // ~600m direct snap for severed major endpoints
-const BRIDGE_MAJOR_EP = 0.035; // ~3.8km straight bridge for severed major endpoints
+const SNAP_MAJOR_EP = 0.0055; // ~600m direct snap
+const BRIDGE_MAJOR_EP = 0.055; // ~6.0 km straight bridge for severed major highways
 const epConnectors = [];
 
-// Spatial index for major endpoints
-const EP_CELL = 0.04;
+const EP_CELL = 0.05;
 const epGrid = new Map();
 majorEndpoints.forEach((ep, epi) => {
   const k = `${Math.floor(ep.p[0] / EP_CELL)},${Math.floor(ep.p[1] / EP_CELL)}`;
@@ -155,7 +201,7 @@ majorEndpoints.forEach((ep1, i) => {
       for (const epi of bucket) {
         if (epi <= i) continue;
         const ep2 = majorEndpoints[epi];
-        if (ep2.li === ep1.li) continue; // don't loop onto self
+        if (ep2.li === ep1.li) continue;
         const d2 = (ep1.p[0] - ep2.p[0]) ** 2 + (ep1.p[1] - ep2.p[1]) ** 2;
         if (d2 > 1e-9 && d2 < BRIDGE_MAJOR_EP * BRIDGE_MAJOR_EP && d2 < bestD2) {
           bestD2 = d2;
@@ -168,7 +214,6 @@ majorEndpoints.forEach((ep1, i) => {
   if (bestEpi >= 0) {
     const ep2 = majorEndpoints[bestEpi];
     if (bestD2 < SNAP_MAJOR_EP * SNAP_MAJOR_EP) {
-      // Direct snap: set both to average midpoint
       const mid = [(ep1.p[0] + ep2.p[0]) * 0.5, (ep1.p[1] + ep2.p[1]) * 0.5];
       chained1[ep1.li].pts[ep1.end] = mid;
       chained1[ep2.li].pts[ep2.end] = mid;
@@ -179,9 +224,9 @@ majorEndpoints.forEach((ep1, i) => {
 });
 console.log(`Stitched major endpoints, added ${epConnectors.length} highway bridges.`);
 
-// 3b. Endpoint-to-Segment Gap Bridging (T-junctions, ramps, minor roads)
+// 3b. Endpoint-to-Segment Gap Bridging
 console.log('Bridging road-to-segment junctions...');
-const CELL = 0.04; // ~4.4 km
+const CELL = 0.05;
 const grid = new Map();
 
 chained1.forEach((l, li) => {
@@ -198,9 +243,9 @@ chained1.forEach((l, li) => {
   }
 });
 
-const SNAP_MAJOR = 0.035; // ~3.5 km for major highways
-const SNAP_MINOR = 0.015; // ~1.5 km for minor roads
-const DIRECT_SNAP = 0.0045; // ~500m direct snap to segment
+const SNAP_MAJOR = 0.045; // ~5.0 km
+const SNAP_MINOR = 0.015; // ~1.5 km
+const DIRECT_SNAP = 0.005; // ~550m
 const segConnectors = [];
 let bridgedCount = 0;
 
@@ -259,13 +304,13 @@ const fixedConnectors = [
   { major: 1, pts: [[32.72287, 46.63682], [32.72301, 46.63465]] }
 ];
 
-// 4. Pass 2 Chaining: Merge all connectors with roads into unified continuous linestrings
+// 4. Pass 2 Chaining
 console.log('Pass 2: Re-chaining with connectors into unified continuous highways...');
 const allConnected = [...chained1, ...epConnectors, ...segConnectors, ...fixedConnectors];
 const chained2 = chainLines(allConnected, 120);
 console.log(`Pass 2 chained to ${chained2.length} unified lines.`);
 
-// 5. Douglas-Peucker curve simplification
+// 5. Douglas-Peucker curve simplification with EUCLIDEAN FALLBACK FOR LOOPS
 console.log('Simplifying curves...');
 function simplify(pts, tol) {
   if (pts.length <= 2) return pts;
@@ -277,9 +322,14 @@ function simplify(pts, tol) {
     let maxD = 0, maxIdx = -1;
     const [x1, y1] = pts[start], [x2, y2] = pts[end];
     const dx = x2 - x1, dy = y2 - y1;
-    const len = Math.hypot(dx, dy) || 1e-12;
+    const len = Math.hypot(dx, dy);
+
     for (let i = start + 1; i < end; i++) {
-      const d = Math.abs((pts[i][0] - x1) * dy - (pts[i][1] - y1) * dx) / len;
+      // If start and end are identical (closed loop), measure Euclidean distance from start!
+      const d = len < 1e-6
+        ? Math.hypot(pts[i][0] - x1, pts[i][1] - y1)
+        : Math.abs((pts[i][0] - x1) * dy - (pts[i][1] - y1) * dx) / len;
+
       if (d > maxD) { maxD = d; maxIdx = i; }
     }
     if (maxD > tol && maxIdx > 0) {
@@ -311,9 +361,22 @@ function lineLengthKm(pts) {
 
 const ptBucket = (p) => `${Math.round(p[0] * 300)},${Math.round(p[1] * 300)}`;
 
-// Build degree map
-let currentLines = simplifiedLines.filter((l) => l.pts.length >= 2);
+// Remove any zero-length collapsed lines
+let currentLines = simplifiedLines.filter((l) => {
+  if (!l.pts || l.pts.length < 2) return false;
+  // If all points are practically the same (< 30 meters total extent), discard
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (const p of l.pts) {
+    if (p[0] < minX) minX = p[0];
+    if (p[0] > maxX) maxX = p[0];
+    if (p[1] < minY) minY = p[1];
+    if (p[1] > maxY) maxY = p[1];
+  }
+  if ((maxX - minX) < 0.0003 && (maxY - minY) < 0.0003) return false;
+  return true;
+});
 
+// Iterative pruning of dead-end minor roads
 for (let iter = 0; iter < 2; iter++) {
   const degree = new Map();
   for (const l of currentLines) {
