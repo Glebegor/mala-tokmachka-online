@@ -33,8 +33,14 @@ export interface BuildingDef {
   maxPerPlayer?: number;
   /** Local stock of physical goods (metal, fuel, ore) per resource. Goods arrive by production or by truck. */
   storageCap?: number;
-  /** Fortifications and other field works ignore the long industrial spacing rule. */
+  /** Fortifications and other field works (built near the front, between the HQ and the line). */
   fieldWork?: boolean;
+  /** Ammo depot: friendly units within the radius deal `damageMult` damage while its store has ammo (`perShot` each). */
+  supply?: { radiusKm: number; damageMult: number; perShot: number };
+  /** May also be built inside your side's grey zones (contested ground), even behind the enemy line. */
+  buildInGrey?: boolean;
+  /** Supply-chain links: these buildings must stay `minBuildSpacing` km apart (checked both ways), so goods go by truck. */
+  spacedFrom?: string[];
   /** Static weapon, e.g. air defence. */
   attack?: { range: number; damage: number; targets: 'air' | 'ground' | 'all'; fx?: string; missRate?: number };
   /** Boats/pontoons: friendly ground units may cross barrier water inside this radius. */
@@ -205,6 +211,8 @@ export interface RulesConfig {
   greyZoneRadiusKm: number;
   greyZoneTtl: number; // seconds a grey zone lasts after the troops leave
   greyZonePush: number; // extra force for the infiltrating side on front nodes at the zone
+  fuelPerKm: number; // fuel a ground vehicle burns per km driven (×1.5 when sprinting)
+  liberateSeconds: number; // ground the front passes over stays grey until the new owner's troops spend this long on it
   peaceSeconds: number; // ceasefire at the start: build and deploy, but nobody may fight or cross the front
   sandbox: boolean; // test mode: endless resources, stocked stores, no victory or time limit
   buildTimeMult: number; // multiplies every build, upgrade and course time
@@ -273,6 +281,8 @@ export const DEFAULT_RULES: RulesConfig = {
   greyZoneRadiusKm: 5,
   greyZoneTtl: 20,
   greyZonePush: 5,
+  fuelPerKm: 0.3,
+  liberateSeconds: 30,
   peaceSeconds: 0,
   sandbox: false,
   buildTimeMult: 1,

@@ -30,6 +30,14 @@ export class Match {
   private createdAt = Date.now();
   private startAt = 0;
   private reporter: MatchReporter | null = null;
+  /** Version of the contested ground each player last received (it is only resent when it changes). */
+  private libSent = new Map<string, number>();
+  private snap(pid: string, team: Team, shots: Parameters<typeof snapshotFor>[3], countdown?: number) {
+    const v = this.sim.libVersion;
+    const fresh = this.libSent.get(pid) !== v;
+    if (fresh) this.libSent.set(pid, v);
+    return snapshotFor(this.sim, pid, team, shots, countdown, fresh);
+  }
 
   constructor(readonly id: string, readonly ruleset: Ruleset, mapId: string, readonly slots: SlotInit[], difficulty: BotDifficulty = 'normal') {
     this.sim = new Sim(ruleset, mapId, slots);
@@ -103,7 +111,8 @@ export class Match {
       players: this.sim.world.players.map(({ id, name, team, bot }) => ({ id, name, team, bot })),
     };
     conn.send(init);
-    conn.send(snapshotFor(this.sim, playerId, me.team, [], this.countdown()));
+    this.libSent.delete(playerId); // a fresh connection gets everything
+    conn.send(this.snap(playerId, me.team, [], this.countdown()));
   }
 
   disconnect(playerId: string, conn: Connection) {
@@ -144,7 +153,7 @@ export class Match {
       if (++this.idleTicks % snapEvery === 0) {
         for (const [pid, conn] of this.conns) {
           const p = sim.player(pid);
-          if (p) conn.send(snapshotFor(sim, pid, p.team, [], this.countdown()));
+          if (p) conn.send(this.snap(pid, p.team, [], this.countdown()));
         }
       }
       return;
@@ -162,7 +171,7 @@ export class Match {
       }
       for (const [pid, conn] of this.conns) {
         const p = sim.player(pid);
-        if (p) conn.send(snapshotFor(sim, pid, p.team, shots));
+        if (p) conn.send(this.snap(pid, p.team, shots));
       }
     }
     if (sim.world.winner !== null || (sim.ruleset.rules.matchSeconds > 0 && sim.world.time >= sim.ruleset.rules.matchSeconds)) {

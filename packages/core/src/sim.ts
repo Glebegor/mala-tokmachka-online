@@ -1,11 +1,11 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
-import { buildFront, distToFrontKm, findPinch, normalOf, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
+import { buildFront, distToFrontKm, findPinch, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
-import type { Building, FrontNode, Player, Pocket, Shot, SlotInit, Team, Unit, UnitStatus, Waypoint, World } from './state';
+import { LIBERATED_CELL, type Building, type FrontNode, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -134,6 +134,7 @@ export class Sim {
       front: buildFront(this.map.front, r.frontNodeSpacingKm),
       pockets: [],
       grey: [],
+      liberated: [],
       // cities have structural health: strikes wear it down, rescuers repair it
       points: this.map.capturePoints.map((p) => {
         const maxHp = 8000 + (Math.max(1, Math.min(5, p.value ?? 1)) - 1) * 3000;
@@ -164,6 +165,7 @@ export class Sim {
       r.startUnits.forEach((u, i) => this.spawnUnit(u, p, [pos[0] + 0.035 * Math.cos(i * 1.3), pos[1] + 0.025 * Math.sin(i * 1.3)]));
     }
     this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = this.side(cp.pos)));
+    this.occ.tick = -1; // the territory index is rebuilt from the live front on first use
     return w;
   }
 
@@ -224,13 +226,13 @@ export class Sim {
       if (b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner)) continue;
       if (air ? b.def === 'airfield' : b.def === 'gas_station' || b.def === 'hq') take(b.pos);
     }
-    if (!air) for (const t of this.world.units) if (t !== u && t.owner === u.owner && this.defs.u.get(t.def)!.fuelOnly && (t.cargo?.res.fuel ?? 0) > 0) take(t.pos);
+    if (!air) for (const t of this.world.units) if (t !== u && t.team === u.team && this.defs.u.get(t.def)!.fuelOnly && (t.cargo?.res.fuel ?? 0) > 0) take(t.pos);
     return best;
   }
 
   /** Physical goods a building keeps on site: what it makes, what it uses, and what its trainees cost. */
   storageFor(d: BuildingDef): string[] {
-    const fixed: Record<string, string[]> = { gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore'] };
+    const fixed: Record<string, string[]> = { gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
     if (fixed[d.id]) return fixed[d.id];
     const global = new Set(['money', 'people', 'energy']);
     const out = new Set<string>();
@@ -363,11 +365,61 @@ export class Sim {
     return Math.max(0, this.ruleset.rules.peaceSeconds - this.world.time);
   }
 
+  /** Inside one of this team's grey zones (infiltration patches or liberated ground not yet settled)? */
+  inOwnGrey(team: Team, p: LngLat): boolean {
+    return this.world.grey.some((z) => z.team === team && distKm(z.pos, p) <= z.r) || this.liberatedAt(p)?.team === team;
+  }
+
+  /** Stocked friendly ammo depots, refreshed every tick. */
+  private depots: { tick: number; list: Building[] } = { tick: -1, list: [] };
+  /** The ammo depot keeping this unit supplied, if any is in range and stocked. */
+  supplyFor(u: Unit): Building | null {
+    if (this.depots.tick !== this.world.tick) {
+      this.depots = { tick: this.world.tick, list: this.world.buildings.filter((b) => b.progress >= 1 && this.defs.b.get(b.def)!.supply && (b.storage?.ammo ?? 0) > 0) };
+    }
+    for (const b of this.depots.list) {
+      if (b.team !== u.team) continue;
+      const s = this.defs.b.get(b.def)!.supply!;
+      if ((b.storage!.ammo ?? 0) >= s.perShot && distKm(b.pos, u.pos) <= s.radiusKm) return b;
+    }
+    return null;
+  }
+  /** Damage multiplier from a nearby depot; the shot's ammo comes out of its store. */
+  private fireSupplied(u: Unit, d: UnitDef): number {
+    if (d.kind === 'air') return 1;
+    const b = this.supplyFor(u);
+    if (!b) return 1;
+    const s = this.defs.b.get(b.def)!.supply!;
+    b.storage!.ammo = Math.max(0, (b.storage!.ammo ?? 0) - s.perShot * (d.minRange ? 4 : 1));
+    return s.damageMult;
+  }
+
+  /** Supply-chain partners must be built far apart (see `spacedFrom`). */
+  chained(a: BuildingDef, b: BuildingDef): boolean {
+    return !!a.spacedFrom?.includes(b.id) || !!b.spacedFrom?.includes(a.id);
+  }
+
+  /** Minimum distance between a new building of type `d` and an existing one of type `other`. */
+  spacingBetween(d: BuildingDef, other: string, inZone = false): number {
+    const r = this.ruleset.rules;
+    const o = this.defs.b.get(other);
+    return o && this.chained(d, o) && !inZone ? r.minBuildSpacing : r.fieldWorkSpacing;
+  }
+
   /** Which team holds the ground here: cauldrons first, then the main front. */
   side(p: LngLat): Team {
     const pocket = this.world.pockets.length ? pocketAt(this.world.pockets, p) : null;
-    return pocket ? pocket.team : sideOf(this.world.front, p);
+    if (pocket) return pocket.team;
+    // the same occupied area the map paints; holes in it (the Sea of Azov) fall back to the nearest stretch of front
+    if (this.map.occupiedHoles?.some((h) => inPolygon(p, h))) return sideOf(this.world.front, p);
+    if (!this.map.occupiedClosure.length) return sideOf(this.world.front, p);
+    // rebuilt once per tick (the front moves every tick)
+    if (this.occ.tick < 0 || this.occ.tick !== this.world.tick || this.occ.front !== this.world.front) {
+      this.occ = { tick: this.world.tick, front: this.world.front, index: new OccupiedIndex(this.world.front, this.map.occupiedClosure) };
+    }
+    return this.occ.index!.contains(p) ? 1 : 0;
   }
+  private occ: { tick: number; front: FrontNode[] | null; index: OccupiedIndex | null } = { tick: -1, front: null, index: null };
 
   player(id: string) {
     return this.world.players.find((p) => p.id === id);
@@ -408,12 +460,14 @@ export class Sim {
         const zone = specialZoneAt(cmd.pos);
         const mySide = p.team === 0 ? 'ua' : 'ru';
         if (zone && zone.side !== mySide) return fail(`${zone.name} is only available to ${zone.side === 'ua' ? 'Ukraine' : 'Russia'}`);
-        if (!zone) {
+        // ammo depots may go up on contested ground our troops hold, even behind the enemy line
+        const inGrey = !!d.buildInGrey && this.inOwnGrey(p.team, cmd.pos);
+        if (!zone && !inGrey) {
           const pocket = w.pockets.length ? pocketAt(w.pockets, cmd.pos) : null;
           if (pocket) return fail(pocket.team === p.team ? 'this ground is encircled' : 'not your territory');
-          if (w.grey.some((z) => distKm(z.pos, cmd.pos) <= z.r)) return fail('contested ground (grey zone)');
-          const dist = distToFrontKm(w.front, cmd.pos) * (p.team === 0 ? 1 : -1);
-          if (dist < 0) return fail('not your territory');
+          if (w.grey.some((z) => distKm(z.pos, cmd.pos) <= z.r) || this.liberatedAt(cmd.pos)) return fail('contested ground (grey zone)');
+          if (this.side(cmd.pos) !== p.team) return fail('not your territory');
+          const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
           if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
         }
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
@@ -426,15 +480,12 @@ export class Sim {
           if (w.buildings.filter((x) => x.def === 'housing' && this.inCity(x.pos, city)).length >= r.cityHousingLimit) return fail(`at most ${r.cityHousingLimit} housing blocks per city`);
           if (w.buildings.some((x) => x.def === 'housing' && distKm(x.pos, cmd.pos) < 0.08)) return fail('too close to another housing block');
         } else {
-          // industry needs room (no other site within minBuildSpacing); field works only need their own patch
-          const spacing = zone ? 0.5 : d.fieldWork ? r.fieldWorkSpacing : r.minBuildSpacing;
-          const clash = w.buildings.some((x) => {
-            if (x.def === 'housing') return false;
-            const other = this.defs.b.get(x.def)!;
-            const need = d.fieldWork || other.fieldWork ? r.fieldWorkSpacing : spacing;
-            return distKm(x.pos, cmd.pos) < need;
-          });
-          if (clash) return fail(d.fieldWork ? 'space occupied' : `too close to another site (keep ${spacing} km apart)`);
+          // every site needs its own patch; only supply-chain partners (mine and metal works, …) must be far apart
+          const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
+          if (clash) {
+            const other = this.defs.b.get(clash.def)!;
+            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : 'space occupied');
+          }
         }
         if (!canAfford(p.res, d.cost)) return fail('not enough resources');
         pay(p.res, d.cost);
@@ -484,7 +535,7 @@ export class Sim {
         const set = new Set(cmd.units);
         const mine = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
-        for (const u of mine) u.haul = undefined; // a manual order cancels a delivery round
+        for (const u of mine) (u.haul = undefined), (u.fuelTo = undefined); // a manual order cancels a delivery round or a fuel run
         const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct');
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
       }
@@ -492,7 +543,7 @@ export class Sim {
         const set = new Set(cmd.units);
         for (const u of w.units) {
           if (!set.has(u.id) || u.owner !== p.id) continue;
-          (u.target = null), (u.path = []), (u.cap = 0), (u.transport = false), (u.enter = 0), (u.haul = undefined), (u.bombardTarget = null);
+          (u.target = null), (u.path = []), (u.cap = 0), (u.transport = false), (u.enter = 0), (u.haul = undefined), (u.bombardTarget = null), (u.fuelTo = undefined);
           // a recon drone told to stop circles where it is
           if (isReconDrone(this.defs.u.get(u.def))) (u.loiterCenter = [u.pos[0], u.pos[1]]), (u.loiterRadius = 4), (u.isLoitering = true);
         }
@@ -596,6 +647,19 @@ export class Sim {
           const spot = this.nearestFuel(u, isReconDrone(d));
           if (spot) this.orderMove([u], spot, false, false, false);
         }
+        return ok();
+      }
+      case 'giveFuel': {
+        const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id && !x.embarkedIn);
+        const t = w.units.find((x) => x.id === cmd.target && x.team === p.team && !x.embarkedIn);
+        if (!u || !t || u === t) return fail('pick another vehicle of your side');
+        const ud = this.defs.u.get(u.def)!;
+        if (ud.kind === 'air' || (!ud.fuelOnly && u.fuel === undefined)) return fail('this unit has no fuel to give');
+        if (this.defs.u.get(t.def)!.kind === 'air' || t.fuel === undefined || t.maxFuel === undefined) return fail('that unit takes no fuel');
+        if (t.fuel >= t.maxFuel - 0.5) return fail('its tank is already full');
+        (u.haul = undefined), (u.bombardTarget = null);
+        u.fuelTo = t.id;
+        this.orderMove([u], t.pos, false, false, false);
         return ok();
       }
       case 'bombard': {
@@ -859,12 +923,12 @@ export class Sim {
     this.units(dt);
     this.repairs(dt);
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
-    if (!peace) this.frontline(dt);
+    if (!peace) this.frontline(dt), (this.occ.tick = -1); // the line moved: territory index is stale
     if (w.smokes.length && w.tick % r.tickRate === 0) w.smokes = w.smokes.filter((x) => x.expiresAt > w.time);
     if (!peace) this.territory(dt);
     if (!peace && !r.sandbox) this.checkVictory();
     if (w.tick % 2 === 0) this.refreshStatus();
-    if (!peace && w.tick % r.tickRate === 0) this.greyZones();
+    if (!peace && w.tick % r.tickRate === 0) this.greyZones(), this.liberation();
     if (r.peaceSeconds > 0 && w.time >= r.peaceSeconds && w.time - dt < r.peaceSeconds) this.hooks.emit('ceasefireOver', {});
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
@@ -932,6 +996,87 @@ export class Sim {
     w.grey = w.grey.filter((z) => z.ttl > 0 && this.side(z.pos) !== z.team);
   }
 
+  /** Side last seen for grid cells near the moving front, and the contested ones by key. */
+  private cellSide = new Map<number, { side: Team; seen: number }>();
+  private libByKey = new Map<number, LiberatedCell>();
+  private static cellKey(ix: number, iy: number) {
+    return ix * 100000 + iy;
+  }
+  /** Contested liberated ground at this position, if any. */
+  liberatedAt(p: LngLat): LiberatedCell | undefined {
+    return this.libByKey.get(Sim.cellKey(Math.floor(p[0] / LIBERATED_CELL.lng), Math.floor(p[1] / LIBERATED_CELL.lat)));
+  }
+
+  /**
+   * Liberated ground, checked once a second: cells within 2 km of the moving parts of the front are watched; one that
+   * changes hands turns grey for the side that took it and only becomes theirs for real once that side's ground troops
+   * have spent `liberateSeconds` on (or right next to) it. Ground lost again before then simply goes back.
+   */
+  private liberation() {
+    const w = this.world;
+    const r = this.ruleset.rules;
+    const { lng: cw, lat: ch } = LIBERATED_CELL;
+    const watch = (n: FrontNode) => {
+      if (Math.abs(n.v) < 1e-4) return;
+      const cx = Math.floor(n.lng / cw), cy = Math.floor(n.lat / ch);
+      const rx = Math.ceil(2 / (kmPerDegLng(n.lat) * cw)), ry = Math.ceil(2 / (111.32 * ch));
+      for (let ix = cx - rx; ix <= cx + rx; ix++) {
+        for (let iy = cy - ry; iy <= cy + ry; iy++) {
+          const key = Sim.cellKey(ix, iy);
+          const side = this.side([(ix + 0.5) * cw, (iy + 0.5) * ch]);
+          const was = this.cellSide.get(key);
+          const now = Math.floor(w.time);
+          if (was) (was.seen = now);
+          else this.cellSide.set(key, { side, seen: now });
+          if (!was || was.side === side) continue;
+          was.side = side;
+          const cell = this.libByKey.get(key);
+          if (cell) this.libByKey.delete(key), this.libVersion++; // taken back before it was settled
+          else if (this.libByKey.size < 40000) this.libByKey.set(key, { ix, iy, team: side, held: 0 }), (this.libVersion++);
+        }
+      }
+    };
+    w.front.forEach(watch);
+    for (const p of w.pockets) p.nodes.forEach(watch);
+    // forget stretches of front that have been quiet for a while
+    if (w.tick % (r.tickRate * 60) === 0) for (const [k, v] of this.cellSide) if (w.time - v.seen > 60) this.cellSide.delete(k);
+    // the new owner settles the ground by keeping troops on it (checked every other second)
+    const odd = Math.floor(w.time) % 2;
+    for (const [key, c] of this.libByKey) {
+      if ((c.ix + c.iy) % 2 !== odd) continue;
+      const at: LngLat = [(c.ix + 0.5) * cw, (c.iy + 0.5) * ch];
+      if (this.side(at) !== c.team) {
+        this.libByKey.delete(key);
+        this.libVersion++;
+        continue;
+      }
+      let here = false;
+      this.near(this.unitGrid, at, 2, (u) => {
+        if (!here && u.team === c.team && !u.embarkedIn && this.defs.u.get(u.def)!.kind !== 'air' && distKm(u.pos, at) <= 2) here = true;
+      });
+      if (here && (c.held += 2) >= r.liberateSeconds) this.libByKey.delete(key), this.libVersion++;
+    }
+    if (this.libVersion !== this.libSent) (w.liberated = [...this.libByKey.values()]), (this.libSent = this.libVersion), (this.libRuns = null);
+  }
+  /** Bumped whenever the contested ground changes; snapshots resend it only then. */
+  libVersion = 0;
+  private libSent = 0;
+  private libRuns: number[] | null = null;
+  /** Contested ground as runs along each row of cells: [iy, team, firstIx, length, …] (compact for the wire). */
+  liberatedRuns(): number[] {
+    if (this.libRuns) return this.libRuns;
+    const cells = [...this.world.liberated].sort((a, b) => a.iy - b.iy || a.team - b.team || a.ix - b.ix);
+    const out: number[] = [];
+    for (let i = 0; i < cells.length; ) {
+      const c = cells[i];
+      let n = 1;
+      while (i + n < cells.length && cells[i + n].iy === c.iy && cells[i + n].team === c.team && cells[i + n].ix === c.ix + n) n++;
+      out.push(c.iy, c.team, c.ix, n);
+      i += n;
+    }
+    return (this.libRuns = out);
+  }
+
   /** Work out the buffs and debuffs every unit is under right now (shown on markers and in the unit panel). */
   private refreshStatus() {
     const r = this.ruleset.rules;
@@ -957,6 +1102,10 @@ export class Sim {
         if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
       }
       if (u.sprint) s.push(['sprint', 2]);
+      if (d.kind !== 'air' && d.damage > 0) {
+        const depot = this.supplyFor(u);
+        if (depot) s.push(['supplied', this.defs.b.get(depot.def)!.supply!.damageMult]);
+      }
       if (u.fuel !== undefined && u.maxFuel) {
         if (u.fuel <= 0) s.push(['nofuel', 0]);
         else if (u.fuel / u.maxFuel < 0.2) s.push(['lowfuel', u.fuel / u.maxFuel]);
@@ -1255,7 +1404,7 @@ export class Sim {
     if (isReconDrone(d)) return void fromStore(['airfield'], 12, 30);
     if (fromStore(['gas_station'], 8, 30)) return;
     for (const t of this.world.units) {
-      if (t === u || t.owner !== u.owner || !this.defs.u.get(t.def)!.fuelOnly || distKm(u.pos, t.pos) > 5) continue;
+      if (t === u || t.team !== u.team || !this.defs.u.get(t.def)!.fuelOnly || distKm(u.pos, t.pos) > 5) continue;
       const have = t.cargo?.res.fuel ?? 0;
       if (have <= 0) continue;
       const take = Math.min(25 * dt, need, have);
@@ -1264,6 +1413,27 @@ export class Sim {
       return;
     }
     fromStore(['hq'], 8, 15);
+  }
+
+  /**
+   * Fuel run: drive up to the other vehicle (following it if it moves) and pump fuel across at 20/s. A tanker gives from
+   * its load; any other vehicle from its own tank, keeping a quarter for itself.
+   */
+  private fuelStep(u: Unit, d: UnitDef, dt: number) {
+    const t = this.world.units.find((x) => x.id === u.fuelTo && x.hp > 0 && !x.embarkedIn);
+    const spare = () => (d.fuelOnly ? u.cargo?.res.fuel ?? 0 : Math.max(0, (u.fuel ?? 0) - (u.maxFuel ?? 0) * 0.25));
+    if (!t || t.fuel === undefined || t.maxFuel === undefined || t.fuel >= t.maxFuel - 0.01 || spare() <= 0) return void (u.fuelTo = undefined);
+    if (distKm(u.pos, t.pos) > 0.6) {
+      // keep closing in; re-plan every few seconds or when the target has moved off
+      const stale = !u.path.length || distKm(u.path[u.path.length - 1].p, t.pos) > 0.5;
+      if (stale && (u.id + this.world.tick) % 20 === 0) this.orderMove([u], t.pos, false, false, true);
+      return;
+    }
+    u.path = [];
+    const give = Math.min(20 * dt, spare(), t.maxFuel - t.fuel);
+    if (d.fuelOnly) u.cargo!.res.fuel = (u.cargo!.res.fuel ?? 0) - give;
+    else u.fuel = (u.fuel ?? 0) - give;
+    t.fuel += give;
   }
 
   /** Delivery rounds: drive to the source, load (5 s), drive to the destination, unload (4 s), repeat. */
@@ -1352,6 +1522,7 @@ export class Sim {
       } else if (u.sprint && (u.fuel ?? 1) <= 0) u.sprint = false;
       if ((u.id + w.tick) % 5 === 0) this.refuelInPlace(u, d, dt * 5);
       if (u.haul) this.haulStep(u, d, dt);
+      if (u.fuelTo) this.fuelStep(u, d, dt);
 
       // fire discipline: hold = never, return = only once hit, auto = anything in range
       const canFire = !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
@@ -1368,7 +1539,7 @@ export class Sim {
             const spread = Math.random() * 0.4;
             const impact = offsetKm(u.bombardTarget, spread * Math.cos(ang), spread * Math.sin(ang));
             this.shots.push({ def: u.def, team: u.team, from: u.pos, to: impact });
-            const dealt = this.blast(u, impact, 1, d.damage * rank.damage, false);
+            const dealt = this.blast(u, impact, 1, d.damage * rank.damage * this.fireSupplied(u, d), false);
             u.xp += dealt * r.xpPerDamage;
             this.stat(u.owner).damage += dealt;
             this.rankUp(u);
@@ -1423,7 +1594,7 @@ export class Sim {
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
       if ((tu || tb) && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
-        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1);
+        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1) * this.fireSupplied(u, d);
         let dealt: number;
         if (tu) {
           const air = this.defs.u.get(tu.def)!.kind === 'air';
@@ -1672,7 +1843,7 @@ export class Sim {
     if (moved > 0) {
       u.bearing = (Math.atan2((u.pos[0] - start[0]) * kmPerDegLng(u.pos[1]), (u.pos[1] - start[1]) * 111.32) * 180) / Math.PI;
       if (u.fuel !== undefined) {
-        u.fuel = Math.max(0, u.fuel - moved * 0.04 * (u.sprint ? 1.5 : 1));
+        u.fuel = Math.max(0, u.fuel - moved * this.ruleset.rules.fuelPerKm * (u.sprint ? 1.5 : 1));
         if (u.fuel <= 0) u.sprint = false;
       }
     }
@@ -1814,7 +1985,9 @@ export class Sim {
     // anything the front rolled over is lost (checked a few buildings per tick to spread the cost)
     const lost: Building[] = [];
     for (let i = w.tick % 5; i < w.buildings.length; i += 5) {
-      if (this.side(w.buildings[i].pos) !== w.buildings[i].team) lost.push(w.buildings[i]);
+      const b = w.buildings[i];
+      // a depot on contested ground stands as long as that grey zone does
+      if (this.side(b.pos) !== b.team && !(this.defs.b.get(b.def)!.buildInGrey && this.inOwnGrey(b.team, b.pos))) lost.push(b);
     }
     if (lost.length) {
       lost.forEach((b) => this.evict(b, 0.5));

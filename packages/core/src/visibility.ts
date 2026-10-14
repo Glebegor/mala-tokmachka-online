@@ -10,7 +10,7 @@ const p4 = (p: LngLat): LngLat => [r4(p[0]), r4(p[1])];
  * Fog of war: own side is fully visible, enemy objects only inside friendly vision/signal radius.
  * Ground units in concealing terrain (forest, city) must be approached closer to be spotted.
  */
-export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[] = [], countdown = 0): SnapMsg {
+export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[] = [], countdown = 0, liberated = true): SnapMsg {
   const w = sim.world;
   const fog = sim.ruleset.rules.fogOfWar;
   const watchers: { pos: LngLat; r: number }[] = [];
@@ -72,6 +72,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           maxFuel: own ? u.maxFuel : undefined,
           cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers, drones: u.cargo.drones } : undefined,
           haul: own ? u.haul : undefined,
+          fuelTo: mine ? u.fuelTo : undefined,
           loiterCenter: own && u.loiterCenter ? p4(u.loiterCenter) : undefined,
           loiterRadius: own ? u.loiterRadius : undefined,
           isLoitering: own ? u.isLoitering : undefined,
@@ -81,6 +82,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),
     smokes: w.smokes.filter((x) => seen(x.pos, 2.5)).map((x) => ({ id: x.id, pos: p4(x.pos), expiresAt: Math.round(x.expiresAt) })),
+    liberated: liberated ? sim.liberatedRuns() : undefined,
     grey: w.grey.map((z) => ({ team: z.team, pos: p4(z.pos), r: z.r })),
     pockets: w.pockets.map((p) => ({ id: p.id, team: p.team, nodes: p.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat) })) })),
     points: w.points,

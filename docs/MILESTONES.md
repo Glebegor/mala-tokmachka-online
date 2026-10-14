@@ -137,6 +137,22 @@ Everything from the akira branch now runs on hlib's core:
   over the map shows everything training for you (click a chip to open the building); building markers get a progress bar
   and an order count; train buttons show how many are queued; a message announces each finished unit.
 
+## M7.2 — Territory, logistics, ammo (v0.10.0)
+- **Fix: buildings vanishing far from the front.** The server decided which side held the ground by the nearest stretch of
+  front, which went wrong far from the line (e.g. western Ukraine was counted as Russian once the front had moved) and
+  "overran" buildings there. It now uses exactly the occupied area the map paints (indexed by latitude bands, fast).
+- **Spacing** only between supply-chain partners (35 km): ore mine ↔ metal works, metal works ↔ machine factory, machine
+  factory ↔ war factories (HQ, training centre, drone/missile/ammo factory, airfield, aircraft plant), oil refinery ↔
+  filling station. Everything else (power plants, rail hubs, warehouses, field works…) only needs its own 1.2 km patch.
+- **Liberated ground**: ground the front passes over turns grey (contested) for the side that took it and only becomes
+  theirs once their ground troops have spent 30 s on it; it cannot be built on until then (except ammo depots).
+- **Fuel**: ground vehicles burn 0.3 per km (was 0.04). *Give fuel…* sends a vehicle to another one (yours or an ally's)
+  to hand fuel across (tankers from their load, others from their own tank keeping a quarter). Fuel trucks top up allies.
+- **Ammo**: new resource. The ammo factory turns metal into ammo; trucks carry it (*Ammo* cargo) to ammo depots. A stocked
+  depot gives friendly units within 15 km +30% damage (1 ammo per shot, artillery 4). Depots can also be set up in your
+  grey zones, even behind the enemy line, and stand as long as the zone does.
+- Bots: at most 6 of each field work, train before they build, run supply trucks (ammo routes too).
+
 ## M8 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.

@@ -225,3 +225,107 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.deepEqual(sim.world.queue.map((q) => q.id), [theirs.id]);
   console.log('training queue ok');
 }
+
+// --- liberated ground stays grey until the new owner's troops have held it for 30 s ---
+{
+  const sim = fresh();
+  const [p0] = acrossTheLine(sim);
+  const a = sim.player('a')!;
+  const push = Array.from({ length: 30 }, (_, i) => sim.spawnUnit('tank', a, offsetKm(p0, (i % 6) * 0.3, Math.floor(i / 6) * 0.3)));
+  for (const t of push) (t.fireMode = 'hold'), (t.fuel = undefined);
+  run(sim, 60);
+  const mine = sim.world.liberated.filter((c) => c.team === 0);
+  assert.ok(mine.length > 0, `the ground the line passed over is contested (${mine.length} cells)`);
+  const C = { lng: 0.02, lat: 0.0135 };
+  const centre = (c: { ix: number; iy: number }): LngLat => [(c.ix + 0.5) * C.lng, (c.iy + 0.5) * C.lat];
+  const far = mine.find((c) => push.every((t) => distKm(t.pos, centre(c)) > 4)) ?? mine[0];
+  assert.equal(sim.side(centre(far)), 0, 'it is on our side of the line now');
+  assert.equal(sim.apply('a', { type: 'build', def: 'trench', pos: centre(far) }).ok, false, 'no building on contested ground');
+  // a squad parks on one cell; everything else is left alone
+  const target = mine[mine.length - 1];
+  for (const t of push) t.hp = 0;
+  run(sim, 0.2);
+  const squad = sim.spawnUnit('infantry', a, centre(target));
+  squad.fireMode = 'hold';
+  const key = (c: { ix: number; iy: number }) => `${c.ix},${c.iy}`;
+  run(sim, 15);
+  assert.ok(sim.world.liberated.some((c) => key(c) === key(target)), 'still grey after 15 s');
+  run(sim, 17);
+  assert.ok(!sim.world.liberated.some((c) => key(c) === key(target)), 'settled after 30 s with troops on it');
+  const untouched = mine.filter((c) => distKm(centre(c), squad.pos) > 4);
+  assert.ok(untouched.length && untouched.every((c) => sim.world.liberated.some((x) => key(x) === key(c))), 'ground nobody holds stays grey');
+  console.log(`liberated ground ok: ${mine.length} cells, settled only where troops stood`);
+}
+
+// --- fuel: vehicles burn it quickly; one vehicle can drive over and hand fuel to another (an ally's too) ---
+{
+  const sim = fresh();
+  const hq = hqOf(sim, 'a');
+  const start = offsetKm(hq.pos, 30, 0);
+  const tank = sim.spawnUnit('tank', sim.player('a2')!, start);
+  const fuel0 = tank.fuel!;
+  tank.path = [{ p: offsetKm(start, 10, 0), road: false, end: true }];
+  run(sim, 120);
+  const km = distKm(start, tank.pos);
+  assert.ok(Math.abs(fuel0 - tank.fuel! - km * base.rules.fuelPerKm) < 0.5, `burns ${base.rules.fuelPerKm}/km (${km.toFixed(1)} km, ${(fuel0 - tank.fuel!).toFixed(1)} fuel)`);
+  tank.fuel = 0;
+  const pickup = sim.spawnUnit('pickup', sim.player('a')!, offsetKm(tank.pos, 4, 3));
+  assert.equal(sim.apply('a', { type: 'giveFuel', unit: pickup.id, target: hq.id + 99999 }).ok, false, 'needs a real vehicle');
+  assert.ok(sim.apply('a', { type: 'giveFuel', unit: pickup.id, target: tank.id }).ok, "fuel for a teammate's tank");
+  run(sim, 40);
+  assert.ok(tank.fuel! > 0, `the tank got fuel (${tank.fuel!.toFixed(1)})`);
+  assert.ok(pickup.fuel! >= pickup.maxFuel! * 0.25 - 0.01, 'the pickup kept a quarter for itself');
+  assert.equal(pickup.fuelTo, undefined, 'and the run is over');
+  // a tanker gives from its load (the pickup is topped up so it does not drink from the tanker as well)
+  tank.fuel = 0;
+  pickup.fuel = pickup.maxFuel;
+  const tanker = sim.spawnUnit('fuel_truck', sim.player('a')!, offsetKm(tank.pos, 0.3, 0));
+  tanker.cargo!.res.fuel = 50;
+  sim.apply('a', { type: 'giveFuel', unit: tanker.id, target: tank.id });
+  run(sim, 10);
+  assert.ok(tank.fuel! >= 49 && tanker.cargo!.res.fuel! < 1, 'the tanker emptied its load into the tank');
+  console.log('fuel transfer ok');
+}
+
+// --- ammo: depots in grey zones, the supplied bonus, trucks bring ammo from the factory ---
+{
+  const sim = fresh({ peaceSeconds: 0 });
+  const [p0, p1] = acrossTheLine(sim);
+  const a = sim.player('a')!;
+  // a grey zone our troops hold behind the enemy line
+  const behind = offsetKm(p1, (p1[0] - p0[0]) * 600, (p1[1] - p0[1]) * 400);
+  assert.equal(sim.side(behind), 1, 'the spot is on the enemy side');
+  sim.world.grey.push({ id: sim.world.nextId++, team: 0, pos: behind, r: 5, ttl: 3 });
+  assert.equal(sim.apply('a', { type: 'build', def: 'trench', pos: behind }).ok, false, 'nothing else can be built there');
+  assert.ok(sim.apply('a', { type: 'build', def: 'ammo_depot', pos: behind }).ok, 'an ammo depot can');
+  const depot = sim.world.buildings[sim.world.buildings.length - 1];
+  depot.progress = 1;
+  run(sim, 1.5);
+  assert.ok(sim.world.buildings.includes(depot), 'it stands while the grey zone does');
+  run(sim, 6); // nobody keeps the zone up: it fades
+  assert.ok(!sim.world.buildings.includes(depot), 'and is lost with it');
+
+  // the supplied bonus: shots draw ammo, a dry depot gives nothing
+  const hq = hqOf(sim, 'a');
+  const d2 = { ...hq, id: sim.world.nextId++, def: 'ammo_depot', hp: 350, pos: offsetKm(p0, (p0[0] - p1[0]) * 300, (p0[1] - p1[1]) * 200), storage: { ammo: 50 }, inside: [], course: null, upgrade: null };
+  sim.world.buildings.push(d2);
+  assert.equal(sim.side(d2.pos), 0, 'depot behind our line');
+  const ua = sim.spawnUnit('infantry', a, p0);
+  sim.spawnUnit('infantry', sim.player('b')!, p1);
+  run(sim, 0.5);
+  assert.ok(ua.status.some(([id, v]) => id === 'supplied' && v === 1.3), 'supplied: +30% damage');
+  run(sim, 5);
+  assert.ok(d2.storage.ammo < 50, `shots draw ammo (${d2.storage.ammo} left)`);
+  d2.storage.ammo = 0;
+  run(sim, 0.5);
+  assert.ok(!ua.status.some(([id]) => id === 'supplied'), 'an empty depot gives nothing');
+
+  // a truck hauls ammo from the factory to the depot
+  const fac = { ...hq, id: sim.world.nextId++, def: 'ammo_factory', hp: 900, pos: offsetKm(d2.pos, -8, 0), storage: { ammo: 2000, metal: 500 }, inside: [], course: null, upgrade: null };
+  sim.world.buildings.push(fac);
+  const truck = sim.spawnUnit('truck', a, fac.pos);
+  assert.ok(sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: fac.id, toBuilding: d2.id, resType: 'ammo' }).ok);
+  run(sim, 120);
+  assert.ok(d2.storage.ammo > 500, `ammo delivered (${Math.round(d2.storage.ammo)})`);
+  console.log('ammo ok');
+}

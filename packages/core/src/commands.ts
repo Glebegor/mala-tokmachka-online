@@ -29,6 +29,8 @@ export type Command =
   | { type: 'share'; allow: boolean }
   | { type: 'disembark'; transport: number }
   | { type: 'refuel'; units: number[] }
+  /** Drive to another (own or allied) vehicle and hand it fuel: tankers from their load, other vehicles from their own tank. */
+  | { type: 'giveFuel'; unit: number; target: number }
   /** Artillery barrage on an area (null stops it). */
   | { type: 'bombard'; units: number[]; target: [number, number] | null };
 

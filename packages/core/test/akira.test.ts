@@ -37,7 +37,13 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
 {
   const sim = fresh();
   const hq = hqOf(sim, 'a');
-  assert.equal(sim.apply('a', { type: 'build', def: 'mine', pos: offsetKm(hq.pos, 10, 0) }).ok, false, 'industry needs 35 km');
+  // only supply-chain partners keep 35 km apart; anything else just needs its own patch
+  assert.ok(sim.apply('a', { type: 'build', def: 'mine', pos: offsetKm(hq.pos, 10, 0) }).ok, 'a mine may stand near the base');
+  assert.ok(sim.apply('a', { type: 'build', def: 'power_plant', pos: offsetKm(hq.pos, 12, 0) }).ok, 'a power plant right next to the mine');
+  assert.ok(sim.apply('a', { type: 'build', def: 'warehouse', pos: offsetKm(hq.pos, 12, 2) }).ok, 'a warehouse too');
+  assert.equal(sim.apply('a', { type: 'build', def: 'power_plant', pos: offsetKm(hq.pos, 12.5, 0) }).ok, false, 'but not on top of another site');
+  assert.equal(sim.apply('a', { type: 'build', def: 'metalworks', pos: offsetKm(hq.pos, 25, 0) }).ok, false, 'metal works 15 km from the mine: refused');
+  assert.equal(sim.apply('a', { type: 'build', def: 'machine_factory', pos: offsetKm(hq.pos, -20, 0) }).ok, false, 'machine factory 20 km from the base: refused');
   assert.ok(sim.apply('a', { type: 'build', def: 'trench', pos: offsetKm(hq.pos, 3, 0) }).ok, 'field works fit near the base');
   const city = sim.map.capturePoints.find((cp, i) => sim.world.points[i].owner === 0 && sim.cities.has(cp.id))!;
   assert.equal(sim.apply('a', { type: 'build', def: 'housing', pos: offsetKm(city.pos, 60, 60) }).ok, false, 'housing outside a city is refused');

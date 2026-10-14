@@ -2,7 +2,7 @@ import { type BotDifficulty, type Building, distKm, isReconDrone, isStrikeDrone,
 
 const BUILD_ORDER = [
   'power_plant', 'housing', 'machine_factory', 'mine', 'drone_factory', 'metalworks', 'oil_refinery', 'trench', 'gas_station', 'housing',
-  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'rail_station', 'trench', 'warehouse', 'bunker', 'missile_factory',
+  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'rail_station', 'trench', 'warehouse', 'bunker', 'ammo_factory', 'ammo_depot', 'missile_factory', 'ammo_depot',
 ];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
@@ -23,8 +23,9 @@ export class Bot {
     const p = sim.player(this.playerId);
     if (!p) return;
 
-    this.build(sim, p);
+    // supply trucks and troops first, then whatever the rest of the money buys
     this.train(sim, p);
+    this.build(sim, p);
     this.command(sim, p);
   }
 
@@ -42,6 +43,8 @@ export class Bot {
       const d = sim.defs.b.get(def);
       if (!d) continue;
       if (!Object.entries(d.cost).every(([r, v]) => (p.res[r] ?? 0) >= v)) continue;
+      // a few field works of each kind are plenty; the money is better spent on the economy
+      if (d.fieldWork && mine.filter((b) => b.def === def).length >= 6) continue;
       for (let attempt = 0; attempt < 14; attempt++) {
         const ang = Math.random() * Math.PI * 2;
         let base = hq.pos;
@@ -79,7 +82,7 @@ export class Bot {
       const d = sim.defs.b.get(b.def)!;
       if (b.def === 'machine_factory') {
         // a small logistics fleet: trucks for ore and metal, a tanker, a rescue crew
-        const want = count('truck') < 2 ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : null;
+        const want = count('truck') < (w.buildings.some((x) => x.owner === p.id && x.def === 'ammo_factory') ? 3 : 2) ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : null;
         if (want && !w.queue.some((q) => q.building === b.id)) sim.apply(p.id, { type: 'train', building: b.id, unit: want });
         continue;
       }
@@ -101,6 +104,9 @@ export class Bot {
       }
       if (!d.trains?.length) continue;
       if (w.queue.filter((q) => q.building === b.id).length >= 2) continue;
+      // save up for the supply trucks before buying more troops
+      const needTrucks = w.buildings.some((x) => x.team === p.team && x.def === 'machine_factory' && x.progress >= 1) && count('truck') < 2;
+      if (needTrucks && (p.res.money ?? 0) < 500) continue;
       const drones = w.units.filter((u) => u.owner === p.id && u.def === 'drone').length;
       const pool = ['infantry', 'infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
       const pick = pool[Math.floor(Math.random() * pool.length)];
@@ -116,8 +122,10 @@ export class Bot {
     const route = (u: Unit, from?: Building, to?: Building, res?: string) => from && to && sim.apply(p.id, { type: 'setRoute', unit: u.id, fromBuilding: from.id, toBuilding: to.id, resType: res });
     const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul);
     const mines = own('mine'), works = own('metalworks'), bases = own('hq'), refineries = own('oil_refinery');
+    const ammo = own('ammo_factory'), depots = own('ammo_depot');
     trucks.forEach((u, i) => {
-      if (i % 2 === 0 && mines[0] && works[0]) route(u, mines[0], nearest(mines[0], works), 'ore');
+      if (i % 3 === 2 && ammo[0] && depots.length) route(u, ammo[0], depots[Math.floor(Math.random() * depots.length)], 'ammo');
+      else if (i % 2 === 0 && mines[0] && works[0]) route(u, mines[0], nearest(mines[0], works), 'ore');
       else if (works[0] && bases[0]) route(u, works[0], nearest(works[0], bases), 'metal');
     });
     for (const u of w.units.filter((x) => x.owner === p.id && x.def === 'fuel_truck' && !x.haul)) {

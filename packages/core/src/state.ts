@@ -87,6 +87,8 @@ export interface Unit {
   cargo?: UnitCargo;
   haul?: Haul;
   embarkedIn?: number; // the transport this unit rides in
+  /** Driving over to another vehicle to hand it fuel (unit id). */
+  fuelTo?: number;
   loiterCenter?: LngLat;
   loiterRadius?: number;
   isLoitering?: boolean;
@@ -171,6 +173,17 @@ export interface GreyZone {
   ttl: number; // seconds left unless refreshed
 }
 
+/** Grid cell (see LIBERATED_CELL) of ground that just changed hands: grey until the new owner's troops have held it. */
+export interface LiberatedCell {
+  ix: number;
+  iy: number;
+  team: Team; // the side that took it
+  held: number; // seconds the new owner's ground troops have spent on it
+}
+
+/** Size of a liberated-ground cell in degrees (about 1.5 km). */
+export const LIBERATED_CELL = { lng: 0.02, lat: 0.0135 } as const;
+
 export interface CapturePoint {
   id: string;
   owner: Team;
@@ -199,6 +212,8 @@ export interface World {
   front: FrontNode[];
   pockets: Pocket[];
   grey: GreyZone[];
+  /** Ground the front has just passed over: contested until held (see `RulesConfig.liberateSeconds`). */
+  liberated: LiberatedCell[];
   points: CapturePoint[];
   scores: [number, number];
   winner: Team | null;

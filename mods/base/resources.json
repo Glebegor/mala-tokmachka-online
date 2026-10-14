@@ -46,5 +46,13 @@
     "color": "#e8745a",
     "start": 250,
     "cap": 99999
+  },
+  {
+    "id": "ammo",
+    "icon": "shell",
+    "name": "Ammo",
+    "color": "#e39b4f",
+    "start": 300,
+    "cap": 99999
   }
 ]

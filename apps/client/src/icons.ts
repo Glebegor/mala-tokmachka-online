@@ -5,6 +5,7 @@ const PATHS: Record<string, string> = {
   person: '<circle cx="8" cy="4.8" r="2.7" fill="currentColor"/><path d="M2.6 14.4c0-3.1 2.4-5.1 5.4-5.1s5.4 2 5.4 5.1z" fill="currentColor"/>',
   rock: '<path d="M2.5 11.5 4 6l4-3.2 4.3 2L13.6 11 9.3 13.6z" fill="currentColor"/>',
   ingot: '<path d="M4 6h8l2.4 4H1.6z" fill="currentColor"/><path d="M1 11h14v2.5H1z" fill="currentColor" opacity=".7"/>',
+  shell: '<path d="M6 1.5c1.6 0 2.6 2 2.6 4.4V12H3.4V5.9C3.4 3.5 4.4 1.5 6 1.5z" fill="currentColor"/><path d="M3 12.6h6v1.9H3z" fill="currentColor" opacity=".75"/><path d="M11 5c.9 0 1.5 1.2 1.5 2.6V12h-3V7.6C9.5 6.2 10.1 5 11 5z" fill="currentColor" opacity=".7"/><path d="M9.3 12.6h3.4v1.9H9.3z" fill="currentColor" opacity=".5"/>',
   drop: '<path d="M8 1.4S3.4 6.4 3.4 9.6a4.6 4.6 0 009.2 0C12.6 6.4 8 1.4 8 1.4z" fill="currentColor"/>',
 };
 
@@ -30,6 +31,7 @@ export const STATUS: Record<string, { name: string; icon: string; text: (v: numb
   sprint: { name: 'Sprinting', icon: '<path d="M9 1.5 3.5 9H8l-1 5.5L12.5 7H8z" fill="currentColor"/>', text: () => 'Moving at double speed: infantry tire, vehicles burn 50% more fuel.' },
   lowfuel: { name: 'Low fuel', icon: '<path d="M8 2S4 7 4 9.6a4 4 0 008 0C12 7 8 2 8 2z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M5.6 11h4.8" stroke="currentColor" stroke-width="1.5"/>', text: (v) => `Only ${pct(v)} fuel left: refuel at a filling station, fuel truck, base or (drones) an airfield.` },
   nofuel: { name: 'Out of fuel', icon: '<path d="M8 2S4 7 4 9.6a4 4 0 008 0C12 7 8 2 8 2z" fill="none" stroke="currentColor" stroke-width="1.5"/><path d="M4 4l8 9" stroke="currentColor" stroke-width="1.6"/>', text: () => 'Cannot move until refuelled. Send a fuel truck.' },
+  supplied: { name: 'Supplied', icon: '<path d="M5.5 2c1.3 0 2 1.6 2 3.4V12h-4V5.4C3.5 3.6 4.2 2 5.5 2zM10.5 2c1.3 0 2 1.6 2 3.4V12h-4V5.4C8.5 3.6 9.2 2 10.5 2z" fill="currentColor"/><path d="M3 12.8h10v1.7H3z" fill="currentColor"/>', text: (v) => `An ammo depot is in range: deals ${pct(v - 1)} more damage (each shot uses its ammo).` },
   encircled: { name: 'Encircled', icon: '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.2"/><circle cx="8" cy="8" r="2" fill="currentColor"/>', text: (v) => `Cut off in a cauldron: deals only ${pct(v)} damage and loses strength every second.` },
 };
 
