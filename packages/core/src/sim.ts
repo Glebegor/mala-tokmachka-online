@@ -358,7 +358,7 @@ export class Sim {
       }
       case 'train': {
         const b = w.buildings.find((x) => x.id === cmd.building);
-        if (!b || b.owner !== p.id || b.progress < 1) return fail('building unavailable');
+        if (!b || b.team !== p.team || b.progress < 1) return fail('building unavailable');
         const bd = this.defs.b.get(b.def)!;
         const ud = this.defs.u.get(cmd.unit);
         if (!ud || !bd.trains?.includes(ud.id)) return fail('cannot train that here');
@@ -435,7 +435,7 @@ export class Sim {
         return ok();
       }
       case 'demolish': {
-        const i = w.buildings.findIndex((x) => x.id === cmd.building && x.owner === p.id);
+        const i = w.buildings.findIndex((x) => x.id === cmd.building && x.team === p.team);
         if (i < 0) return fail('not found');
         const b = w.buildings[i];
         if (b.def === 'hq' || b.def === 'military_base') return fail('cannot demolish military base');
@@ -466,8 +466,8 @@ export class Sim {
         if (!u) return fail('unit not found');
         const ud = this.defs.u.get(u.def)!;
         if (!ud.cargoCap) return fail('not a transport');
-        const b1 = w.buildings.find((x) => x.id === cmd.fromBuilding && x.owner === p.id);
-        const b2 = w.buildings.find((x) => x.id === cmd.toBuilding && x.owner === p.id);
+        const b1 = w.buildings.find((x) => x.id === cmd.fromBuilding && x.team === p.team);
+        const b2 = w.buildings.find((x) => x.id === cmd.toBuilding && x.team === p.team);
         if (!b1 || !b2) return fail('building not found');
         const hasCargo = u.cargo && Object.values(u.cargo.res).some((v) => v > 0);
         if (hasCargo) {
@@ -524,7 +524,7 @@ export class Sim {
             let bestAirfield: LngLat | null = null;
             let bestDist = 1e9;
             for (const b of w.buildings) {
-              if (b.def === 'airfield' && b.owner === p.id && b.progress >= 1) {
+              if (b.def === 'airfield' && b.team === p.team && b.progress >= 1) {
                 const d = distKm(u.pos, b.pos);
                 if (d < bestDist) { bestDist = d; bestAirfield = b.pos; }
               }
@@ -539,7 +539,7 @@ export class Sim {
           let bestStation: LngLat | null = null;
           let bestDist = 1e9;
           for (const b of w.buildings) {
-            if ((b.def === 'gas_station' || b.def === 'military_base' || b.def === 'hq') && b.owner === p.id && b.progress >= 1) {
+            if ((b.def === 'gas_station' || b.def === 'military_base' || b.def === 'hq') && b.team === p.team && b.progress >= 1) {
               const d = distKm(u.pos, b.pos);
               if (d < bestDist) { bestDist = d; bestStation = b.pos; }
             }
@@ -748,71 +748,93 @@ export class Sim {
     const mults = new Map<number, number>();
     for (const b of done) mults.set(b.id, this.outputMult(b));
 
-    // Initialize all player income tracking maps and calculate energy net
-    for (const p of w.players) {
-      const mine = done.filter((b) => b.owner === p.id);
+    // Calculate energy net per team across all team power plants and consumers
+    const teamEnergyNet = new Map<Team, number>();
+    for (const t of [0, 1] as Team[]) {
       let net = 0;
-      for (const b of mine) {
+      for (const b of done) {
+        if (b.team !== t) continue;
         const d = this.defs.b.get(b.def)!;
         net += (d.produces?.energy ?? 0) * mults.get(b.id)! - (d.consumes?.energy ?? 0);
       }
+      teamEnergyNet.set(t, net);
+    }
+
+    // Initialize all player income tracking maps and calculate energy net
+    for (const p of w.players) {
+      const net = teamEnergyNet.get(p.team) ?? 0;
       p.res.energy = clamp((p.res.energy ?? 0) + net * dt, 0, caps.get('energy') ?? 1e9);
       this.energyNet.set(p.id, net);
       this.income.set(p.id, { energy: net, money: 0 });
     }
 
-    for (const p of w.players) {
-      const mine = done.filter((b) => b.owner === p.id);
-      const inc = this.income.get(p.id)!;
-      const net = this.energyNet.get(p.id) ?? 0;
-      const eff = p.res.energy > 0 || net >= 0 ? 1 : this.ruleset.rules.energyDeficitMult;
+    for (const b of done) {
+      if (!b.storage) b.storage = {};
+      const d = this.defs.b.get(b.def)!;
+      if (!d.produces) continue;
 
-      for (const b of mine) {
-        if (!b.storage) b.storage = {};
-        const d = this.defs.b.get(b.def)!;
-        if (!d.produces) continue;
-        const m = mults.get(b.id)! * eff;
-        let can = true;
-        for (const [k, v] of Object.entries(d.consumes ?? {})) {
-          if (k === 'energy') continue;
-          if ((b.storage[k] ?? 0) < v * dt) {
-            can = false;
-            break;
-          }
+      const teamNet = teamEnergyNet.get(b.team) ?? 0;
+      const teammates = w.players.filter((x) => x.team === b.team);
+      const hasEnergy = teammates.some((tp) => (tp.res.energy ?? 0) > 0) || teamNet >= 0;
+      const eff = hasEnergy ? 1 : this.ruleset.rules.energyDeficitMult;
+      const m = mults.get(b.id)! * eff;
+
+      let can = true;
+      for (const [k, v] of Object.entries(d.consumes ?? {})) {
+        if (k === 'energy') continue;
+        if ((b.storage[k] ?? 0) < v * dt) {
+          can = false;
+          break;
         }
-        if (!can) continue;
-        for (const [k, v] of Object.entries(d.consumes ?? {})) {
-          if (k === 'energy') continue;
-          const need = v * dt;
-          b.storage[k] = Math.max(0, (b.storage[k] ?? 0) - need);
-          inc[k] = (inc[k] ?? 0) - v;
+      }
+      if (!can) continue;
+
+      for (const [k, v] of Object.entries(d.consumes ?? {})) {
+        if (k === 'energy') continue;
+        const need = v * dt;
+        b.storage[k] = Math.max(0, (b.storage[k] ?? 0) - need);
+        for (const tp of teammates) {
+          const inc = this.income.get(tp.id);
+          if (inc) inc[k] = (inc[k] ?? 0) - v / (teammates.length || 1);
         }
-        for (const [k, v] of Object.entries(d.produces)) {
-          if (k === 'energy') continue;
-          if (k === 'money') {
-            // Profit (money) is divided equally among all players on this team
-            const teammates = w.players.filter((x) => x.team === p.team);
-            const n = teammates.length || 1;
-            const rateShare = (v * m) / n;
-            const amountShare = (v * m * dt) / n;
-            for (const tp of teammates) {
-              tp.res.money = Math.min(caps.get('money') ?? 1e9, (tp.res.money ?? 0) + amountShare);
-              const tpInc = this.income.get(tp.id);
-              if (tpInc) tpInc.money = (tpInc.money ?? 0) + rateShare;
-            }
-            continue;
+      }
+
+      for (const [k, v] of Object.entries(d.produces)) {
+        if (k === 'energy') continue;
+        if (k === 'money') {
+          // Profit (money) is divided equally among all players on this team
+          const n = teammates.length || 1;
+          const rateShare = (v * m) / n;
+          const amountShare = (v * m * dt) / n;
+          for (const tp of teammates) {
+            tp.res.money = Math.min(caps.get('money') ?? 1e9, (tp.res.money ?? 0) + amountShare);
+            const tpInc = this.income.get(tp.id);
+            if (tpInc) tpInc.money = (tpInc.money ?? 0) + rateShare;
           }
-          if (k === 'people') {
-            p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v * m * dt);
-            inc[k] = (inc[k] ?? 0) + v * m;
-            continue;
+          continue;
+        }
+        if (k === 'people') {
+          const n = teammates.length || 1;
+          const rateShare = (v * m) / n;
+          const amountShare = (v * m * dt) / n;
+          for (const tp of teammates) {
+            tp.res[k] = Math.min(caps.get(k) ?? 1e9, (tp.res[k] ?? 0) + amountShare);
+            const tpInc = this.income.get(tp.id);
+            if (tpInc) tpInc[k] = (tpInc[k] ?? 0) + rateShare;
           }
-          const cap = (b.def === 'gas_station' && k === 'fuel') ? 20000 : 30000;
-          const cur = b.storage[k] ?? 0;
-          const added = Math.min(cap - cur, v * m * dt);
-          b.storage[k] = Math.min(cap, cur + added);
-          p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + added);
-          inc[k] = (inc[k] ?? 0) + v * m;
+          continue;
+        }
+        const cap = (b.def === 'gas_station' && k === 'fuel') ? 20000 : 30000;
+        const cur = b.storage[k] ?? 0;
+        const added = Math.min(cap - cur, v * m * dt);
+        b.storage[k] = Math.min(cap, cur + added);
+        const n = teammates.length || 1;
+        const rateShare = (v * m) / n;
+        const amountShare = added / n;
+        for (const tp of teammates) {
+          tp.res[k] = Math.min(caps.get(k) ?? 1e9, (tp.res[k] ?? 0) + amountShare);
+          const tpInc = this.income.get(tp.id);
+          if (tpInc) tpInc[k] = (tpInc[k] ?? 0) + rateShare;
         }
       }
     }
@@ -893,7 +915,7 @@ export class Sim {
         let refueled = false;
         if (isReconDrone(d)) {
           for (const b of w.buildings) {
-            if (b.def === 'airfield' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 12) {
+            if (b.def === 'airfield' && b.team === u.team && b.progress >= 1 && distKm(u.pos, b.pos) <= 12) {
               const avail = b.storage?.fuel ?? 0;
               if (avail > 0) {
                 const needed = u.maxFuel - u.fuel;
@@ -908,7 +930,7 @@ export class Sim {
         } else {
           // 1. Check if near friendly gas_station (АЗС)
           for (const b of w.buildings) {
-            if (b.def === 'gas_station' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+            if (b.def === 'gas_station' && b.team === u.team && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
               const avail = b.storage?.fuel ?? 0;
               if (avail > 0) {
                 const needed = u.maxFuel - u.fuel;
@@ -939,7 +961,7 @@ export class Sim {
           // 3. Fallback: HQ emergency refuel
           if (!refueled) {
             for (const b of w.buildings) {
-              if ((b.def === 'military_base' || b.def === 'hq') && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+              if ((b.def === 'military_base' || b.def === 'hq') && b.team === u.team && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
                 const avail = b.storage?.fuel ?? 0;
                 if (avail > 0) {
                   const needed = u.maxFuel - u.fuel;
@@ -956,8 +978,8 @@ export class Sim {
 
       // Automated logistics routes for transport vehicles
       if (u.route && u.cargo) {
-        const fromB = w.buildings.find((x) => x.id === u.route!.fromBuilding && x.owner === u.owner);
-        const toB = w.buildings.find((x) => x.id === u.route!.toBuilding && x.owner === u.owner);
+        const fromB = w.buildings.find((x) => x.id === u.route!.fromBuilding && x.team === u.team);
+        const toB = w.buildings.find((x) => x.id === u.route!.toBuilding && x.team === u.team);
         if (!fromB || !toB) {
           u.route = undefined;
         } else {
@@ -1474,7 +1496,7 @@ export class Sim {
 
     const abstract: [number, number] = [0, 0];
     for (const p of w.players) {
-      const hqs = w.buildings.some((b) => b.owner === p.id && (b.def === 'military_base' || b.def === 'hq') && b.progress >= 1);
+      const hqs = w.buildings.some((b) => b.team === p.team && (b.def === 'military_base' || b.def === 'hq') && b.progress >= 1);
       if (!hqs) continue;
       abstract[p.team] += (4 + Math.sqrt(p.res.people ?? 0) + Math.sqrt(p.res.metal ?? 0)) * r.abstractPower;
     }

@@ -73,7 +73,12 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       : undefined,
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
-    queue: w.queue.filter((q) => q.owner === playerId).map((q) => ({ building: q.building, unit: q.unit, remaining: Math.round(q.remaining) })),
+    queue: w.queue
+      .filter((q) => {
+        const b = w.buildings.find((x) => x.id === q.building);
+        return b ? b.team === team : q.owner === playerId;
+      })
+      .map((q) => ({ building: q.building, unit: q.unit, remaining: Math.round(q.remaining) })),
     smokes: (w.smokes ?? [])
       .filter((s) => seen(s.pos, 2.5))
       .map((s) => ({
