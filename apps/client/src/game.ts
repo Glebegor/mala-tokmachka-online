@@ -68,6 +68,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const hint = h('div', { class: 'hint' }, 'Connecting…');
   const boxEl = h('div', { class: 'selbox' });
   const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
+  const routeBanner = h('div', { class: 'route-banner', style: { display: 'none' } });
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const basemapBtn = h('button', { class: 'ghost', onClick: () => toggleBasemap(), title: 'Toggle real map filter (M)' }, 'Map: ON');
   const leave = () => {
@@ -83,7 +84,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   app.append(
     h('div', { class: 'game' }, mapEl,
       h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
-      palette, side, groupBar, terrainChip, toasts, hint, boxEl, unitHud),
+      palette, side, groupBar, terrainChip, toasts, hint, boxEl, unitHud, routeBanner),
   );
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
@@ -353,6 +354,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('click', (e) => {
       const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
       if (performance.now() - suppressClick < 250) return; // the click that ends a box selection
+      if (routePicker) {
+        toast('Кликните по зданию на карте (или Esc для отмены)');
+        return;
+      }
       if (placing) {
         send({ type: 'build', def: placing.id, pos: p });
         if (!e.originalEvent.shiftKey) cancelPlacing();
@@ -371,6 +376,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       render();
     });
     map.on('contextmenu', (e) => {
+      if (routePicker) {
+        routePicker = null;
+        toast('Выбор маршрута отменен');
+        render();
+        return;
+      }
       if (placing) return cancelPlacing();
       if (selUnits.size) send({ type: 'move', units: [...selUnits], to: [e.lngLat.lng, e.lngLat.lat], cohesion: formation && selUnits.size > 1 });
     });
@@ -415,7 +426,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
-    if (e.key === 'Escape') return cancelPlacing();
+    if (e.key === 'Escape') {
+      if (routePicker) {
+        routePicker = null;
+        toast('Выбор маршрута отменен');
+        render();
+        return;
+      }
+      return cancelPlacing();
+    }
     const k = e.key.toLowerCase();
     if (k === 's' && selUnits.size) return void send({ type: 'stop', units: [...selUnits] });
     if (k === 't') return toggleTerrain();
@@ -639,13 +658,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function renderScore() {
     if (!init || !snap) return;
     const total = Math.max(1, snap.scores[0] + snap.scores[1]);
-    const left = Math.max(0, init.ruleset.rules.matchSeconds - snap.time);
+    const isUnlimited = (init.ruleset.rules.matchSeconds ?? 0) <= 0;
+    const timeText = isUnlimited
+      ? `${Math.floor(snap.time / 60)}:${String(Math.floor(snap.time % 60)).padStart(2, '0')}`
+      : (() => {
+          const left = Math.max(0, init.ruleset.rules.matchSeconds - snap.time);
+          return `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`;
+        })();
     const held = [0, 1].map((t) => snap!.points.filter((p) => p.owner === t).length);
     clear(scoreBar);
     scoreBar.append(
       h('div', { class: 'teams' },
         h('span', { style: { color: TEAM_COLOR[0] } }, `${TEAM_NAME[0]} ${held[0]}`),
-        h('b', {}, `${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`),
+        h('b', { title: isUnlimited ? 'Режим: До победного (без ограничения времени)' : 'Время матча' }, `${isUnlimited ? '∞ ' : ''}${timeText}`),
         h('span', { style: { color: TEAM_COLOR[1] } }, `${held[1]} ${TEAM_NAME[1]}`),
       ),
       h('div', { class: 'bar' }, h('i', { style: { width: `${(snap.scores[0] / total) * 100}%`, background: TEAM_COLOR[0] } }), h('i', { style: { width: `${(snap.scores[1] / total) * 100}%`, background: TEAM_COLOR[1] } })),
@@ -654,6 +679,36 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   const ranks = () => init!.ruleset.ranks;
   const maxHp = (u: UnitView) => (defU.get(u.def)?.hp ?? 1) * (ranks()[u.rank]?.hp ?? 1);
+
+  function computeEtaSeconds(u: UnitView, d: UnitDef): number | null {
+    if (!u.path || u.path.length === 0) return null;
+    const sprintMult = u.sprint && u.def !== 'drone' ? 2.0 : 1.0;
+    const baseSpeed = d.speed * sprintMult;
+    if (baseSpeed <= 0) return null;
+    const roadMult = d.kind === 'air' ? 1.0 : (init?.ruleset.rules.roadSpeedMult || 2.0);
+
+    let totalSec = 0;
+    let prevPos: LngLat = curPos(u);
+    for (const p of u.path) {
+      const dist = distKm(prevPos, p);
+      const isRoad = roads ? roads.isNear(p, 1.5) : false;
+      const speed = baseSpeed * (isRoad ? roadMult : 1.0);
+      totalSec += dist / speed;
+      prevPos = p;
+    }
+    return totalSec;
+  }
+
+  function formatEta(sec: number): string {
+    const s = Math.round(sec);
+    if (s < 60) return `${s}с`;
+    const m = Math.floor(s / 60);
+    const remS = s % 60;
+    if (m < 60) return remS > 0 ? `${m}м ${remS}с` : `${m}м`;
+    const h = Math.floor(m / 60);
+    const remM = m % 60;
+    return `${h}ч ${remM}м`;
+  }
 
   function renderSide() {
     if (!init || !snap) return;
@@ -741,12 +796,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const u = mine[0];
         const d = defU.get(u.def)!;
         const next = rk[u.rank + 1];
+        const eta = computeEtaSeconds(u, d);
+        let routeEtaStr: string | null = null;
+        if (u.route?.state === 'loading') {
+          routeEtaStr = `⏳ Погрузка на складе (${Math.ceil(u.route.timer ?? 5)}с)`;
+        } else if (u.route?.state === 'unloading') {
+          routeEtaStr = `⏳ Разгрузка на складе (${Math.ceil(u.route.timer ?? 4)}с)`;
+        } else if (eta !== null) {
+          const destName = u.route ? (u.route.state === 'to_to' ? 'разгрузки' : 'погрузки') : 'цели';
+          routeEtaStr = `⏱ В пути до ${destName}: ~${formatEta(eta)}`;
+        }
         side.append(
           h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, rk[u.rank]?.name ?? ''))),
           h('div', { class: 'stat' }, `HP ${u.hp}/${Math.round(maxHp(u))}`),
           h('div', { class: 'stat' }, next ? `XP ${u.xp}/${next.xp} → ${next.name}` : `XP ${u.xp} · top rank`),
           h('div', { class: 'stat muted' }, `damage ×${rk[u.rank]?.damage ?? 1} · range ×${rk[u.rank]?.range ?? 1}`),
         );
+        if (routeEtaStr) side.append(h('div', { class: 'stat', style: { color: '#38bdf8', fontWeight: 'bold' } }, routeEtaStr));
       } else {
         const by = new Map<string, UnitView[]>();
         mine.forEach((u) => by.set(u.def, [...(by.get(u.def) ?? []), u]));
@@ -754,6 +820,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const d = defU.get(k)!;
           const top = Math.max(...us.map((u) => u.rank));
           side.append(h('div', { class: 'row' }, unitIcon(d, top), h('span', { class: 'stat' }, `${us.length} × ${d.name}`, us.some((u) => u.rank > 0) ? h('small', { class: 'muted' }, ` · ${rk[top]?.name}`) : null)));
+        }
+        const moving = mine.filter((u) => u.path?.length);
+        if (moving.length > 0) {
+          const maxEta = Math.max(...moving.map((u) => computeEtaSeconds(u, defU.get(u.def)!) ?? 0));
+          if (maxEta > 0) side.append(h('div', { class: 'stat', style: { color: '#38bdf8', fontWeight: 'bold' } }, `⏱ В пути: ~${formatEta(maxEta)}`));
         }
       }
 
@@ -806,10 +877,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       ? `${dFirst?.name ?? first.def}`
       : `Выбрано: ${selectedList.length} ед.`;
 
+    const etaSec = isSingle && dFirst ? computeEtaSeconds(first, dFirst) : null;
+    let etaBadgeText: string | null = null;
+    if (first.route?.state === 'loading') {
+      etaBadgeText = `⏳ Погрузка (${Math.ceil(first.route.timer ?? 5)}с)`;
+    } else if (first.route?.state === 'unloading') {
+      etaBadgeText = `⏳ Разгрузка (${Math.ceil(first.route.timer ?? 4)}с)`;
+    } else if (etaSec !== null) {
+      const destPrefix = first.route ? (first.route.state === 'to_to' ? 'До разгрузки: ~' : 'До погрузки: ~') : 'Прибытие: ~';
+      etaBadgeText = `⏱ ${destPrefix}${formatEta(etaSec)}`;
+    }
+
     // 1. Info / Title
     const titleEl = h('div', { class: 'hud-sec' },
       isSingle && dFirst ? unitIcon(dFirst, first.rank) : null,
-      h('div', { class: 'hud-title' }, titleText),
+      h('div', {},
+        h('div', { class: 'hud-title' }, titleText),
+        etaBadgeText ? h('div', { style: { fontSize: '11px', color: '#38bdf8', fontWeight: 'bold', marginTop: '2px' } }, etaBadgeText) : null,
+      ),
     );
 
     // 2. Stop Button ("Стоп")
@@ -895,18 +980,63 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const cargoSum = Object.values(curCargo).reduce((a, b) => a + b, 0);
       const isRouteActive = !!first.route;
 
-      const routeBtn = h('button', {
-        class: 'hud-btn' + (isRouteActive ? ' active' : ''),
-        onClick: () => {
-          if (isRouteActive) {
-            send({ type: 'stop', units: [first.id] });
-            toast('Маршрут отменен');
-          } else {
+      let routeControl: HTMLElement;
+      if (routePicker && routePicker.unitId === first.id) {
+        const step = routePicker.fromBuilding ? 2 : 1;
+        const fromB = routePicker.fromBuilding ? snap.buildings.find((b) => b.id === routePicker!.fromBuilding) : null;
+        const fromDef = fromB ? defB.get(fromB.def) : null;
+
+        routeControl = h('div', { class: 'route-wizard-box' },
+          h('div', { class: 'route-wizard-header' },
+            h('span', { class: 'badge step' }, `Шаг ${step} из 2`),
+            h('span', { class: 'route-wizard-title' },
+              step === 1 ? 'Кликните склад ЗАГРУЗКИ на карте' : 'Кликните склад РАЗГРУЗКИ на карте'
+            )
+          ),
+          h('div', { class: 'route-wizard-desc' },
+            step === 1
+              ? 'Выберите ваше здание (завод, склад, АЗС), откуда забирать продукцию'
+              : `Загрузка: ${fromDef?.name ?? 'Склад'} ✅. Теперь кликните куда везти`
+          ),
+          h('button', {
+            class: 'hud-btn sm warn',
+            title: 'Отменить выбор маршрута (Esc)',
+            onClick: () => {
+              routePicker = null;
+              toast('Выбор маршрута отменен');
+              render();
+            }
+          }, '✖ Отмена (Esc)')
+        );
+      } else if (isRouteActive) {
+        const fromB = snap.buildings.find((b) => b.id === first.route?.fromBuilding);
+        const toB = snap.buildings.find((b) => b.id === first.route?.toBuilding);
+        const fromName = fromB ? (defB.get(fromB.def)?.name ?? 'Склад') : 'Склад';
+        const toName = toB ? (defB.get(toB.def)?.name ?? 'Склад') : 'Склад';
+
+        routeControl = h('div', { class: 'route-active-box' },
+          h('div', { style: { fontSize: '12px', color: '#38bdf8', fontWeight: 'bold' } },
+            `🔁 Маршрут: ${fromName} ➔ ${toName}`
+          ),
+          h('button', {
+            class: 'hud-btn sm warn',
+            onClick: () => {
+              send({ type: 'stop', units: [first.id] });
+              toast('Маршрут доставки остановлен');
+            }
+          }, '🛑 Остановить маршрут')
+        );
+      } else {
+        routeControl = h('button', {
+          class: 'hud-btn',
+          title: 'Настроить регулярный маршрут доставки между двумя складами',
+          onClick: () => {
             routePicker = { unitId: first.id };
-            toast('Кликните на здание для ЗАГРУЗКИ, затем на здание для РАЗГРУЗКИ');
+            toast('🚚 Режим маршрута: кликните склад ЗАГРУЗКИ на карте');
+            render();
           }
-        }
-      }, isRouteActive ? '🔁 Отменить маршрут' : '🗺 Задать маршрут');
+        }, '🗺 Задать маршрут');
+      }
 
       let cargoDetail = '';
       if (dFirst.fuelOnly) {
@@ -916,34 +1046,74 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         cargoDetail = `Груз: ${Math.round(cargoSum)} / ${dFirst.cargoCap} (${parts.length ? parts.join(', ') : 'пусто'})`;
       }
 
+      const passCount = first.cargo?.passengers?.length ?? 0;
+      let passDetail = '';
+      if (dFirst.passengerCap && dFirst.passengerCap > 0) {
+        passDetail = ` | Десант: ${passCount} / ${dFirst.passengerCap}`;
+      }
+
       let disembarkBtn: HTMLElement | null = null;
-      if (first.cargo?.passengers?.length) {
+      if (passCount > 0) {
         disembarkBtn = h('button', {
           class: 'hud-btn sm',
           title: 'Высадить десант рядом с машиной',
-          onClick: () => send({ type: 'disembark', transport: first.id })
-        }, 'Высадить десант');
+          onClick: () => {
+            send({ type: 'disembark', transport: first.id });
+            toast(`Десант (${passCount}) высаживается`);
+          }
+        }, `🚪 Высадить (${passCount})`);
       }
 
-      transportSec = h('div', { class: 'hud-sec' },
-        routeBtn,
-        h('span', { style: { fontSize: '11px', color: '#cbd5e1' } }, cargoDetail),
-        disembarkBtn
+      transportSec = h('div', { class: 'hud-sec', style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+        routeControl,
+        h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
+          h('span', { style: { fontSize: '11px', color: '#cbd5e1' } }, cargoDetail + passDetail),
+          disembarkBtn
+        )
       );
     }
 
-    // 7. Infantry boarding pickup
+    // 7. Infantry boarding pickup or truck
     let boardSec: HTMLElement | null = null;
-    if (isSingle && first.def === 'infantry') {
-      const nearbyPickup = snap.units.find(
-        (t) => t.owner === me && t.def === 'pickup' && (!t.cargo?.passengers || t.cargo.passengers.length === 0) && distKm(curPos(first), curPos(t)) <= 6
-      );
-      if (nearbyPickup) {
+    const selInfantry = snap.units.filter(
+      (u) => selUnits.has(u.id) && u.owner === me && u.def === 'infantry' && !u.embarkedIn
+    );
+
+    if (selInfantry.length > 0) {
+      const refPos = curPos(selInfantry[0]);
+      const transports = snap.units
+        .filter((t) => {
+          if (t.owner !== me) return false;
+          const td = defU.get(t.def);
+          if (!td || !td.passengerCap) return false;
+          const curPass = t.cargo?.passengers?.length ?? 0;
+          return curPass < td.passengerCap && distKm(refPos, curPos(t)) <= 10;
+        })
+        .map((t) => {
+          const td = defU.get(t.def)!;
+          const free = (td.passengerCap ?? 0) - (t.cargo?.passengers?.length ?? 0);
+          const dist = distKm(refPos, curPos(t));
+          return { t, td, free, dist };
+        })
+        .sort((a, b) => a.dist - b.dist);
+
+      if (transports.length > 0) {
+        const best = transports[0];
+        const countToBoard = Math.min(selInfantry.length, best.free);
+        const vehicleName = best.td.name;
+        const curCount = best.t.cargo?.passengers?.length ?? 0;
+        const maxCap = best.td.passengerCap ?? 0;
+
         boardSec = h('button', {
           class: 'hud-btn sm',
-          title: 'Сесть в пикап для быстрой перевозки',
-          onClick: () => send({ type: 'board', unit: first.id, transport: nearbyPickup.id })
-        }, '🚗 Сесть в пикап');
+          title: `Посадить пехоту (${countToBoard}) в ${vehicleName} (свободно ${best.free}/${maxCap})`,
+          onClick: () => {
+            for (let i = 0; i < countToBoard; i++) {
+              send({ type: 'board', unit: selInfantry[i].id, transport: best.t.id });
+            }
+            toast(`Пехота (${countToBoard}) садится в ${vehicleName}`);
+          }
+        }, `🚗 Сесть в ${vehicleName} (${curCount + countToBoard}/${maxCap})`);
       }
     }
 
@@ -984,7 +1154,34 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     renderUnitHud();
     renderGroups();
+    renderRouteBanner();
+    renderBuildingHighlights();
     if (mapReady) renderMap();
+  }
+
+  function renderBuildingHighlights() {
+    if (!snap) return;
+    for (const b of snap.buildings) {
+      const m = bMarkers.get(b.id);
+      if (!m) continue;
+      m.el.classList.toggle('route-candidate', !!routePicker && b.owner === me && routePicker.fromBuilding !== b.id);
+      m.el.classList.toggle('route-from', routePicker?.fromBuilding === b.id);
+    }
+  }
+
+  function renderRouteBanner() {
+    if (routePicker) {
+      if (!routePicker.fromBuilding) {
+        routeBanner.textContent = '🚚 ВЫБОР МАРШРУТА: [Шаг 1] Кликните склад ЗАГРУЗКИ на карте (Esc — отмена)';
+      } else {
+        const fromB = snap?.buildings.find((b) => b.id === routePicker!.fromBuilding);
+        const fromName = fromB ? (defB.get(fromB.def)?.name ?? 'Склад') : 'Склад';
+        routeBanner.textContent = `🚚 ВЫБОР МАРШРУТА: [Шаг 2] Загрузка: ${fromName} ➔ Кликните склад РАЗГРУЗКИ (Esc — отмена)`;
+      }
+      routeBanner.style.display = 'block';
+    } else {
+      routeBanner.style.display = 'none';
+    }
   }
 
   /** Full refresh after a local change (selection, grouping). */
@@ -992,6 +1189,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     renderSide();
     renderUnitHud();
     renderGroups();
+    renderRouteBanner();
+    renderBuildingHighlights();
     if (mapReady) renderMap();
   }
 
@@ -1103,22 +1302,33 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div>`;
         el.querySelector('.glyph')!.textContent = d.icon;
         el.addEventListener('click', (ev) => {
-          if (placing || b.owner !== me) return;
-          ev.stopPropagation();
+          if (placing) return;
           if (routePicker) {
+            ev.stopPropagation();
+            if (b.owner !== me) {
+              toast('Маршрут можно задавать только между вашими зданиями!', true);
+              return;
+            }
             if (!routePicker.fromBuilding) {
               routePicker.fromBuilding = b.id;
-              toast(`Точка загрузки: ${d.name}. Теперь кликните здание для РАЗГРУЗКИ.`);
+              toast(`Точка 1 (Загрузка): ${d.name}. Теперь кликните склад РАЗГРУЗКИ.`);
+              render();
             } else if (routePicker.fromBuilding === b.id) {
-              toast('Точка разгрузки не может совпадать с точкой загрузки!', true);
+              toast('Точка разгрузки не может совпадать с точкой загрузки! Выберите другое здание.', true);
             } else {
-              send({ type: 'setRoute', unit: routePicker.unitId, fromBuilding: routePicker.fromBuilding, toBuilding: b.id });
-              toast('Маршрут логистики запущен! Транспорт курсирует автоматически.');
+              const fromId = routePicker.fromBuilding;
+              const unitId = routePicker.unitId;
+              const fromB = snap ? snap.buildings.find((x) => x.id === fromId) : null;
+              const fromName = fromB ? (defB.get(fromB.def)?.name ?? 'Склад') : 'Склад';
+              send({ type: 'setRoute', unit: unitId, fromBuilding: fromId, toBuilding: b.id });
+              toast(`Маршрут настроен: ${fromName} ➔ ${d.name}! Машина отправляется.`);
               routePicker = null;
               render();
             }
             return;
           }
+          if (b.owner !== me) return;
+          ev.stopPropagation();
           selBuilding = b.id;
           selUnits.clear();
           render();
@@ -1132,6 +1342,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       m.el.classList.toggle('building', !done);
       m.el.classList.toggle('mine', b.owner === me);
       m.el.classList.toggle('selected', selBuilding === b.id);
+      m.el.classList.toggle('route-candidate', !!routePicker && b.owner === me && routePicker.fromBuilding !== b.id);
+      m.el.classList.toggle('route-from', routePicker?.fromBuilding === b.id);
       m.el.style.setProperty('--p', String(b.progress));
       if (done && !m.done) {
         m.done = true;

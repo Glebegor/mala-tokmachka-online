@@ -1,7 +1,7 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, type LngLat } from './geo';
-import { buildFront, distToFrontKm, normalAt, pocketCentroid, pocketRadiusKm, resample, resolveFrontLoops, sideOf, sideOfWithPockets } from './frontline';
+import { buildFront, distToFrontKm, normalAt, pocketCentroid, pocketRadiusKm, pointInPolygon, resample, resolveFrontLoops, sideOf, sideOfWithPockets } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import type { Building, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
@@ -19,6 +19,7 @@ export class Sim {
   readonly roads: RoadNetwork | null;
   readonly terrain: TerrainGrid | null;
   readonly ranks: RankDef[];
+  readonly forbiddenRings: LngLat[][] = [];
   world: World;
   energyNet = new Map<string, number>();
   /** Net production per second for each player and resource (spending excluded). */
@@ -43,6 +44,45 @@ export class Sim {
     this.map = map;
     this.roads = map.roads?.length ? new RoadNetwork(map.roads) : null;
     this.terrain = map.terrain ? new TerrainGrid(map.terrain) : null;
+
+    // Build foreign non-playable country borders (Belarus, Moldova, Western Europe)
+    const rings: LngLat[][] = [];
+    if (map.borders?.features) {
+      const byName: Record<string, LngLat[]> = {};
+      for (const f of map.borders.features) {
+        if (f.properties?.type === 'border' && f.geometry?.coordinates) {
+          byName[f.properties.name] = f.geometry.coordinates;
+        }
+      }
+      if (byName['Ukraine — Belarus'] && byName['Belarus — Russia'] && byName['Poland — Belarus'] && byName['Lithuania — Belarus']) {
+        rings.push([
+          ...byName['Ukraine — Belarus'],
+          ...byName['Belarus — Russia'].slice(1),
+          [26.595, 55.667],
+          ...[...byName['Lithuania — Belarus']].reverse().slice(1),
+          ...[...byName['Poland — Belarus']].reverse().slice(1),
+        ]);
+      }
+      if (byName['Ukraine — Moldova'] && byName['Moldova — Romania']) {
+        rings.push([
+          ...byName['Ukraine — Moldova'],
+          ...[...byName['Moldova — Romania']].reverse().slice(1),
+        ]);
+      }
+      if (byName['Ukraine — Poland'] && byName['Ukraine — Slovakia'] && byName['Ukraine — Hungary'] && byName['Ukraine — Romania']) {
+        rings.push([
+          [21.0, 52.0],
+          ...[...byName['Ukraine — Poland']].reverse(),
+          ...[...byName['Ukraine — Slovakia']].reverse().slice(1),
+          ...byName['Ukraine — Hungary'].slice(1),
+          ...byName['Ukraine — Romania'].slice(1),
+          [26.618, 44.0],
+          [21.0, 44.0],
+        ]);
+      }
+    }
+    this.forbiddenRings = rings;
+
     this.world = this.createWorld(slots);
   }
 
@@ -94,7 +134,7 @@ export class Sim {
     const storage: Record<string, number> = {
       metal: 500,
       fuel: 500,
-      ore: 500,
+      ore: def === 'metalworks' ? 0 : 500,
     };
     const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, storage };
     this.world.buildings.push(b);
@@ -143,9 +183,18 @@ export class Sim {
     return (this.terrain && this.defs.t.get(this.terrain.at(p))) || OPEN_GROUND;
   }
 
+  isPlayableGround(p: LngLat, onRoad = false): boolean {
+    if (!onRoad && this.terrainAt(p).id === 'water') return false;
+    for (const ring of this.forbiddenRings) {
+      if (pointInPolygon(p, ring)) return false;
+    }
+    return true;
+  }
+
   /** Off-road speed multiplier for a unit type at a position. */
   terrainSpeed(d: UnitDef, p: LngLat): number {
     if (d.kind === 'air') return 1;
+    if (!this.isPlayableGround(p, false)) return 0;
     const t = this.terrainAt(p);
     return t.speed[d.mobility ?? 'foot'] ?? t.speed.default ?? 1;
   }
@@ -336,9 +385,15 @@ export class Sim {
   /** Plan routes: ground units take roads when that is quicker, then spread out around the destination. */
   private orderMove(units: Unit[], to: LngLat, cohesion: boolean) {
     if (!units.length) return;
+    const ground = units.filter((u) => this.defs.u.get(u.def)!.kind !== 'air');
+    if (ground.length) {
+      const nearRoad = this.roads?.isNear(to, 2) ?? false;
+      if (!this.isPlayableGround(to, nearRoad)) {
+        return; // Ground units cannot enter water or foreign non-playable countries
+      }
+    }
     const mult = this.ruleset.rules.roadSpeedMult;
     const cap = cohesion ? Math.min(...units.map((u) => this.defs.u.get(u.def)!.speed)) : 0;
-    const ground = units.filter((u) => this.defs.u.get(u.def)!.kind !== 'air');
     let shared: LngLat[] = [];
     let centre: LngLat = to;
     if (ground.length && this.roads) {
@@ -391,7 +446,7 @@ export class Sim {
     this.checkVictory();
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
-    if (w.time >= r.matchSeconds && w.winner === null) {
+    if (r.matchSeconds > 0 && w.time >= r.matchSeconds && w.winner === null) {
       w.winner = w.scores[0] === w.scores[1] ? null : w.scores[0] > w.scores[1] ? 0 : 1;
       w.winReason = 'time limit';
     }
@@ -443,15 +498,17 @@ export class Sim {
         const m = mults.get(b.id)! * eff;
         let can = true;
         for (const [k, v] of Object.entries(d.consumes ?? {})) {
-          if (k !== 'energy' && (b.storage[k] ?? 0) < v * dt && (p.res[k] ?? 0) < v * dt) can = false;
+          if (k === 'energy') continue;
+          if ((b.storage[k] ?? 0) < v * dt) {
+            can = false;
+            break;
+          }
         }
         if (!can) continue;
         for (const [k, v] of Object.entries(d.consumes ?? {})) {
           if (k === 'energy') continue;
           const need = v * dt;
-          const fromStor = Math.min(b.storage[k] ?? 0, need);
-          b.storage[k] = (b.storage[k] ?? 0) - fromStor;
-          p.res[k] = Math.max(0, (p.res[k] ?? 0) - need);
+          b.storage[k] = Math.max(0, (b.storage[k] ?? 0) - need);
           inc[k] = (inc[k] ?? 0) - v;
         }
         for (const [k, v] of Object.entries(d.produces)) {
@@ -594,6 +651,13 @@ export class Sim {
 
           if (u.route.state === 'to_from' || !u.route.state) {
             if (dFrom <= 3.5 || !u.path.length) {
+              u.route.state = 'loading';
+              u.route.timer = 5.0; // 5 seconds loading duration
+              u.path = [];
+            }
+          } else if (u.route.state === 'loading') {
+            u.route.timer = (u.route.timer ?? 5.0) - dt;
+            if (u.route.timer <= 0) {
               if (!fromB.storage) fromB.storage = {};
               if (!u.cargo.res) u.cargo.res = {};
               let curTotal = Object.values(u.cargo.res).reduce((a, b) => a + b, 0);
@@ -620,10 +684,18 @@ export class Sim {
                 }
               }
               u.route.state = 'to_to';
+              u.route.timer = undefined;
               this.orderMove([u], toB.pos, false);
             }
           } else if (u.route.state === 'to_to') {
             if (dTo <= 3.5 || !u.path.length) {
+              u.route.state = 'unloading';
+              u.route.timer = 4.0; // 4 seconds unloading duration
+              u.path = [];
+            }
+          } else if (u.route.state === 'unloading') {
+            u.route.timer = (u.route.timer ?? 4.0) - dt;
+            if (u.route.timer <= 0) {
               if (!toB.storage) toB.storage = {};
               const cap = toB.def === 'gas_station' ? 20000 : 30000;
               if (u.cargo.res) {
@@ -633,6 +705,7 @@ export class Sim {
                 u.cargo.res = {};
               }
               u.route.state = 'to_from';
+              u.route.timer = undefined;
               this.orderMove([u], fromB.pos, false);
             }
           }
@@ -690,7 +763,10 @@ export class Sim {
           const dist = distKm(u.pos, e.pos);
           if (dist < near) (near = dist), (chase = e.pos);
         }
-        if (chase) u.pos = moveToward(u.pos, chase, d.speed * this.terrainSpeed(d, u.pos) * dt);
+        if (chase && (d.kind === 'air' || this.isPlayableGround(chase, false))) {
+          const nextPos = moveToward(u.pos, chase, d.speed * this.terrainSpeed(d, u.pos) * dt);
+          if (d.kind === 'air' || this.isPlayableGround(nextPos, false)) u.pos = nextPos;
+        }
       }
     }
     if (this.shots.length > 4000) this.shots.splice(0, this.shots.length - 4000);
@@ -725,16 +801,27 @@ export class Sim {
     for (let guard = 0; budget > 1e-6 && u.path.length && guard < 32; guard++) {
       const wp = u.path[0];
       const speed = base * (wp.road ? roadMult : this.terrainSpeed(d, u.pos));
+      if (speed <= 0) {
+        u.path = [];
+        u.target = null;
+        break;
+      }
       const dist = distKm(u.pos, wp.p);
+      const nextPos: LngLat = speed * budget >= dist ? [wp.p[0], wp.p[1]] : moveToward(u.pos, wp.p, speed * budget);
+      if (d.kind !== 'air' && !this.isPlayableGround(nextPos, wp.road)) {
+        u.path = [];
+        u.target = null;
+        break;
+      }
       if (speed * budget >= dist) {
         totalMovedKm += dist;
-        u.pos = [wp.p[0], wp.p[1]];
+        u.pos = nextPos;
         budget -= dist / speed;
         u.path.shift();
       } else {
         const moved = speed * budget;
         totalMovedKm += moved;
-        u.pos = moveToward(u.pos, wp.p, moved);
+        u.pos = nextPos;
         budget = 0;
       }
     }

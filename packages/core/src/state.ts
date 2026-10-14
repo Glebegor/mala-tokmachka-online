@@ -33,6 +33,7 @@ export interface UnitRoute {
   fromBuilding: number;
   toBuilding: number;
   state?: 'to_from' | 'loading' | 'to_to' | 'unloading';
+  timer?: number;
 }
 
 export interface Unit {

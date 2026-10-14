@@ -104,7 +104,7 @@ export class Match {
         if (p) conn.send(snapshotFor(sim, pid, p.team, shots));
       }
     }
-    if (sim.world.winner !== null || sim.world.time >= sim.ruleset.rules.matchSeconds) {
+    if (sim.world.winner !== null || (sim.ruleset.rules.matchSeconds > 0 && sim.world.time >= sim.ruleset.rules.matchSeconds)) {
       if (!this.ended) {
         this.ended = true;
         this.broadcast({ t: 'end', winner: sim.world.winner, reason: sim.world.winReason ?? 'match over' });

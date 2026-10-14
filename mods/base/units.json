@@ -61,7 +61,7 @@
     "fx": "burst",
     "missRate": 0.5,
     "cargoCap": 3000,
-    "passengerCap": 0,
+    "passengerCap": 4,
     "maxFuel": 120
   },
   {
