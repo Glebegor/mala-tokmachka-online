@@ -74,11 +74,14 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 .cp-hp-ghost { position: absolute; top: 0; left: 0; height: 100%; width: 100%; background: #ffffff; transition: width 0.5s ease-out 0.25s; }
 .cp-hp-fill { position: absolute; top: 0; left: 0; height: 100%; width: 100%; background: #22c55e; transition: width 0.15s ease-out, background 0.3s ease; }
 
+/* zone popups: never intercept clicks or mouse events */
+.zone-popup-wrap, .zone-popup-wrap * { pointer-events: none !important; }
+
 /* buildings: blueprint → construction ring → completion pulse */
-.bm { --p: 0; --c: var(--team0); position: relative; width: calc(34px * var(--s)); height: calc(34px * var(--s)); cursor: pointer; }
+.bm { --p: 0; --c: var(--team0); position: relative; width: calc(34px * var(--s)); height: calc(34px * var(--s)); cursor: pointer; z-index: 5; }
 .bm.t1 { --c: var(--team1); }
 .bm .glyph { position: absolute; inset: 0; display: grid; place-items: center; font-size: calc(17px * var(--s)); color: var(--c); background: rgba(11,13,16,.82); border: 1px solid color-mix(in srgb, var(--c) 70%, transparent); border-radius: 3px; transition: opacity .3s; }
-.bm.building .glyph { opacity: calc(.25 + var(--p) * .5); border-style: dashed; animation: scan 1.6s linear infinite; }
+.bm.building .glyph { opacity: calc(.55 + var(--p) * .45); border-style: dashed; animation: scan 1.6s linear infinite; }
 .bm .blueprint { position: absolute; inset: -5px; border: 1px dashed var(--c); opacity: 0; border-radius: 4px; }
 .bm.building .blueprint { opacity: .7; animation: bp 2.2s ease-in-out infinite; }
 .bm .ring { position: absolute; inset: -7px; width: calc(100% + 14px); height: calc(100% + 14px); transform: rotate(-90deg); opacity: 0; }

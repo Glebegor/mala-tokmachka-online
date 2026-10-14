@@ -538,6 +538,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
       let zonePopup: maplibregl.Popup | null = null;
       map.on('mouseenter', 'special-zones-fill', (e) => {
+        if (placing) return;
         map.getCanvas().style.cursor = 'pointer';
         const f = e.features?.[0];
         if (!f?.properties) return;
@@ -545,7 +546,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const title = f.properties.bonusTitle;
         const desc = f.properties.bonusDesc;
         if (!zonePopup) {
-          zonePopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12 });
+          zonePopup = new maplibregl.Popup({ closeButton: false, closeOnClick: false, offset: 12, className: 'zone-popup-wrap' });
         }
         zonePopup
           .setLngLat(e.lngLat)
@@ -557,10 +558,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           .addTo(map);
       });
       map.on('mousemove', 'special-zones-fill', (e) => {
+        if (placing) {
+          if (zonePopup) {
+            zonePopup.remove();
+            zonePopup = null;
+          }
+          return;
+        }
         if (zonePopup) zonePopup.setLngLat(e.lngLat);
       });
       map.on('mouseleave', 'special-zones-fill', () => {
-        map.getCanvas().style.cursor = '';
+        if (!placing) map.getCanvas().style.cursor = '';
         if (zonePopup) {
           zonePopup.remove();
           zonePopup = null;
@@ -883,6 +891,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.setLayoutProperty('osm', 'visibility', next);
     basemapBtn.classList.toggle('on', next === 'none');
     basemapBtn.textContent = next === 'none' ? 'Map: OFF' : 'Map: ON';
+    renderFog();
   }
   function showTerrain(p: LngLat) {
     if (!terrain || !init) return;
@@ -950,14 +959,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       return;
     }
     const r = init.ruleset.rules.minBuildSpacing; // 35 km
-    // Housing blocks never project a 35km restriction zone
+    // Housing blocks never project a 35km restriction zone; special zone buildings use 0.5km
     const features = snap.buildings
       .filter((b) => b.def !== 'housing')
-      .map((b) => ({
-        type: 'Feature',
-        properties: {},
-        geometry: { type: 'Polygon', coordinates: [circle(b.pos, r, 64)] },
-      }));
+      .map((b) => {
+        const inSpec = isAlabugaDroneZone(b.pos) || isKremenchukRefinery(b.pos);
+        return {
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'Polygon', coordinates: [circle(b.pos, inSpec ? 0.5 : r, 64)] },
+        };
+      });
     (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData({
       type: 'FeatureCollection',
       features,
@@ -982,8 +994,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function placementProblem(def: BuildingDef, p: LngLat): string | null {
     if (!init || !snap) return 'not ready';
     const r = init.ruleset.rules;
-    const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
-    if (d < 0) return 'not your territory';
+    const inSpecial = isAlabugaDroneZone(p) || isKremenchukRefinery(p);
+    if (isAlabugaDroneZone(p)) {
+      if (init.team !== 1) return 'Зона «Алабуга» доступна только стороне РФ';
+    } else if (isKremenchukRefinery(p)) {
+      if (init.team !== 0) return 'Кременчугский НПЗ доступен только стороне Украины';
+    } else {
+      if (sideOfWithPockets(snap.front, snap.pockets, p) !== init.team) return 'not your territory';
+      const d = Math.abs(distToFrontKm(snap.front, p));
+      if (def.id !== 'housing' && d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
+    }
+    const minSpacing = inSpecial ? 0.5 : r.minBuildSpacing;
     if (def.id === 'housing') {
       const cityCp = init.map.capturePoints.find((cp) => isPosInCity(p, cp, cityPolys));
       if (!cityCp) return 'Строительство доступно только в серых зонах городов!';
@@ -993,8 +1014,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (cityHouses.length >= 10) return 'В этом городе уже построен максимум (10) домов!';
       if (snap.buildings.some((b) => b.def === 'housing' && distKm(b.pos, p) < 0.08)) return 'Слишком близко к другому дому (мин 80м)';
     } else {
-      if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
-      if (snap.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, p) < r.minBuildSpacing)) return `too close to another building (min ${r.minBuildSpacing}km)`;
+      if (snap.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, p) < minSpacing)) return `too close to another building (min ${minSpacing}km)`;
     }
     if (terrain?.at(p) === 'water') return 'cannot build on water';
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
@@ -2037,9 +2057,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (myTeam !== 0 && myTeam !== 1) return; // Spectator: clear map
     if (gameOver) return; // Victory: full visibility
 
-    // Tactical dark shroud across the map (70% lighter)
+    // Tactical shroud across the map: clearly visible in Map: OFF mode and Map: ON mode
     g.globalCompositeOperation = 'source-over';
-    g.fillStyle = 'rgba(8, 14, 26, 0.195)';
+    const isMapOff = !map.getLayer('osm') || map.getLayoutProperty('osm', 'visibility') === 'none';
+    g.fillStyle = isMapOff ? 'rgba(3, 7, 18, 0.78)' : 'rgba(6, 12, 24, 0.38)';
     g.fillRect(0, 0, w, h);
 
     // Punch soft-feathered vision holes using destination-out
