@@ -239,6 +239,44 @@ export class RoadNetwork {
     return this.smoothWaypoints(bestP.nodes.map((id) => this.nodes[id]));
   }
 
+  /**
+   * Find power line route connecting `from` and `to` strictly along the road network.
+   * If no road connection exists, returns empty array (no direct cross-country line).
+   */
+  powerRoute(from: LngLat, to: LngLat, accessKm = 30): LngLat[] {
+    const fromNodes = this.nearestCandidates(from, accessKm, 4);
+    const toNodes = this.nearestCandidates(to, accessKm, 4);
+    if (!fromNodes.length || !toNodes.length) return [];
+
+    let bestP: { nodes: number[]; km: number } | null = null;
+    let bestDist = Infinity;
+
+    for (const a of fromNodes) {
+      const accessFrom = distKm(from, this.nodes[a]);
+      for (const b of toNodes) {
+        if (a === b) {
+          const totalD = accessFrom + distKm(this.nodes[b], to);
+          if (totalD < bestDist) {
+            bestDist = totalD;
+            bestP = { nodes: [a], km: 0 };
+          }
+          continue;
+        }
+        const p = this.path(a, b);
+        if (!p) continue;
+        const totalD = accessFrom + p.km + distKm(this.nodes[b], to);
+        if (totalD < bestDist) {
+          bestDist = totalD;
+          bestP = p;
+        }
+      }
+    }
+
+    if (!bestP) return [];
+    const pts = this.smoothWaypoints(bestP.nodes.map((id) => this.nodes[id]));
+    return [from, ...pts, to];
+  }
+
   private smoothWaypoints(pts: LngLat[]): LngLat[] {
     if (pts.length <= 2) return pts;
     const res: LngLat[] = [pts[0]];
