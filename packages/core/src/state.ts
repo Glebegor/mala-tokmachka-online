@@ -21,6 +21,7 @@ export interface Building {
   progress: number; // 0..1, 1 = complete
   road: boolean; // connected to the road network
   storage?: Record<string, number>; // local resource storage (max 30,000 per resource)
+  lastDamagedTime?: number;
 }
 
 export interface UnitCargo {
@@ -61,6 +62,7 @@ export interface Unit {
   route?: UnitRoute;
   embarkedIn?: number; // transport unit ID carrying this passenger
   loiterCenter?: LngLat;
+  loiterRadius?: number;
   loiterAngle?: number;
 }
 
@@ -108,6 +110,9 @@ export interface Pocket {
 export interface CapturePoint {
   id: string;
   owner: Team;
+  hp?: number;
+  maxHp?: number;
+  lastDamagedTime?: number;
 }
 
 export interface World {

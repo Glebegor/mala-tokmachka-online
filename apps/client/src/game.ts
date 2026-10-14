@@ -419,9 +419,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'icon-rotation-alignment': 'map',
           'icon-size': [
             'interpolate', ['linear'], ['zoom'],
-            4, ['*', ['coalesce', ['get', 'scale'], 1], 0.35],
-            8, ['*', ['coalesce', ['get', 'scale'], 1], 0.55],
-            11, ['*', ['coalesce', ['get', 'scale'], 1], 0.8]
+            4, ['*', ['coalesce', ['get', 'scale'], 1], 0.14],
+            8, ['*', ['coalesce', ['get', 'scale'], 1], 0.22],
+            11, ['*', ['coalesce', ['get', 'scale'], 1], 0.32]
           ],
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
@@ -1417,8 +1417,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             const dx = (targetPos[0] - pos[0]) * Math.cos((pos[1] * Math.PI) / 180);
             const dy = targetPos[1] - pos[1];
             if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
-              bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
-              droneBearings.set(u.id, bearing);
+              const targetBearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+              let prev = droneBearings.get(u.id);
+              if (prev === undefined) prev = targetBearing;
+              let diff = (targetBearing - prev) % 360;
+              if (diff > 180) diff -= 360;
+              if (diff < -180) diff += 360;
+              const currentBearing = prev + diff * 0.2;
+              droneBearings.set(u.id, currentBearing);
+              bearing = currentBearing;
             } else {
               bearing = droneBearings.get(u.id) ?? 0;
             }
@@ -1495,9 +1502,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // one formation marker per group (shown when zoomed out)
     const formations: any[] = [];
     for (const g of groups.values()) {
-      const us = snap.units.filter((u) => g.ids.has(u.id));
+      const us = snap.units.filter((u) => g.ids.has(u.id) && defU.get(u.def)?.kind !== 'air');
       const c = centroid(us);
-      if (!c) continue;
+      if (!c || !us.length) continue;
       const kinds = new Set(us.map((u) => defU.get(u.def)?.symbol ?? 'infantry'));
       const symbol = kinds.size === 1 ? [...kinds][0] : kinds.has('armor') && kinds.has('infantry') ? 'mechanized' : [...kinds].sort((a, b) => us.filter((u) => defU.get(u.def)?.symbol === b).length - us.filter((u) => defU.get(u.def)?.symbol === a).length)[0];
       const sel = us.every((u) => selUnits.has(u.id)) && selUnits.size === us.length;
@@ -1507,7 +1514,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // zoomed out, everything else is merged into formation markers per ~30 km cell (mine / allied / hostile kept apart)
     const cells = new Map<string, UnitView[]>();
     for (const u of snap.units) {
-      if (grouped.has(u.id)) continue;
+      if (grouped.has(u.id) || defU.get(u.def)?.kind === 'air') continue;
       const key = `${u.team}|${u.owner === me ? 1 : 0}|${Math.floor(u.pos[0] / 0.36)}|${Math.floor(u.pos[1] / 0.24)}`;
       const list = cells.get(key);
       list ? list.push(u) : cells.set(key, [u]);
@@ -1634,7 +1641,32 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
     }
 
-    snap.points.forEach((p) => pMarkers.get(p.id)?.style.setProperty('--c', TEAM_COLOR[p.owner]));
+    snap.points.forEach((p) => {
+      const el = pMarkers.get(p.id);
+      if (!el) return;
+      el.style.setProperty('--c', TEAM_COLOR[p.owner]);
+      if (p.hp !== undefined && p.maxHp !== undefined) {
+        let hpBar = el.querySelector('.cp-hp') as HTMLElement;
+        if (p.hp < p.maxHp) {
+          if (!hpBar) {
+            hpBar = h('div', { class: 'cp-hp' }, h('div', { class: 'cp-hp-fill' }));
+            el.appendChild(hpBar);
+          }
+          const fill = hpBar.querySelector('.cp-hp-fill') as HTMLElement;
+          if (fill) {
+            const pct = Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100));
+            fill.style.width = `${pct}%`;
+            if (pct < 35) fill.style.background = '#ef4444';
+            else if (pct < 70) fill.style.background = '#eab308';
+            else fill.style.background = '#22c55e';
+          }
+        } else if (hpBar) {
+          hpBar.remove();
+        }
+        const nameSpan = el.querySelector('span');
+        el.title = `${nameSpan?.textContent ?? p.id} · ${Math.round(p.hp)} / ${p.maxHp} HP`;
+      }
+    });
   }
 
   // ---------- animation loop (60 FPS interpolation between 5 Hz snapshots) ----------

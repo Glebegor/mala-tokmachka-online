@@ -1,10 +1,10 @@
 import type { Command, CommandResult } from './commands';
-import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
+import type { BuildingDef, CapturePointDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
 import { buildFront, distToFrontKm, normalAt, pocketCentroid, pocketRadiusKm, pointInPolygon, resample, resolveFrontLoops, sideOf, sideOfWithPockets } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
-import type { Building, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
+import type { Building, CapturePoint, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
@@ -20,6 +20,7 @@ export class Sim {
   readonly terrain: TerrainGrid | null;
   readonly ranks: RankDef[];
   readonly forbiddenRings: LngLat[][] = [];
+  readonly cityPolys = new Map<string, LngLat[][]>();
   world: World;
   energyNet = new Map<string, number>();
   /** Net production per second for each player and resource (spending excluded). */
@@ -83,6 +84,30 @@ export class Sim {
     }
     this.forbiddenRings = rings;
 
+    if (map.cities?.features) {
+      for (const f of map.cities.features) {
+        const cityId = f.properties?.cityId;
+        if (!cityId) continue;
+        if (f.geometry?.type === 'Polygon') {
+          const poly = f.geometry.coordinates?.[0] as LngLat[];
+          if (poly) {
+            const list = this.cityPolys.get(cityId) ?? [];
+            list.push(poly);
+            this.cityPolys.set(cityId, list);
+          }
+        } else if (f.geometry?.type === 'MultiPolygon') {
+          for (const polyCoords of f.geometry.coordinates) {
+            const poly = polyCoords?.[0] as LngLat[];
+            if (poly) {
+              const list = this.cityPolys.get(cityId) ?? [];
+              list.push(poly);
+              this.cityPolys.set(cityId, list);
+            }
+          }
+        }
+      }
+    }
+
     this.world = this.createWorld(slots);
   }
 
@@ -105,7 +130,11 @@ export class Sim {
       queue: [],
       front: buildFront(this.map.front, r.frontNodeSpacingKm),
       pockets: [],
-      points: this.map.capturePoints.map((p) => ({ id: p.id, owner: 0 as Team })),
+      points: this.map.capturePoints.map((p) => {
+        const val = Math.max(1, Math.min(5, p.value ?? 1));
+        const maxHp = 8000 + (val - 1) * 3000;
+        return { id: p.id, owner: 0 as Team, hp: maxHp, maxHp, lastDamagedTime: -100 };
+      }),
       scores: [0, 0],
       winner: null,
       winReason: null,
@@ -189,6 +218,37 @@ export class Sim {
       if (pointInPolygon(p, ring)) return false;
     }
     return true;
+  }
+
+  isPosInCity(pos: LngLat, cp: { id: string; pos: LngLat; value?: number }): boolean {
+    const val = Math.max(1, Math.min(5, cp.value ?? 1));
+    const rKm = val === 5 ? 12 : val === 4 ? 8 : val === 3 ? 5 : val === 2 ? 3.5 : 2.5;
+    // Fast degree check before calculating distKm
+    if (Math.abs(pos[1] - cp.pos[1]) > 0.15) return false;
+    const d = distKm(pos, cp.pos);
+    if (d > rKm * 1.5) return false;
+    const polys = this.cityPolys.get(cp.id);
+    if (polys) {
+      for (const p of polys) {
+        if (pointInPolygon(pos, p)) return true;
+      }
+    }
+    return d <= rKm;
+  }
+
+  cityDefenseBonus(team: Team, pos: LngLat): number {
+    let maxBonus = 0;
+    for (const cp of this.map.capturePoints) {
+      const pt = this.world.points.find((p) => p.id === cp.id);
+      if (!pt || pt.owner !== team) continue;
+      if (Math.abs(pos[1] - cp.pos[1]) > 0.22) continue;
+      const d = distKm(pos, cp.pos);
+      if (d <= 20) {
+        const bonus = d <= 10 ? 0.5 : 0.5 - 0.4 * ((d - 10) / 10);
+        if (bonus > maxBonus) maxBonus = bonus;
+      }
+    }
+    return maxBonus;
   }
 
   /** Off-road speed multiplier for a unit type at a position. */
@@ -409,6 +469,7 @@ export class Sim {
         u.target = to;
         u.cap = 0;
         u.loiterCenter = undefined;
+        u.loiterRadius = undefined;
         u.loiterAngle = undefined;
         return;
       }
@@ -417,10 +478,12 @@ export class Sim {
         u.target = to;
         u.cap = 0;
         u.loiterCenter = to;
-        u.loiterAngle = 0;
+        u.loiterRadius = d.id === 'drone_mini_shark' ? 2.2 : 3.2;
+        u.loiterAngle = undefined;
         return;
       }
       u.loiterCenter = undefined;
+      u.loiterRadius = undefined;
       u.loiterAngle = undefined;
       const ring = Math.ceil(Math.sqrt(i));
       const dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
@@ -460,6 +523,7 @@ export class Sim {
     this.economy(dt);
     this.training(dt);
     this.units(dt);
+    this.repairs(dt);
     this.frontline(dt);
     this.territory(dt);
     this.checkVictory();
@@ -775,13 +839,15 @@ export class Sim {
         let dealt: number;
         if (tu) {
           const cover = this.defs.u.get(tu.def)!.kind === 'air' ? 0 : this.terrainAt(tu.pos).cover;
-          dealt = (base * (1 - cover)) / this.holdMult(tu.team, tu.pos);
+          const cityDef = this.cityDefenseBonus(tu.team, tu.pos);
+          dealt = (base * (1 - cover) * (1 - cityDef)) / this.holdMult(tu.team, tu.pos);
           tu.hp -= dealt;
           this.shots.push({ def: u.def, team: u.team, from: u.pos, to: tu.pos });
           if (tu.hp <= 0) u.xp += r.xpPerKill;
         } else {
           dealt = base / this.holdMult(tb!.team, tb!.pos);
           tb!.hp -= dealt;
+          tb!.lastDamagedTime = this.world.time;
           this.shots.push({ def: u.def, team: u.team, from: u.pos, to: tb!.pos });
         }
         u.xp += dealt * r.xpPerDamage;
@@ -791,7 +857,9 @@ export class Sim {
       // movement: explicit orders follow their route; idle units close with enemies they can see
       if (u.path.length) {
         this.advance(u, d, dt);
-      } else if (!tu && !tb && canFire && !u.route) {
+      } else if (d.droneType === 'recon' && u.loiterCenter) {
+        this.advance(u, d, dt);
+      } else if (d.kind !== 'air' && !tu && !tb && canFire && !u.route) {
         let chase: LngLat | null = null;
         let near = d.vision * 0.7;
         for (const e of w.units) {
@@ -799,9 +867,9 @@ export class Sim {
           const dist = distKm(u.pos, e.pos);
           if (dist < near) (near = dist), (chase = e.pos);
         }
-        if (chase && (d.kind === 'air' || this.isPlayableGround(chase, false))) {
+        if (chase && this.isPlayableGround(chase, false)) {
           const nextPos = moveToward(u.pos, chase, d.speed * this.terrainSpeed(d, u.pos) * dt);
-          if (d.kind === 'air' || this.isPlayableGround(nextPos, false)) u.pos = nextPos;
+          if (this.isPlayableGround(nextPos, false)) u.pos = nextPos;
         }
       }
     }
@@ -828,6 +896,27 @@ export class Sim {
   private advance(u: Unit, d: UnitDef, dt: number) {
     if (u.fuel !== undefined && u.fuel <= 0) {
       return; // out of fuel
+    }
+    if (d.droneType === 'recon' && u.loiterCenter) {
+      const rKm = u.loiterRadius ?? (d.id === 'drone_mini_shark' ? 2.2 : 3.2);
+      const dToCenter = distKm(u.pos, u.loiterCenter);
+      if (u.path.length && dToCenter > rKm * 1.1) {
+        // Continue flying towards the loiter center
+      } else {
+        if (u.loiterAngle === undefined) {
+          const dx = (u.pos[0] - u.loiterCenter[0]) * kmPerDegLng(u.loiterCenter[1]);
+          const dy = (u.pos[1] - u.loiterCenter[1]) * 111.32;
+          u.loiterAngle = Math.atan2(dy, dx);
+        }
+        const omega = d.speed / rKm;
+        u.loiterAngle = (u.loiterAngle + omega * dt) % (Math.PI * 2);
+        u.pos = offsetKm(u.loiterCenter, rKm * Math.cos(u.loiterAngle), rKm * Math.sin(u.loiterAngle));
+        const lookAhead = u.loiterAngle + 0.25;
+        const tangentTarget = offsetKm(u.loiterCenter, rKm * Math.cos(lookAhead), rKm * Math.sin(lookAhead));
+        u.target = tangentTarget;
+        u.path = [{ p: tangentTarget, road: false }];
+        return;
+      }
     }
     const sprintMult = u.sprint && u.def !== 'drone' ? 2.0 : 1.0;
     const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * sprintMult;
@@ -874,7 +963,8 @@ export class Sim {
           if (eu.team !== u.team && !eu.embarkedIn) {
             const dist = distKm(u.pos, eu.pos);
             if (dist <= blastRadius) {
-              const dealt = damage * (1 - dist / blastRadius);
+              const cityDef = this.cityDefenseBonus(eu.team, eu.pos);
+              const dealt = damage * (1 - dist / blastRadius) * (1 - cityDef);
               eu.hp -= dealt;
               totalDealt += dealt;
             }
@@ -886,8 +976,17 @@ export class Sim {
             if (dist <= blastRadius) {
               const dealt = (damage * (1 - dist / blastRadius)) / this.holdMult(eb.team, eb.pos);
               eb.hp -= dealt;
+              eb.lastDamagedTime = this.world.time;
               totalDealt += dealt;
             }
+          }
+        }
+        for (const cp of this.map.capturePoints) {
+          const pt = this.world.points.find((p) => p.id === cp.id);
+          if (pt && pt.owner !== u.team && this.isPosInCity(u.pos, cp)) {
+            pt.hp = Math.max(0, (pt.hp ?? pt.maxHp ?? 8000) - damage);
+            pt.lastDamagedTime = this.world.time;
+            totalDealt += damage;
           }
         }
         u.xp += totalDealt * this.ruleset.rules.xpPerDamage;
@@ -905,14 +1004,93 @@ export class Sim {
         return;
       }
       if (d.droneType === 'recon' && u.loiterCenter) {
-        const rKm = d.id === 'drone_mini_shark' ? 2.2 : 3.0;
-        u.loiterAngle = ((u.loiterAngle ?? 0) + (Math.PI / 4)) % (Math.PI * 2);
-        const nextP = offsetKm(u.loiterCenter, rKm * Math.cos(u.loiterAngle), rKm * Math.sin(u.loiterAngle));
-        u.path = [{ p: nextP, road: false }];
-        u.target = nextP;
         return;
       }
       (u.target = null), (u.cap = 0);
+    }
+  }
+
+  private repairs(dt: number) {
+    const w = this.world;
+    const rescuers = w.units.filter((u) => u.def === 'rescuers' && u.hp > 0 && !u.embarkedIn);
+    if (!rescuers.length) return;
+
+    // Pre-filter damaged friendly cities off cooldown (most ticks this is empty!)
+    const damagedCities: { cp: CapturePointDef; pt: CapturePoint }[] = [];
+    for (const cp of this.map.capturePoints) {
+      const pt = w.points.find((p) => p.id === cp.id);
+      if (!pt) continue;
+      const maxHp = pt.maxHp ?? (8000 + (Math.max(1, Math.min(5, cp.value ?? 1)) - 1) * 3000);
+      if ((pt.hp ?? maxHp) < maxHp && w.time - (pt.lastDamagedTime ?? -100) >= 60) {
+        damagedCities.push({ cp, pt });
+      }
+    }
+
+    // Pre-filter damaged friendly buildings off cooldown
+    const damagedBuildings: Building[] = [];
+    for (const b of w.buildings) {
+      if (b.progress < 1) continue;
+      const bDef = this.defs.b.get(b.def);
+      if (bDef && b.hp < bDef.hp && w.time - (b.lastDamagedTime ?? -100) >= 60) {
+        damagedBuildings.push(b);
+      }
+    }
+
+    if (!damagedCities.length && !damagedBuildings.length) return;
+
+    const cityAssignments = new Map<string, number>();
+    const buildingAssignments = new Map<number, number>();
+
+    for (const u of rescuers) {
+      let bestTarget: { type: 'city'; id: string; dist: number } | { type: 'building'; id: number; dist: number } | null = null;
+
+      for (const { cp, pt } of damagedCities) {
+        if (pt.owner !== u.team) continue;
+        if (this.isPosInCity(u.pos, cp)) {
+          const d = distKm(u.pos, cp.pos);
+          if (!bestTarget || d < bestTarget.dist) {
+            bestTarget = { type: 'city', id: cp.id, dist: d };
+          }
+        }
+      }
+
+      for (const b of damagedBuildings) {
+        if (b.team !== u.team) continue;
+        if (Math.abs(u.pos[1] - b.pos[1]) > 0.03) continue;
+        const d = distKm(u.pos, b.pos);
+        if (d <= 2.0) {
+          if (!bestTarget || d < bestTarget.dist) {
+            bestTarget = { type: 'building', id: b.id, dist: d };
+          }
+        }
+      }
+
+      if (bestTarget) {
+        if (bestTarget.type === 'city') {
+          cityAssignments.set(bestTarget.id, (cityAssignments.get(bestTarget.id) ?? 0) + 1);
+        } else {
+          buildingAssignments.set(bestTarget.id, (buildingAssignments.get(bestTarget.id) ?? 0) + 1);
+        }
+      }
+    }
+
+    // Apply repairs: 1 HP/s per rescuer, max 10 HP/s
+    for (const [cityId, count] of cityAssignments) {
+      const pt = w.points.find((p) => p.id === cityId);
+      if (!pt) continue;
+      const cp = this.map.capturePoints.find((p) => p.id === cityId);
+      const maxHp = pt.maxHp ?? (8000 + (Math.max(1, Math.min(5, cp?.value ?? 1)) - 1) * 3000);
+      const repairRate = Math.min(10, count);
+      pt.hp = Math.min(maxHp, (pt.hp ?? maxHp) + repairRate * dt);
+    }
+
+    for (const [bId, count] of buildingAssignments) {
+      const b = w.buildings.find((x) => x.id === bId);
+      if (!b) continue;
+      const bDef = this.defs.b.get(b.def);
+      if (!bDef) continue;
+      const repairRate = Math.min(10, count);
+      b.hp = Math.min(bDef.hp, b.hp + repairRate * dt);
     }
   }
 
