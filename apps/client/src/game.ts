@@ -111,6 +111,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let selUnits = new Set<number>();
   let selBuilding: number | null = null;
   let routePicker: { unitId: number; fromBuilding?: number; resType?: string } | null = null;
+  let bombardPicker: { unitIds: number[] } | null = null;
   let formation = true; // move selected units at the pace of the slowest
   const groups = new Map<number, Group>();
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
@@ -446,7 +447,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         source: 'smokes',
         layout: {
           'icon-image': 'smoke',
-          'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.05, 8, 0.8, 12, 12.8],
+          'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.0125, 8, 0.2, 12, 3.2],
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
         },
@@ -538,7 +539,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
       });
 
-      // Power lines along roads
+      // Power lines along roads (offset alongside road with 50% reduced opacity)
       map.addLayer({
         id: 'power-lines-glow',
         type: 'line',
@@ -546,9 +547,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#38bdf8',
-          'line-width': 4.5,
-          'line-blur': 3,
-          'line-opacity': 0.45,
+          'line-width': 3.0,
+          'line-blur': 2,
+          'line-opacity': 0.22,
+          'line-offset': 3.5,
         },
       });
       map.addLayer({
@@ -558,9 +560,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#7dd3fc',
-          'line-width': 1.6,
+          'line-width': 1.2,
           'line-dasharray': [3, 2],
-          'line-opacity': 0.85,
+          'line-opacity': 0.42,
+          'line-offset': 3.5,
         },
       });
 
@@ -643,6 +646,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('click', (e) => {
       const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
       if (performance.now() - suppressClick < 250) return; // the click that ends a box selection
+      if (bombardPicker) {
+        send({ type: 'bombard', units: bombardPicker.unitIds, target: p });
+        toast('🎯 Задан сектор артиллерийского удара');
+        bombardPicker = null;
+        render();
+        return;
+      }
       if (routePicker) {
         toast('Кликните по зданию на карте (или Esc для отмены)');
         return;
@@ -665,6 +675,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       render();
     });
     map.on('contextmenu', (e) => {
+      if (bombardPicker) {
+        send({ type: 'bombard', units: bombardPicker.unitIds, target: [e.lngLat.lng, e.lngLat.lat] });
+        toast('🎯 Задан сектор артиллерийского удара');
+        bombardPicker = null;
+        render();
+        return;
+      }
       if (routePicker) {
         routePicker = null;
         toast('Выбор маршрута отменен');
@@ -717,6 +734,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     if (e.key === 'Escape') {
+      if (bombardPicker) {
+        bombardPicker = null;
+        toast('Выбор сектора удара отменен');
+        render();
+        return;
+      }
       if (routePicker) {
         routePicker = null;
         toast('Выбор маршрута отменен');
@@ -1086,6 +1109,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         );
         side.append(storBox);
 
+        if (b.def === 'aircraft_plant' && b.progress >= 1) {
+          side.append(h('div', { class: 'muted', style: { fontStyle: 'italic', padding: '6px 8px', background: 'rgba(255,255,255,0.04)', borderRadius: '4px', marginTop: '6px' } }, '🛩 Завод готов к переоборудованию. Производство пилотируемой авиации и вертолётов будет доступно в ближайшем обновлении.'));
+        }
+
         if (b.progress >= 1) {
           const mySide = init!.team === 0 ? 'ua' : 'ru';
           for (const uid of d.trains ?? []) {
@@ -1252,11 +1279,27 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       etaBadgeText = `⏱ Прибытие: ~${formatEta(etaSec)}`;
     }
 
+    // Fuel operating time calculation (e.g. "Топливо: 40м 30с")
+    const unitsWithFuel = selectedList.filter((u) => u.fuel !== undefined);
+    let fuelTimeText = '';
+    if (unitsWithFuel.length > 0) {
+      const isSprinting = selectedList.some((u) => u.sprint);
+      const avgFuel = unitsWithFuel.reduce((acc, u) => acc + (u.fuel ?? 0), 0) / unitsWithFuel.length;
+      const refDef = defU.get(unitsWithFuel[0].def);
+      const speed = refDef?.speed || 0.25;
+      const burnPerSec = (refDef?.kind === 'air' ? 0.08 : 0.04) * speed * (isSprinting ? 1.5 : 1.0);
+      const totalSec = Math.max(0, Math.round(avgFuel / (burnPerSec > 0 ? burnPerSec : 0.035)));
+      const m = Math.floor(totalSec / 60);
+      const s = totalSec % 60;
+      fuelTimeText = `Топливо: ${m}м ${s}с`;
+    }
+
     // 1. Info / Title
     const titleEl = h('div', { class: 'hud-sec' },
       isSingle && dFirst ? unitIcon(dFirst, first.rank) : null,
       h('div', {},
         h('div', { class: 'hud-title' }, titleText),
+        fuelTimeText ? h('div', { style: { fontSize: '11px', color: '#f59e0b', fontWeight: 'bold', marginTop: '2px' } }, fuelTimeText) : null,
         etaBadgeText ? h('div', { style: { fontSize: '11px', color: '#38bdf8', fontWeight: 'bold', marginTop: '2px' } }, etaBadgeText) : null,
       ),
     );
@@ -1267,7 +1310,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       title: 'Остановить все действия юнита (S)',
       onClick: () => {
         send({ type: 'stop', units: [...selUnits] });
+        send({ type: 'bombard', units: [...selUnits], target: null });
         routePicker = null;
+        bombardPicker = null;
       }
     }, '🛑 Стоп');
 
@@ -1330,7 +1375,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const fuelPct = Math.round((avgFuel / avgMaxFuel) * 100);
       fuelSec = h('div', { class: 'hud-sec' },
         h('div', { class: 'meter-wrap', title: 'Запас топлива техники (пополняется на АЗС)' },
-          h('div', { class: 'meter-label' }, h('span', {}, '⛽ Топливо'), h('span', {}, `${fuelPct}%`)),
+          h('div', { class: 'meter-label' }, h('span', {}, '⛽ Топливо'), h('span', {}, fuelTimeText ? `${fuelTimeText} (${fuelPct}%)` : `${fuelPct}%`)),
           h('div', { class: 'meter-bar' },
             h('div', { class: 'meter-fill fuel', style: { width: `${Math.max(0, Math.min(100, fuelPct))}%` } })
           )
@@ -1520,12 +1565,57 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
     }
 
+    // 8. Artillery bombardment controls
+    const artilleryUnits = selectedList.filter((u) => {
+      const d = defU.get(u.def);
+      return d?.symbol === 'artillery' || d?.minRange;
+    });
+    let artySec: HTMLElement | null = null;
+    if (artilleryUnits.length > 0) {
+      const isTargeting = artilleryUnits.some((u) => u.bombardTarget);
+      const isPicking = bombardPicker !== null && bombardPicker.unitIds.some((id) => selUnits.has(id));
+      const d = defU.get(artilleryUnits[0].def);
+      const minR = d?.minRange ?? 4.0;
+      const maxR = d?.range ?? 28.0;
+
+      artySec = h('div', { class: 'hud-sec', style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
+        h('div', { style: { fontSize: '11px', color: '#f59e0b', fontWeight: 'bold' } },
+          `🎯 Артиллерия: дальность ${minR}–${maxR} км`
+        ),
+        h('div', { style: { display: 'flex', gap: '6px', flexWrap: 'wrap' } },
+          h('button', {
+            class: 'hud-btn sm' + (isPicking ? ' active' : ''),
+            title: 'Указать точку на карте для непрерывного артудара (мин 4 км, макс 28 км)',
+            onClick: () => {
+              if (isPicking) {
+                bombardPicker = null;
+                toast('Выбор цели отменен');
+              } else {
+                bombardPicker = { unitIds: artilleryUnits.map((u) => u.id) };
+                toast('🎯 Кликните на карте место для артиллерийского удара (или ПКМ / Esc для отмены)');
+              }
+              render();
+            }
+          }, isPicking ? '❌ Отмена выбора' : '🎯 Задать сектор удара'),
+          isTargeting ? h('button', {
+            class: 'hud-btn sm warn',
+            title: 'Прекратить огонь по сектору',
+            onClick: () => {
+              send({ type: 'bombard', units: artilleryUnits.map((u) => u.id), target: null });
+              toast('Огонь по сектору прекращен');
+            }
+          }, '🛑 Прекратить огонь') : null
+        )
+      );
+    }
+
     const elementsToAppend: Node[] = [titleEl, stopBtn, fireGroup];
     if (sprintBtn) elementsToAppend.push(sprintBtn);
     if (staminaMeter) elementsToAppend.push(staminaMeter);
     if (fuelSec) elementsToAppend.push(fuelSec);
     if (transportSec) elementsToAppend.push(transportSec);
     if (boardSec) elementsToAppend.push(boardSec);
+    if (artySec) elementsToAppend.push(artySec);
     unitHud.append(...elementsToAppend);
   }
 
@@ -1606,6 +1696,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   const droneBearings = new Map<number, number>();
+  const droneTurnVelocity = new Map<number, number>();
 
   function renderUnitsLayer() {
     if (!init || !snap || !mapReady) return;
@@ -1651,10 +1742,21 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             let diff = (targetBearing - prev) % 360;
             if (diff > 180) diff -= 360;
             if (diff < -180) diff += 360;
-            // Smooth realistic turn maneuverability limit (~70 deg/s)
-            const maxTurnDeg = 4.5;
-            const turnStep = Math.sign(diff) * Math.min(Math.abs(diff), maxTurnDeg);
-            const currentBearing = (prev + turnStep + 360) % 360;
+
+            let vel = droneTurnVelocity.get(u.id) ?? 0;
+            // Aerodynamic inertia spring-damper: smooth acceleration and deceleration into turns
+            const spring = 0.08;
+            const damping = 0.82;
+            vel = vel * damping + diff * spring;
+            const maxTurnVel = 2.8; // deg per frame (~168 deg/s realistic max turn speed)
+            if (vel > maxTurnVel) vel = maxTurnVel;
+            if (vel < -maxTurnVel) vel = -maxTurnVel;
+            if (Math.abs(diff) < 0.2 && Math.abs(vel) < 0.04) {
+              vel = 0;
+              prev = targetBearing;
+            }
+            droneTurnVelocity.set(u.id, vel);
+            const currentBearing = (prev + vel + 360) % 360;
             droneBearings.set(u.id, currentBearing);
             bearing = currentBearing;
           } else {
@@ -1696,6 +1798,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const features: any[] = [];
     for (const u of snap.units) {
       if (!selUnits.has(u.id)) continue;
+      const p = curPos(u);
       if (u.loiterCenter && u.loiterRadius) {
         features.push({
           type: 'Feature',
@@ -1703,8 +1806,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           geometry: { type: 'LineString', coordinates: makeCircleCoords(u.loiterCenter, u.loiterRadius) },
         });
       }
-      if (!u.target) continue;
-      const p = curPos(u);
+      if (u.bombardTarget) {
+        features.push({
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates: [p, u.bombardTarget] },
+        });
+        features.push({
+          type: 'Feature',
+          properties: {},
+          geometry: { type: 'LineString', coordinates: makeCircleCoords(u.bombardTarget, 1.0) },
+        });
+      }
+      if (!u.target || u.isLoitering) continue;
       let coords: LngLat[];
       if (u.path && u.path.length > 0) {
         coords = [p, ...u.path];
@@ -1770,11 +1884,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     (map.getSource('formations') as GeoJSONSource).setData({ type: 'FeatureCollection', features: formations });
 
-    // vision rings for own long-range assets
+    // vision rings for own long-range assets and artillery firing ranges
     const rings: any[] = [];
     for (const b of snap.buildings) {
       const d = defB.get(b.def)!;
       if (b.owner === me && b.progress >= 1 && (d.vision ?? 0) >= 20) rings.push({ type: 'Feature', properties: { color: TEAM_COLOR[b.team] }, geometry: { type: 'LineString', coordinates: circle(b.pos, d.vision!, 64) } });
+    }
+    for (const u of snap.units) {
+      if (!selUnits.has(u.id)) continue;
+      const d = defU.get(u.def);
+      if (!d) continue;
+      if (d.symbol === 'artillery' || d.minRange) {
+        const pos = curPos(u);
+        const maxR = d.range;
+        const minR = d.minRange ?? 4.0;
+        rings.push({
+          type: 'Feature',
+          properties: { color: '#f59e0b' },
+          geometry: { type: 'LineString', coordinates: circle(pos, maxR, 64) },
+        });
+        rings.push({
+          type: 'Feature',
+          properties: { color: '#ef4444' },
+          geometry: { type: 'LineString', coordinates: circle(pos, minR, 48) },
+        });
+      }
     }
     (map.getSource('rings') as GeoJSONSource).setData({ type: 'FeatureCollection', features: rings });
 
@@ -2034,10 +2168,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         unitsMoved = true;
       }
     }
+    let dronesRotating = false;
+    for (const vel of droneTurnVelocity.values()) {
+      if (Math.abs(vel) > 0.03) {
+        dronesRotating = true;
+        break;
+      }
+    }
     for (const id of unitPos.keys()) {
       if (!aliveUnits.has(id)) unitPos.delete(id);
     }
-    if (unitsMoved) {
+    for (const id of droneBearings.keys()) {
+      if (!aliveUnits.has(id)) {
+        droneBearings.delete(id);
+        droneTurnVelocity.delete(id);
+      }
+    }
+    if (unitsMoved || dronesRotating) {
       renderUnitsLayer();
       if (selUnits.size > 0) renderSelLines();
     }

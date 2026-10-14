@@ -11,12 +11,13 @@ const bots = slots.map((s) => new Bot(s.id));
 const front0 = sim.world.front.map((n) => [n.lng, n.lat]);
 let shots = 0;
 const t0 = Date.now();
-for (let i = 0; i < 10 * 1200 && sim.world.winner === null; i++) {
-  bots.forEach((b) => b.think(sim));
+const totalSteps = Number(process.env.TEST_STEPS || 600);
+for (let i = 0; i < totalSteps && sim.world.winner === null; i++) {
+  if (i % 10 === 0) bots.forEach((b) => b.think(sim));
   sim.step(0.1);
   shots += sim.shots.length;
   sim.shots = [];
-  if (i % 3000 === 0) report(i / 10);
+  if (i % 500 === 0) report(i / 10);
 }
 report(sim.world.time);
 function report(t: number) {

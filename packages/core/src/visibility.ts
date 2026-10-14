@@ -56,6 +56,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
         route: u.team === team ? u.route : undefined,
         loiterCenter: u.team === team && u.loiterCenter ? p4(u.loiterCenter) : undefined,
         loiterRadius: u.team === team ? u.loiterRadius : undefined,
+        isLoitering: u.team === team ? u.isLoitering : undefined,
+        bombardTarget: u.team === team && u.bombardTarget ? p4(u.bombardTarget) : undefined,
       })),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),

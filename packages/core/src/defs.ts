@@ -60,6 +60,8 @@ export interface UnitDef {
   droneType?: 'strike' | 'recon';
   side?: 'ua' | 'ru';
   turnSpeed?: number; // deg/sec (for smooth drone/vehicle rotation)
+  minRange?: number; // km (minimum firing range, e.g. for artillery dead zone)
+  antiAir?: boolean; // true if unit can target and shoot down air units/drones
 }
 
 export interface TerrainDef {

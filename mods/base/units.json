@@ -144,9 +144,10 @@
     "trainTime": 24,
     "hp": 150,
     "speed": 0.09,
-    "range": 8,
+    "minRange": 4.0,
+    "range": 28.0,
     "damage": 30,
-    "vision": 3,
+    "vision": 4,
     "mobility": "wheeled",
     "symbol": "artillery",
     "fx": "arc",
@@ -193,7 +194,8 @@
     "droneType": "strike",
     "side": "ru",
     "fx": "burst",
-    "missRate": 0
+    "missRate": 0,
+    "maxFuel": 100
   },
   {
     "id": "drone_orion",
@@ -215,7 +217,8 @@
     "droneType": "recon",
     "side": "ru",
     "fx": "beam",
-    "missRate": 0.1
+    "missRate": 0.1,
+    "maxFuel": 100
   },
   {
     "id": "drone_liutyi",
@@ -237,7 +240,8 @@
     "droneType": "strike",
     "side": "ua",
     "fx": "burst",
-    "missRate": 0
+    "missRate": 0,
+    "maxFuel": 100
   },
   {
     "id": "drone_pd2",
@@ -259,7 +263,8 @@
     "droneType": "recon",
     "side": "ua",
     "fx": "beam",
-    "missRate": 0.1
+    "missRate": 0.1,
+    "maxFuel": 100
   },
   {
     "id": "drone_mini_shark",
@@ -281,7 +286,8 @@
     "droneType": "recon",
     "side": "ua",
     "fx": "beam",
-    "missRate": 0.1
+    "missRate": 0.1,
+    "maxFuel": 100
   },
   {
     "id": "drone_fire_point",
@@ -303,6 +309,7 @@
     "droneType": "strike",
     "side": "ua",
     "fx": "burst",
-    "missRate": 0
+    "missRate": 0,
+    "maxFuel": 100
   }
 ]

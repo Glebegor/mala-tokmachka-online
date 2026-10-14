@@ -61,5 +61,8 @@
     "cost": { "money": 750, "metal": 65 }, "buildTime": 25, "hp": 1000, "vision": 6, "trains": ["tank"] },
   { "id": "airfield", "name": "Аэродром", "category": "military", "icon": "◈",
     "description": "Военный аэродром базирования и обслуживания тактической авиации.",
-    "cost": { "money": 900, "metal": 50 }, "buildTime": 30, "hp": 1200, "vision": 25 }
+    "cost": { "money": 900, "metal": 50 }, "buildTime": 30, "hp": 1200, "vision": 25 },
+  { "id": "aircraft_plant", "name": "Авиационный завод", "category": "military", "icon": "🛩",
+    "description": "Авиастроительный завод по производству самолётов и вертолётов. Промышленный комплекс для будущей авиации.",
+    "cost": { "money": 850, "metal": 70 }, "buildTime": 26, "hp": 1100, "vision": 8, "trains": [] }
 ]
