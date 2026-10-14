@@ -3,7 +3,7 @@ import type { LngLat } from './geo';
 export type Command =
   | { type: 'build'; def: string; pos: LngLat }
   | { type: 'train'; building: number; unit: string }
-  | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean }
+  | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean; append?: boolean }
   | { type: 'stop'; units: number[] }
   | { type: 'promote'; units: number[] }
   | { type: 'demolish'; building: number }

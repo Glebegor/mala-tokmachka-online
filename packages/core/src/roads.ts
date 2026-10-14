@@ -208,20 +208,26 @@ export class RoadNetwork {
    */
   route(from: LngLat, to: LngLat, mult: number, accessKm = 40): LngLat[] {
     const direct = distKm(from, to);
-    if (direct < 8 || mult <= 1) return [];
-    const fromNodes = this.nearestCandidates(from, accessKm, 3);
-    const toNodes = this.nearestCandidates(to, accessKm, 3);
+    if (direct < 1.5 || mult <= 1) return [];
+    const fromNodes = this.nearestCandidates(from, accessKm, 4);
+    const toNodes = this.nearestCandidates(to, accessKm, 4);
     if (!fromNodes.length || !toNodes.length) return [];
 
+    // Prioritize roads: off-road movement is penalized compared to smooth roads
+    const offroadPenalty = 2.4;
     let bestP: { nodes: number[]; km: number } | null = null;
-    let bestCost = direct * 0.98;
+    let bestCost = direct * offroadPenalty;
 
     for (const a of fromNodes) {
+      const accessFrom = distKm(from, this.nodes[a]);
+      if (accessFrom > 15) continue;
       for (const b of toNodes) {
         if (a === b) continue;
+        const accessTo = distKm(this.nodes[b], to);
+        if (accessTo > 15) continue;
         const p = this.path(a, b);
         if (!p) continue;
-        const cost = distKm(from, this.nodes[a]) + p.km / mult + distKm(this.nodes[b], to);
+        const cost = accessFrom * offroadPenalty + p.km / mult + accessTo * offroadPenalty;
         if (cost < bestCost) {
           bestCost = cost;
           bestP = p;

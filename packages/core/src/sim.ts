@@ -4,6 +4,7 @@ import { clamp, distKm, kmPerDegLng, moveToward, offsetKm, type LngLat } from '.
 import { buildFront, distToFrontKm, normalAt, pocketCentroid, pocketRadiusKm, pointInPolygon, resample, resolveFrontLoops, sideOf, sideOfWithPockets } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
+import { isAlabugaDroneZone, isKremenchukRefinery } from './specialZones';
 import type { Building, CapturePoint, Player, Pocket, Shot, SlotInit, Team, Unit, Waypoint, World } from './state';
 
 export interface Hooks {
@@ -174,7 +175,8 @@ export class Sim {
     const d = this.defs.u.get(def)!;
     const isDrone = def === 'drone' || d.kind === 'air';
     const isVehicle = !isDrone && (d.mobility !== 'foot' || !!d.maxFuel);
-    const maxFuel = isDrone ? undefined : (d.maxFuel ?? (isVehicle ? 100 : undefined));
+    const isInfantry = d.kind === 'ground' && d.mobility === 'foot' && !d.maxFuel;
+    const maxFuel = isDrone ? (d.droneType === 'recon' ? 100 : undefined) : (d.maxFuel ?? (isVehicle ? 100 : undefined));
     const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined;
     const u: Unit = {
       id: this.world.nextId++,
@@ -189,7 +191,7 @@ export class Sim {
       rank: 0,
       path: [],
       cap: 0,
-      stamina: isDrone ? undefined : 100,
+      stamina: isInfantry ? 100 : undefined,
       sprint: false,
       fireMode: 'auto',
       fuel: maxFuel,
@@ -317,7 +319,7 @@ export class Sim {
         if (!isFinitePos(cmd.to) || !Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
         for (const u of w.units) if (set.has(u.id) && u.owner === p.id) u.route = undefined;
-        this.orderMove(w.units.filter((u) => set.has(u.id) && u.owner === p.id), cmd.to, !!cmd.cohesion);
+        this.orderMove(w.units.filter((u) => set.has(u.id) && u.owner === p.id), cmd.to, !!cmd.cohesion, !!cmd.append);
         return ok();
       }
       case 'stop': {
@@ -365,7 +367,8 @@ export class Sim {
         for (const u of w.units) {
           const ud = this.defs.u.get(u.def);
           if (set.has(u.id) && u.owner === p.id && u.def !== 'drone' && ud?.kind !== 'air') {
-            if (cmd.active && (u.stamina ?? 0) <= 0) continue;
+            if (cmd.active && u.stamina !== undefined && u.stamina <= 0) continue;
+            if (cmd.active && u.fuel !== undefined && u.fuel <= 0) continue;
             u.sprint = cmd.active;
           }
         }
@@ -379,8 +382,14 @@ export class Sim {
         const b1 = w.buildings.find((x) => x.id === cmd.fromBuilding && x.owner === p.id);
         const b2 = w.buildings.find((x) => x.id === cmd.toBuilding && x.owner === p.id);
         if (!b1 || !b2) return fail('building not found');
-        u.route = { fromBuilding: b1.id, toBuilding: b2.id, resType: cmd.resType, state: 'to_from' };
-        this.orderMove([u], b1.pos, false);
+        const hasCargo = u.cargo && Object.values(u.cargo.res).some((v) => v > 0);
+        if (hasCargo) {
+          u.route = { fromBuilding: b1.id, toBuilding: b2.id, resType: cmd.resType, state: 'to_to' };
+          this.orderMove([u], b2.pos, false);
+        } else {
+          u.route = { fromBuilding: b1.id, toBuilding: b2.id, resType: cmd.resType, state: 'to_from' };
+          this.orderMove([u], b1.pos, false);
+        }
         return ok();
       }
       case 'board': {
@@ -444,7 +453,7 @@ export class Sim {
   }
 
   /** Plan routes: ground units take roads when that is quicker, then spread out around the destination. */
-  private orderMove(units: Unit[], to: LngLat, cohesion: boolean) {
+  private orderMove(units: Unit[], to: LngLat, cohesion: boolean, append = false) {
     if (!units.length) return;
     const ground = units.filter((u) => this.defs.u.get(u.def)!.kind !== 'air');
     if (ground.length) {
@@ -457,7 +466,7 @@ export class Sim {
     const cap = cohesion ? Math.min(...units.map((u) => this.defs.u.get(u.def)!.speed)) : 0;
     let shared: LngLat[] = [];
     let centre: LngLat = to;
-    if (ground.length && this.roads) {
+    if (ground.length && this.roads && !append) {
       centre = [ground.reduce((a, u) => a + u.pos[0], 0) / ground.length, ground.reduce((a, u) => a + u.pos[1], 0) / ground.length];
       shared = this.roads.route(centre, to, mult);
     }
@@ -465,7 +474,12 @@ export class Sim {
     units.forEach((u, i) => {
       const d = this.defs.u.get(u.def)!;
       if (d.droneType === 'strike') {
-        u.path = [{ p: to, road: false }];
+        const leg: Waypoint = { p: to, road: false };
+        if (append && u.path.length) {
+          u.path.push(leg);
+        } else {
+          u.path = [leg];
+        }
         u.target = to;
         u.cap = 0;
         u.loiterCenter = undefined;
@@ -474,11 +488,16 @@ export class Sim {
         return;
       }
       if (d.droneType === 'recon') {
-        u.path = [{ p: to, road: false }];
+        const leg: Waypoint = { p: to, road: false };
+        if (append && u.path.length) {
+          u.path.push(leg);
+        } else {
+          u.path = [leg];
+        }
         u.target = to;
         u.cap = 0;
         u.loiterCenter = to;
-        u.loiterRadius = d.id === 'drone_mini_shark' ? 2.2 : 3.2;
+        u.loiterRadius = d.id === 'drone_mini_shark' ? 3.5 : 4.5;
         u.loiterAngle = undefined;
         return;
       }
@@ -487,15 +506,23 @@ export class Sim {
       u.loiterAngle = undefined;
       const ring = Math.ceil(Math.sqrt(i));
       const dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
+      const startPos = append && u.path.length ? u.path[u.path.length - 1].p : u.pos;
       let road: LngLat[] = [];
       if (d.kind !== 'air' && this.roads) {
-        // stragglers far from the group plan their own way (bounded so one order stays cheap)
-        if (distKm(u.pos, centre) > 20 && own < 16) (road = this.roads.route(u.pos, to, mult)), own++;
-        else road = shared;
+        if (!append && distKm(u.pos, centre) <= 20) {
+          road = shared;
+        } else {
+          road = this.roads.route(startPos, dest, mult);
+        }
       }
-      const path: Waypoint[] = road.map((p, k) => ({ p, road: k > 0 }));
-      path.push({ p: dest, road: false });
-      u.path = path;
+      const legWaypoints: Waypoint[] = road.map((p, k) => ({ p, road: k > 0 }));
+      legWaypoints.push({ p: dest, road: false });
+
+      if (append && u.path.length) {
+        u.path.push(...legWaypoints);
+      } else {
+        u.path = legWaypoints;
+      }
       u.target = dest;
       u.cap = cap;
     });
@@ -550,11 +577,22 @@ export class Sim {
 
   private outputMult(b: Building): number {
     let m = b.road ? this.ruleset.rules.roadOutputMult : 1;
+    let powerBoost = 1.0;
     for (const o of this.world.buildings) {
       if (o.team !== b.team || o.progress < 1 || o === b) continue;
+      if (o.def === 'power_plant' && distKm(o.pos, b.pos) <= 100) {
+        powerBoost = 1.25;
+      }
       const a = this.defs.b.get(o.def)!.aura;
-      if (a && distKm(o.pos, b.pos) <= a.radiusKm) m *= a.outputMult;
+      if (a && o.def !== 'power_plant' && distKm(o.pos, b.pos) <= a.radiusKm) m *= a.outputMult;
     }
+    m *= powerBoost;
+
+    // Special zone bonus: Kremenchuk Oil Refinery gives 2x fuel production
+    if (b.def === 'oil_refinery' && isKremenchukRefinery(b.pos)) {
+      m *= 2.0;
+    }
+
     return m;
   }
 
@@ -624,7 +662,14 @@ export class Sim {
       if (!b) return false; // building lost: order cancelled
       if (heads.has(q.building)) return true;
       heads.add(q.building);
-      q.remaining -= dt;
+      let speed = 1.0;
+      if (w.buildings.some((o) => o.team === b.team && o.progress >= 1 && o.def === 'power_plant' && distKm(o.pos, b.pos) <= 100)) {
+        speed *= 1.25;
+      }
+      if (b.def === 'drone_factory' && isAlabugaDroneZone(b.pos)) {
+        speed *= 2.0;
+      }
+      q.remaining -= dt * speed;
       if (q.remaining > 0) return true;
       const p = this.player(q.owner)!;
       const n = w.units.length;
@@ -659,20 +704,21 @@ export class Sim {
       const range = d.range * rank.range;
       u.cooldown = Math.max(0, u.cooldown - dt);
 
-      // Stamina update
-      const isDrone = u.def === 'drone' || d.kind === 'air';
-      if (!isDrone) {
+      // Stamina update (foot infantry only)
+      if (u.stamina !== undefined) {
         if (u.sprint) {
           if (u.path.length > 0) {
-            u.stamina = Math.max(0, (u.stamina ?? 100) - (100 / 60) * dt);
+            u.stamina = Math.max(0, u.stamina - (100 / 60) * dt);
             if (u.stamina <= 0) u.sprint = false;
           }
         } else {
-          u.stamina = Math.min(100, (u.stamina ?? 100) + (100 / 180) * dt);
+          u.stamina = Math.min(100, u.stamina + (100 / 180) * dt);
         }
       } else {
-        u.stamina = undefined;
-        u.sprint = false;
+        // Vehicles have no stamina: sprint consumes 1.5x fuel and remains active until toggled off or out of fuel
+        if (u.sprint && u.fuel !== undefined && u.fuel <= 0) {
+          u.sprint = false;
+        }
       }
 
       // Refueling for vehicles: tanks and vehicles refuel from gas_station storage tank (20k capacity) or fuel truck
@@ -898,7 +944,7 @@ export class Sim {
       return; // out of fuel
     }
     if (d.droneType === 'recon' && u.loiterCenter) {
-      const rKm = u.loiterRadius ?? (d.id === 'drone_mini_shark' ? 2.2 : 3.2);
+      const rKm = u.loiterRadius ?? (d.id === 'drone_mini_shark' ? 3.5 : 4.5);
       const dToCenter = distKm(u.pos, u.loiterCenter);
       if (u.path.length && dToCenter > rKm * 1.1) {
         // Continue flying towards the loiter center
@@ -910,11 +956,19 @@ export class Sim {
         }
         const omega = d.speed / rKm;
         u.loiterAngle = (u.loiterAngle + omega * dt) % (Math.PI * 2);
-        u.pos = offsetKm(u.loiterCenter, rKm * Math.cos(u.loiterAngle), rKm * Math.sin(u.loiterAngle));
+        const nextPos = offsetKm(u.loiterCenter, rKm * Math.cos(u.loiterAngle), rKm * Math.sin(u.loiterAngle));
+        const dist = distKm(u.pos, nextPos);
+        u.pos = nextPos;
         const lookAhead = u.loiterAngle + 0.25;
         const tangentTarget = offsetKm(u.loiterCenter, rKm * Math.cos(lookAhead), rKm * Math.sin(lookAhead));
         u.target = tangentTarget;
         u.path = [{ p: tangentTarget, road: false }];
+        if (u.fuel !== undefined && dist > 0) {
+          u.fuel = Math.max(0, u.fuel - dist * 0.02);
+          if (u.fuel <= 0) {
+            u.hp = 0; // crashed out of fuel
+          }
+        }
         return;
       }
     }
@@ -953,6 +1007,10 @@ export class Sim {
     if (u.fuel !== undefined && totalMovedKm > 0) {
       const fuelBurnRate = 0.02 * (u.sprint ? 1.5 : 1.0);
       u.fuel = Math.max(0, u.fuel - totalMovedKm * fuelBurnRate);
+      if (u.fuel <= 0) {
+        if (d.kind === 'air') u.hp = 0;
+        if (u.sprint) u.sprint = false;
+      }
     }
     if (!u.path.length) {
       if (d.droneType === 'strike') {
