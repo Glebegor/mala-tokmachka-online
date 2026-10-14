@@ -40,7 +40,13 @@ const cities: [string, [number, number]][] = [
   ['Lviv', [24.03, 49.84]],
   ['Odesa', [30.73, 46.48]],
   ['Kherson', [32.62, 46.64]],
+  ['Nova Kakhovka', [33.36, 46.75]],
   ['Mala Tokmachka', [35.88, 47.53]],
+  ['Belgorod', [36.59, 50.60]],
+  ['Kursk', [36.19, 51.73]],
+  ['Rostov-on-Don', [39.72, 47.23]],
+  ['Krasnodar', [38.98, 45.04]],
+  ['Voronezh', [39.20, 51.67]],
 ];
 
 for (const [name, pos] of cities) {
@@ -59,8 +65,12 @@ for (const [name, pos] of cities) {
 const pairs: [[string, [number, number]], [string, [number, number]]][] = [
   [['Kyiv', [30.52, 50.45]], ['Poltava', [34.55, 49.58]]],
   [['Kyiv', [30.52, 50.45]], ['Lviv', [24.03, 49.84]]],
+  [['Kherson', [32.62, 46.64]], ['Nova Kakhovka', [33.36, 46.75]]],
   [['Kherson', [32.62, 46.64]], ['Zaporizhzhia', [35.14, 47.84]]],
   [['Zaporizhzhia', [35.14, 47.84]], ['Mala Tokmachka', [35.88, 47.53]]],
+  [['Belgorod', [36.59, 50.60]], ['Kursk', [36.19, 51.73]]],
+  [['Rostov-on-Don', [39.72, 47.23]], ['Krasnodar', [38.98, 45.04]]],
+  [['Voronezh', [39.20, 51.67]], ['Belgorod', [36.59, 50.60]]],
 ];
 
 for (const [[fromName, fromPos], [toName, toPos]] of pairs) {

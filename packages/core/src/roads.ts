@@ -47,18 +47,40 @@ export class RoadNetwork {
   /** Source data has roads that end a few hundred metres short of the one they meet: join those dead ends. */
   private bridgeGaps(km: number) {
     const ends = this.adj.map((e, i) => (e.length === 1 ? i : -1)).filter((i) => i >= 0);
+    const maxD2 = km * km;
     for (const id of ends) {
       const self = this.adj[id][0].to;
       let best = -1;
       let bestD = km;
-      this.around(this.nodes[id], km, (other) => {
-        if (other === id || other === self) return;
-        const d = distKm(this.nodes[id], this.nodes[other]);
-        if (d < bestD) {
-          bestD = d;
-          best = other;
+      const p = this.nodes[id];
+      const cosLat = Math.max(0.3, Math.cos((p[1] * Math.PI) / 180));
+      const kmPerDegLat = 111.0;
+      const kmPerDegLon = 111.0 * cosLat;
+      const span = Math.ceil(km / kmPerDegLat / CELL / cosLat) + 1;
+      const cx = Math.floor(p[0] / CELL);
+      const cy = Math.floor(p[1] / CELL);
+
+      for (let x = cx - span; x <= cx + span; x++) {
+        for (let y = cy - span; y <= cy + span; y++) {
+          const bucket = this.grid.get(`${x},${y}`);
+          if (!bucket) continue;
+          for (let bi = 0; bi < bucket.length; bi++) {
+            const other = bucket[bi];
+            if (other === id || other === self) continue;
+            const otherP = this.nodes[other];
+            const dx = (otherP[0] - p[0]) * kmPerDegLon;
+            const dy = (otherP[1] - p[1]) * kmPerDegLat;
+            const d2 = dx * dx + dy * dy;
+            if (d2 < maxD2 && d2 < bestD * bestD) {
+              const d = Math.sqrt(d2);
+              if (d < bestD) {
+                bestD = d;
+                best = other;
+              }
+            }
+          }
         }
-      });
+      }
       if (best >= 0) this.link(id, best);
     }
   }

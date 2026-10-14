@@ -7,7 +7,7 @@ const currentMap = JSON.parse(readFileSync(mapPath, 'utf8'));
 const ds = JSON.parse(readFileSync('C:/Users/AKIRA/.gemini/antigravity/scratch/deepstate_latest.geojson', 'utf8'));
 const dsPts = ds.features[0].geometry.coordinates[0][0];
 
-// 2. Active combat frontline from Kinburn spit [31.55, 46.52] to Senkivka [31.78, 52.1]
+// 2. Active combat frontline from Kinburn spit [31.55, 46.52] to Senkivka tri-point [31.764, 52.101]
 const ACTIVE_FRONT = [
   [31.55, 46.52],
   [31.65, 46.5], [31.85, 46.52], [32.1, 46.52], [32.35, 46.5],
@@ -25,13 +25,13 @@ const ACTIVE_FRONT = [
   [38.05, 50.04], [38.18, 50.08],
   [37.85, 50.15], [37.5, 50.32], [36.93, 50.28], [36.43, 50.28], [36.15, 50.32],
   [35.7, 50.37], [35.4, 50.6], [35.3, 51.05],
-  [34.4, 51.25], [34.15, 51.65], [34.1, 52.0], [33.8, 52.35], [33.0, 52.3], [32.3, 52.25], [31.78, 52.1]
+  [34.4, 51.25], [34.15, 51.65], [34.1, 52.0], [33.8, 52.35], [33.0, 52.3], [32.3, 52.25], [31.764, 52.101]
 ];
 
-// 3. Northern Belarus border from borders.geojson (Senkivka -> Kyiv/Chernobyl north -> Poland tripoint)
+// 3. Belarus-Russia border: from Senkivka northwards towards Gomel/Bryansk off-screen
 const borders = JSON.parse(readFileSync('mods/base/maps/borders.geojson', 'utf8'));
-const belarus = borders.features.find((f) => (f.properties?.name || f.properties?.label) === 'Ukraine — Belarus');
-const belarusPts = [...belarus.geometry.coordinates].reverse();
+const belarusRussia = borders.features.find((f) => (f.properties?.name || f.properties?.label) === 'Belarus — Russia');
+const brPts = simplify(belarusRussia.geometry.coordinates, 0.005).map((p) => [Math.round(p[0] * 10000) / 10000, Math.round(p[1] * 10000) / 10000]);
 
 function simplify(points, tol) {
   if (points.length < 3) return points;
@@ -54,24 +54,41 @@ function simplify(points, tol) {
 // tol 0.003 (~300m) preserves all capes including Cape Tarkhankut and bays
 const crimea = simplify(dsPts.slice(66, 626), 0.003).map((p) => [Math.round(p[0] * 10000) / 10000, Math.round(p[1] * 10000) / 10000]);
 
-// Belarus: from Senkivka westwards to Poland
-const belarusClean = simplify(belarusPts, 0.005).map((p) => [Math.round(p[0] * 10000) / 10000, Math.round(p[1] * 10000) / 10000]);
-
-// Combine: Kerch -> Crimea coastline -> Kinburn spit -> Active combat line -> Senkivka -> Belarus border -> Poland
+// Combine: Kerch -> Crimea coastline -> Kinburn spit -> Active combat line -> Senkivka
+// (Ends at Senkivka tri-point in Chernihiv oblast, no front along Belarus border)
 const newFront = [
   ...crimea,
-  ...ACTIVE_FRONT.slice(1),
-  ...belarusClean.slice(1)
+  ...ACTIVE_FRONT.slice(1)
 ];
 
-// Occupied closure: routes entirely outside the visible map bounds [22.0, 43.8, 41.5, 53.2]
-// so that no artificial straight cut lines are ever visible on the map
+// Black Sea coast of Krasnodar Krai: connects Kerch Strait around Taman Peninsula
+// and south along the Russian coast (Anapa, Novorossiysk, Tuapse, Sochi)
+const krasnodarCoast = [
+  [36.75, 45.32],
+  [36.85, 45.18],
+  [37.02, 45.05],
+  [37.25, 44.95],
+  [37.35, 44.85],
+  [37.75, 44.70],
+  [38.05, 44.55],
+  [38.70, 44.30],
+  [39.05, 44.10],
+  [39.40, 43.85],
+  [39.75, 43.58],
+  [40.00, 43.40],
+  [45.0, 42.0]
+];
+
+// Occupied closure:
+// Starts from newFront end (Senkivka [31.764, 52.101]),
+// follows Belarus-Russia border northwards (excluding Belarus!),
+// routes off-screen north and east across Russia,
+// then follows the Krasnodar Krai Black Sea coast back to Kerch [36.6, 45.4]
 const occupiedClosure = [
-  [20.0, newFront[newFront.length - 1][1]],
-  [20.0, 56.0],
+  ...brPts.slice(1), // north along Belarus-Russia border
+  [brPts[brPts.length - 1][0], 56.0],
   [45.0, 56.0],
-  [45.0, 42.0],
-  [newFront[0][0], 42.0]
+  ...krasnodarCoast.slice().reverse()
 ];
 
 const frontStr = '[\n' + newFront.map((p) => '    [' + p[0] + ', ' + p[1] + ']').join(',\n') + '\n  ]';
