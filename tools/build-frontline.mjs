@@ -28,10 +28,9 @@ function simplify(points, tol) {
   return points.filter((_, i) => keep[i]);
 }
 
-// 2. Active combat frontline from Black Sea / Kinburn spit to Senkivka tri-point [31.764, 52.101]
+// 2. Active combat frontline from Kinburn spit to Senkivka tri-point [31.764, 52.101]
 const ACTIVE_FRONT = [
-  [31.5, 46.0],
-  [31.55, 46.52],
+  [31.547, 46.539],
   [31.65, 46.5], [31.85, 46.52], [32.1, 46.52], [32.35, 46.5],
   [32.6, 46.56], [32.72, 46.64], [32.88, 46.72], [33.15, 46.82],
   [33.37, 46.84], [33.65, 47.05], [34.0, 47.28], [34.45, 47.52],

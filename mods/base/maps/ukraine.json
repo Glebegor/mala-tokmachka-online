@@ -7,9 +7,9 @@
   "roadsFile": "ukraine.roads.json",
   "terrainFile": "ukraine.terrain.json",
   "bordersFile": "borders.geojson",
+  "fuelFile": "ukraine.fuel.json",
   "front": [
-    [31.5, 46],
-    [31.55, 46.52],
+    [31.547, 46.539],
     [31.65, 46.5],
     [31.85, 46.52],
     [32.1, 46.52],

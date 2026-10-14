@@ -20,6 +20,19 @@ export interface Building {
   hp: number;
   progress: number; // 0..1, 1 = complete
   road: boolean; // connected to the road network
+  storage?: Record<string, number>; // local resource storage (max 30,000 per resource)
+}
+
+export interface UnitCargo {
+  res: Record<string, number>;
+  cap: number;
+  passengers?: number[]; // IDs of embarked units
+}
+
+export interface UnitRoute {
+  fromBuilding: number;
+  toBuilding: number;
+  state?: 'to_from' | 'loading' | 'to_to' | 'unloading';
 }
 
 export interface Unit {
@@ -37,6 +50,14 @@ export interface Unit {
   path: Waypoint[];
   /** Speed cap in km/s when ordered to move in formation, 0 = none. */
   cap: number;
+  stamina?: number; // 0..100
+  sprint?: boolean; // 2x speed for all non-drones, 1.5x fuel for vehicles
+  fireMode?: 'auto' | 'return' | 'hold';
+  fuel?: number;
+  maxFuel?: number;
+  cargo?: UnitCargo;
+  route?: UnitRoute;
+  embarkedIn?: number; // transport unit ID carrying this passenger
 }
 
 export interface Waypoint {

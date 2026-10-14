@@ -91,14 +91,43 @@ export class Sim {
   private spawnBuilding(def: string, p: Player, pos: LngLat, done = false): Building {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
-    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road };
+    const storage: Record<string, number> = {
+      money: def === 'hq' ? 2000 : 0,
+      metal: def === 'hq' ? 500 : 0,
+      fuel: def === 'hq' ? 500 : 0,
+      people: def === 'hq' ? 500 : 0,
+      ore: def === 'hq' ? 500 : 0,
+    };
+    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, storage };
     this.world.buildings.push(b);
     return b;
   }
 
   spawnUnit(def: string, p: Player, pos: LngLat): Unit {
     const d = this.defs.u.get(def)!;
-    const u: Unit = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0, path: [], cap: 0 };
+    const isVehicle = (d.mobility !== 'foot' && d.kind !== 'air') || !!d.maxFuel;
+    const maxFuel = d.maxFuel ?? (isVehicle ? 100 : undefined);
+    const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined;
+    const u: Unit = {
+      id: this.world.nextId++,
+      def,
+      owner: p.id,
+      team: p.team,
+      pos,
+      hp: d.hp * this.ranks[0].hp,
+      target: null,
+      cooldown: 0,
+      xp: 0,
+      rank: 0,
+      path: [],
+      cap: 0,
+      stamina: 100,
+      sprint: false,
+      fireMode: 'auto',
+      fuel: maxFuel,
+      maxFuel,
+      cargo,
+    };
     this.world.units.push(u);
     return u;
   }
@@ -154,20 +183,23 @@ export class Sim {
         const ud = this.defs.u.get(cmd.unit);
         if (!ud || !bd.trains?.includes(ud.id)) return fail('cannot train that here');
         if (w.queue.filter((q) => q.building === b.id).length >= 5) return fail('queue full');
-        if (!canAfford(p.res, ud.cost)) return fail('not enough resources');
-        pay(p.res, ud.cost);
+        if (!b.storage) b.storage = {};
+        if (!canAfford(b.storage, ud.cost)) return fail('Недостаточно ресурсов на складе здания');
+        pay(b.storage, ud.cost);
+        if (canAfford(p.res, ud.cost)) pay(p.res, ud.cost);
         w.queue.push({ building: b.id, unit: ud.id, owner: p.id, remaining: ud.trainTime });
         return ok();
       }
       case 'move': {
         if (!isFinitePos(cmd.to) || !Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
+        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) u.route = undefined;
         this.orderMove(w.units.filter((u) => set.has(u.id) && u.owner === p.id), cmd.to, !!cmd.cohesion);
         return ok();
       }
       case 'stop': {
         const set = new Set(cmd.units);
-        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) (u.target = null), (u.path = []), (u.cap = 0);
+        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) (u.target = null), (u.path = []), (u.cap = 0), (u.route = undefined);
         return ok();
       }
       case 'promote': {
@@ -198,6 +230,84 @@ export class Sim {
         const d = this.defs.b.get(b.def)!;
         for (const [k, v] of Object.entries(d.cost)) p.res[k] = (p.res[k] ?? 0) + v * 0.4;
         w.buildings.splice(i, 1);
+        return ok();
+      }
+      case 'fireMode': {
+        const set = new Set(cmd.units);
+        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) u.fireMode = cmd.mode;
+        return ok();
+      }
+      case 'sprint': {
+        const set = new Set(cmd.units);
+        for (const u of w.units) {
+          if (set.has(u.id) && u.owner === p.id && u.def !== 'drone') {
+            if (cmd.active && (u.stamina ?? 0) <= 0) continue;
+            u.sprint = cmd.active;
+          }
+        }
+        return ok();
+      }
+      case 'setRoute': {
+        const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id);
+        if (!u) return fail('unit not found');
+        const ud = this.defs.u.get(u.def)!;
+        if (!ud.cargoCap) return fail('not a transport');
+        const b1 = w.buildings.find((x) => x.id === cmd.fromBuilding && x.owner === p.id);
+        const b2 = w.buildings.find((x) => x.id === cmd.toBuilding && x.owner === p.id);
+        if (!b1 || !b2) return fail('building not found');
+        u.route = { fromBuilding: b1.id, toBuilding: b2.id, state: 'to_from' };
+        this.orderMove([u], b1.pos, false);
+        return ok();
+      }
+      case 'board': {
+        const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id);
+        const t = w.units.find((x) => x.id === cmd.transport && x.owner === p.id);
+        if (!u || !t) return fail('unit not found');
+        const td = this.defs.u.get(t.def)!;
+        if (!td.passengerCap) return fail('transport cannot carry passengers');
+        if (!t.cargo) t.cargo = { res: {}, cap: td.cargoCap ?? 500, passengers: [] };
+        if (!t.cargo.passengers) t.cargo.passengers = [];
+        if (t.cargo.passengers.length >= td.passengerCap) return fail('transport full');
+        if (distKm(u.pos, t.pos) > 10) return fail('too far from transport');
+        u.embarkedIn = t.id;
+        u.path = [];
+        u.target = null;
+        u.pos = [...t.pos];
+        t.cargo.passengers.push(u.id);
+        return ok();
+      }
+      case 'disembark': {
+        const t = w.units.find((x) => x.id === cmd.transport && x.owner === p.id);
+        if (!t || !t.cargo?.passengers?.length) return fail('no passengers');
+        for (const pid of t.cargo.passengers) {
+          const u = w.units.find((x) => x.id === pid);
+          if (u) {
+            u.embarkedIn = undefined;
+            u.pos = [t.pos[0] + 0.01, t.pos[1] + 0.01];
+            u.path = [];
+            u.target = null;
+          }
+        }
+        t.cargo.passengers = [];
+        return ok();
+      }
+      case 'refuel': {
+        const set = new Set(cmd.units);
+        for (const u of w.units) {
+          if (!set.has(u.id) || u.owner !== p.id) continue;
+          if (u.fuel === undefined) continue;
+          let bestStation: LngLat | null = null;
+          let bestDist = 1e9;
+          for (const b of w.buildings) {
+            if ((b.def === 'gas_station' || b.def === 'hq') && b.owner === p.id && b.progress >= 1) {
+              const d = distKm(u.pos, b.pos);
+              if (d < bestDist) { bestDist = d; bestStation = b.pos; }
+            }
+          }
+          if (bestStation) {
+            this.orderMove([u], bestStation, false);
+          }
+        }
         return ok();
       }
     }
@@ -307,22 +417,30 @@ export class Sim {
       const eff = p.res.energy > 0 || net >= 0 ? 1 : this.ruleset.rules.energyDeficitMult;
 
       for (const b of mine) {
+        if (!b.storage) b.storage = {};
         const d = this.defs.b.get(b.def)!;
         if (!d.produces) continue;
         const m = mults.get(b.id)! * eff;
         let can = true;
         for (const [k, v] of Object.entries(d.consumes ?? {})) {
-          if (k !== 'energy' && (p.res[k] ?? 0) < v * dt) can = false;
+          if (k !== 'energy' && (b.storage[k] ?? 0) < v * dt && (p.res[k] ?? 0) < v * dt) can = false;
         }
         if (!can) continue;
         for (const [k, v] of Object.entries(d.consumes ?? {})) {
           if (k === 'energy') continue;
-          p.res[k] -= v * dt;
+          const need = v * dt;
+          const fromStor = Math.min(b.storage[k] ?? 0, need);
+          b.storage[k] = (b.storage[k] ?? 0) - fromStor;
+          p.res[k] = Math.max(0, (p.res[k] ?? 0) - need);
           inc[k] = (inc[k] ?? 0) - v;
         }
         for (const [k, v] of Object.entries(d.produces)) {
           if (k === 'energy') continue;
-          p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v * m * dt);
+          const cap = 30000;
+          const cur = b.storage[k] ?? 0;
+          const added = Math.min(cap - cur, v * m * dt);
+          b.storage[k] = Math.min(cap, cur + added);
+          p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + added);
           inc[k] = (inc[k] ?? 0) + v * m;
         }
       }
@@ -361,27 +479,130 @@ export class Sim {
     const w = this.world;
     const r = this.ruleset.rules;
     for (const u of w.units) {
+      if (u.embarkedIn) {
+        const tr = w.units.find((x) => x.id === u.embarkedIn);
+        if (tr) u.pos = [...tr.pos];
+        continue;
+      }
+
       const d = this.defs.u.get(u.def)!;
       const rank = this.ranks[u.rank];
       const range = d.range * rank.range;
       u.cooldown = Math.max(0, u.cooldown - dt);
 
-      // acquire the nearest enemy in range: units first, then buildings
-      let tu: Unit | null = null;
-      let tb: Building | null = null;
-      let best = range;
-      for (const e of w.units) {
-        if (e.team === u.team || e.hp <= 0) continue;
-        const dist = distKm(u.pos, e.pos);
-        if (dist <= best) (best = dist), (tu = e);
+      // Stamina update
+      if (u.sprint && u.def !== 'drone') {
+        if (u.path.length > 0) {
+          u.stamina = Math.max(0, (u.stamina ?? 100) - (100 / 60) * dt);
+          if (u.stamina <= 0) u.sprint = false;
+        }
+      } else {
+        u.stamina = Math.min(100, (u.stamina ?? 100) + (100 / 180) * dt);
       }
-      if (!tu) {
-        for (const e of w.buildings) {
-          if (e.team === u.team || e.hp <= 0) continue;
-          const dist = distKm(u.pos, e.pos);
-          if (dist <= best) (best = dist), (tb = e);
+
+      // Refueling for vehicles
+      if (u.fuel !== undefined && u.maxFuel !== undefined && u.fuel < u.maxFuel) {
+        let refuelRate = 0;
+        for (const b of w.buildings) {
+          if ((b.def === 'gas_station' || b.def === 'hq') && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+            refuelRate = 25;
+            break;
+          }
+        }
+        if (!refuelRate) {
+          for (const ft of w.units) {
+            if (ft.id !== u.id && ft.def === 'fuel_truck' && ft.owner === u.owner && distKm(u.pos, ft.pos) <= 5) {
+              const avail = ft.cargo?.res?.fuel ?? 0;
+              if (avail > 0) {
+                const transfer = Math.min(25 * dt, avail, u.maxFuel - u.fuel);
+                ft.cargo!.res.fuel -= transfer;
+                u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
+                break;
+              }
+            }
+          }
+        } else {
+          u.fuel = Math.min(u.maxFuel, u.fuel + refuelRate * dt);
         }
       }
+
+      // Automated logistics routes for transport vehicles
+      if (u.route && u.cargo) {
+        const fromB = w.buildings.find((x) => x.id === u.route!.fromBuilding && x.owner === u.owner);
+        const toB = w.buildings.find((x) => x.id === u.route!.toBuilding && x.owner === u.owner);
+        if (!fromB || !toB) {
+          u.route = undefined;
+        } else {
+          const dFrom = distKm(u.pos, fromB.pos);
+          const dTo = distKm(u.pos, toB.pos);
+          const isFuelTruck = !!d.fuelOnly;
+
+          if (u.route.state === 'to_from' || !u.route.state) {
+            if (dFrom <= 3.5 || !u.path.length) {
+              if (!fromB.storage) fromB.storage = {};
+              if (!u.cargo.res) u.cargo.res = {};
+              let curTotal = Object.values(u.cargo.res).reduce((a, b) => a + b, 0);
+              const remainingCap = u.cargo.cap - curTotal;
+              if (remainingCap > 0) {
+                if (isFuelTruck) {
+                  const avail = fromB.storage.fuel ?? 0;
+                  const toTake = Math.min(remainingCap, avail);
+                  fromB.storage.fuel = avail - toTake;
+                  u.cargo.res.fuel = (u.cargo.res.fuel ?? 0) + toTake;
+                } else {
+                  const resKeys = ['metal', 'money', 'fuel', 'ore', 'people'];
+                  for (const k of resKeys) {
+                    const avail = fromB.storage[k] ?? 0;
+                    if (avail > 0) {
+                      const toTake = Math.min(u.cargo.cap - curTotal, avail);
+                      fromB.storage[k] = avail - toTake;
+                      u.cargo.res[k] = (u.cargo.res[k] ?? 0) + toTake;
+                      curTotal += toTake;
+                      if (curTotal >= u.cargo.cap) break;
+                    }
+                  }
+                }
+              }
+              u.route.state = 'to_to';
+              this.orderMove([u], toB.pos, false);
+            }
+          } else if (u.route.state === 'to_to') {
+            if (dTo <= 3.5 || !u.path.length) {
+              if (!toB.storage) toB.storage = {};
+              if (u.cargo.res) {
+                for (const [k, v] of Object.entries(u.cargo.res)) {
+                  toB.storage[k] = Math.min(30000, (toB.storage[k] ?? 0) + v);
+                }
+                u.cargo.res = {};
+              }
+              u.route.state = 'to_from';
+              this.orderMove([u], fromB.pos, false);
+            }
+          }
+        }
+      }
+
+      // Fire modes: 'hold' does not fire; 'return' fires only if damaged recently; 'auto' fires freely
+      const canFire = u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5);
+
+      let tu: Unit | null = null;
+      let tb: Building | null = null;
+      if (canFire) {
+        let best = range;
+        for (const e of w.units) {
+          if (e.team === u.team || e.hp <= 0 || e.embarkedIn) continue;
+          const dist = distKm(u.pos, e.pos);
+          if (dist <= best) (best = dist), (tu = e);
+        }
+        if (!tu) {
+          for (const e of w.buildings) {
+            if (e.team === u.team || e.hp <= 0) continue;
+            const dist = distKm(u.pos, e.pos);
+            if (dist <= best) (best = dist), (tb = e);
+          }
+        }
+      }
+
       if ((tu || tb) && u.cooldown === 0) {
         u.cooldown = 1; // one salvo per second
         const base = d.damage * rank.damage;
@@ -404,11 +625,11 @@ export class Sim {
       // movement: explicit orders follow their route; idle units close with enemies they can see
       if (u.path.length) {
         this.advance(u, d, dt);
-      } else if (!tu && !tb) {
+      } else if (!tu && !tb && canFire && !u.route) {
         let chase: LngLat | null = null;
         let near = d.vision * 0.7;
         for (const e of w.units) {
-          if (e.team === u.team) continue;
+          if (e.team === u.team || e.embarkedIn) continue;
           const dist = distKm(u.pos, e.pos);
           if (dist < near) (near = dist), (chase = e.pos);
         }
@@ -419,6 +640,12 @@ export class Sim {
 
     const deadU = w.units.filter((u) => u.hp <= 0);
     if (deadU.length) {
+      const deadIds = new Set(deadU.map((u) => u.id));
+      for (const u of w.units) {
+        if (u.embarkedIn && deadIds.has(u.embarkedIn)) {
+          u.hp = 0; // dies with transport
+        }
+      }
       w.units = w.units.filter((u) => u.hp > 0);
       deadU.forEach((u) => this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner }));
     }
@@ -430,21 +657,33 @@ export class Sim {
   }
 
   private advance(u: Unit, d: UnitDef, dt: number) {
-    const base = u.cap ? Math.min(d.speed, u.cap) : d.speed;
+    if (u.fuel !== undefined && u.fuel <= 0) {
+      return; // out of fuel
+    }
+    const sprintMult = u.sprint && u.def !== 'drone' ? 2.0 : 1.0;
+    const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * sprintMult;
     const roadMult = d.kind === 'air' ? 1 : this.ruleset.rules.roadSpeedMult;
     let budget = dt;
+    let totalMovedKm = 0;
     for (let guard = 0; budget > 1e-6 && u.path.length && guard < 32; guard++) {
       const wp = u.path[0];
       const speed = base * (wp.road ? roadMult : this.terrainSpeed(d, u.pos));
       const dist = distKm(u.pos, wp.p);
       if (speed * budget >= dist) {
+        totalMovedKm += dist;
         u.pos = [wp.p[0], wp.p[1]];
         budget -= dist / speed;
         u.path.shift();
       } else {
-        u.pos = moveToward(u.pos, wp.p, speed * budget);
+        const moved = speed * budget;
+        totalMovedKm += moved;
+        u.pos = moveToward(u.pos, wp.p, moved);
         budget = 0;
       }
+    }
+    if (u.fuel !== undefined && totalMovedKm > 0) {
+      const fuelBurnRate = 0.02 * (u.sprint ? 1.5 : 1.0);
+      u.fuel = Math.max(0, u.fuel - totalMovedKm * fuelBurnRate);
     }
     if (!u.path.length) (u.target = null), (u.cap = 0);
   }

@@ -31,14 +31,26 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     res: me ? { ...me.res } : {},
     energyNet: sim.energyNet.get(playerId) ?? 0,
     rates: { ...(sim.income.get(playerId) ?? {}) },
-    buildings: w.buildings.filter((b) => b.team === team || seen(b.pos)).map((b) => ({ ...b, pos: p4(b.pos), hp: Math.round(b.hp) })),
+    buildings: w.buildings.filter((b) => b.team === team || seen(b.pos)).map((b) => ({
+      ...b,
+      pos: p4(b.pos),
+      hp: Math.round(b.hp),
+      storage: b.team === team ? b.storage : undefined,
+    })),
     units: w.units
-      .filter((u) => u.team === team || seen(u.pos, sim.defs.u.get(u.def)!.kind === 'air' ? 1 : sim.terrainAt(u.pos).concealment))
+      .filter((u) => !u.embarkedIn && (u.team === team || seen(u.pos, sim.defs.u.get(u.def)!.kind === 'air' ? 1 : sim.terrainAt(u.pos).concealment)))
       .map((u) => ({
         id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp),
         target: u.team === team ? u.target : null,
         path: u.team === team && u.path.length ? u.path.map((wp) => p4(wp.p)) : undefined,
         cooldown: 0, xp: Math.round(u.xp), rank: u.rank,
+        stamina: u.team === team && u.stamina !== undefined ? Math.round(u.stamina) : undefined,
+        sprint: u.sprint,
+        fireMode: u.team === team ? u.fireMode : undefined,
+        fuel: u.fuel !== undefined ? Math.round(u.fuel) : undefined,
+        maxFuel: u.maxFuel,
+        cargo: u.team === team ? u.cargo : undefined,
+        route: u.team === team ? u.route : undefined,
       })),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),

@@ -67,6 +67,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const toasts = h('div', { class: 'toasts' });
   const hint = h('div', { class: 'hint' }, 'Connecting…');
   const boxEl = h('div', { class: 'selbox' });
+  const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const basemapBtn = h('button', { class: 'ghost', onClick: () => toggleBasemap(), title: 'Toggle real map filter (M)' }, 'Map: ON');
   const leave = () => {
@@ -82,7 +83,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   app.append(
     h('div', { class: 'game' }, mapEl,
       h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
-      palette, side, groupBar, terrainChip, toasts, hint, boxEl),
+      palette, side, groupBar, terrainChip, toasts, hint, boxEl, unitHud),
   );
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
@@ -96,6 +97,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let placing: BuildingDef | null = null;
   let selUnits = new Set<number>();
   let selBuilding: number | null = null;
+  let routePicker: { unitId: number; fromBuilding?: number } | null = null;
   let formation = true; // move selected units at the pace of the slowest
   const groups = new Map<number, Group>();
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
@@ -176,11 +178,58 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'build-restricted', 'pockets']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (m.borders) {
         (map.getSource('borders') as GeoJSONSource).setData(m.borders);
       }
+      if (m.fuel) {
+        (map.getSource('fuel-stations') as GeoJSONSource).setData(m.fuel);
+      }
+      map.addLayer({
+        id: 'fuel-stations-glow', type: 'circle', source: 'fuel-stations',
+        paint: {
+          'circle-radius': 9,
+          'circle-color': '#0284c7',
+          'circle-opacity': 0.25,
+          'circle-blur': 1.0,
+        },
+      });
+      map.addLayer({
+        id: 'fuel-stations-circle', type: 'circle', source: 'fuel-stations',
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 4, 3.5, 7, 5, 11, 7],
+          'circle-color': '#0284c7',
+          'circle-stroke-width': 1.5,
+          'circle-stroke-color': '#ffffff',
+          'circle-opacity': 0.9,
+        },
+      });
+      map.addLayer({
+        id: 'fuel-stations-label', type: 'symbol', source: 'fuel-stations',
+        minzoom: 7.5,
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-size': 10,
+          'text-offset': [0, 1.2],
+          'text-anchor': 'top',
+          'text-optional': true,
+        },
+        paint: {
+          'text-color': '#7dd3fc',
+          'text-halo-color': '#030712',
+          'text-halo-width': 1.5,
+        },
+      });
+      map.on('mouseenter', 'fuel-stations-circle', (e) => {
+        map.getCanvas().style.cursor = 'pointer';
+        const f = e.features?.[0];
+        if (f?.properties) toast(`АЗС: ${f.properties.name} (${f.properties.city ?? ''})`);
+      });
+      map.on('mouseleave', 'fuel-stations-circle', () => {
+        map.getCanvas().style.cursor = '';
+      });
+
       map.addLayer({
         id: 'borders-glow', type: 'line', source: 'borders',
         filter: ['==', ['get', 'type'], 'border'],
@@ -225,10 +274,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
-      map.addLayer({
-        id: 'occupied-line', type: 'line', source: 'occupied', layout: { 'line-join': 'round' },
-        paint: { 'line-color': '#ff4d4d', 'line-width': 1.6, 'line-opacity': 0.75 },
-      });
       map.addLayer({ id: 'pockets-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.2 } });
       map.addLayer({ id: 'pockets-glow', type: 'line', source: 'pockets', layout: { 'line-join': 'round' }, paint: { 'line-color': ['get', 'color'], 'line-width': 8, 'line-blur': 6, 'line-opacity': 0.5 } });
       map.addLayer({
@@ -625,11 +670,43 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         );
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
+
+        // Building local storage
+        const stor = b.storage ?? {};
+        const storBox = h('div', { class: 'storage-box' },
+          h('b', { style: { fontSize: '11px', color: '#94a3b8' } }, 'Склад здания (до 30,000 на ресурс):'),
+          h('div', { class: 'storage-grid' },
+            h('div', { class: 'storage-item' }, h('span', {}, '💰 Деньги'), h('b', {}, `${Math.floor(stor.money ?? 0)}`)),
+            h('div', { class: 'storage-item' }, h('span', {}, '🔩 Металл'), h('b', {}, `${Math.floor(stor.metal ?? 0)}`)),
+            h('div', { class: 'storage-item' }, h('span', {}, '⛽ Топливо'), h('b', {}, `${Math.floor(stor.fuel ?? 0)}`)),
+            h('div', { class: 'storage-item' }, h('span', {}, '👥 Люди'), h('b', {}, `${Math.floor(stor.people ?? 0)}`)),
+            h('div', { class: 'storage-item' }, h('span', {}, '⛏ Руда'), h('b', {}, `${Math.floor(stor.ore ?? 0)}`)),
+          )
+        );
+        side.append(storBox);
+
         if (b.progress >= 1) {
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
-            side.append(h('button', { class: 'bld', onClick: () => send({ type: 'train', building: b.id, unit: uid }) },
-              unitIcon(u, 0), h('span', { class: 'meta' }, h('b', {}, `Train ${u.name} · ${u.trainTime}s`), costHtml(u.cost, snap!.res))));
+            const canAffordStorage = Object.entries(u.cost).every(([k, v]) => (stor[k] ?? 0) >= v);
+            const trainBtn = h('button', {
+              class: 'bld' + (!canAffordStorage ? ' cant-afford-storage' : ''),
+              onClick: () => {
+                if (!canAffordStorage) {
+                  toast(`Недостаточно ресурсов на складе здания! Доставьте припасы грузовиком.`, true);
+                  return;
+                }
+                send({ type: 'train', building: b.id, unit: uid });
+              }
+            },
+              unitIcon(u, 0),
+              h('span', { class: 'meta' },
+                h('b', {}, `Train ${u.name} · ${u.trainTime}s`),
+                costHtml(u.cost, stor),
+                !canAffordStorage ? h('div', { class: 'warn-storage' }, '⚠ Требуется доставка припасов на склад') : null
+              )
+            );
+            side.append(trainBtn);
           }
           const q = snap.queue.filter((x) => x.building === b.id);
           if (q.length) side.append(h('div', { class: 'stat' }, 'Queue: ' + q.map((x) => `${defU.get(x.unit)?.name} (${x.remaining}s)`).join(', ')));
@@ -689,6 +766,169 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     side.classList.toggle('open', side.childElementCount > 0);
   }
 
+  function renderUnitHud() {
+    if (!init || !snap) return;
+    clear(unitHud);
+    if (!selUnits.size) {
+      unitHud.style.display = 'none';
+      return;
+    }
+    unitHud.style.display = 'flex';
+
+    const selectedList = snap.units.filter((u) => selUnits.has(u.id));
+    if (!selectedList.length) {
+      unitHud.style.display = 'none';
+      return;
+    }
+
+    const first = selectedList[0];
+    const isSingle = selectedList.length === 1;
+    const dFirst = defU.get(first.def);
+    const titleText = isSingle
+      ? `${dFirst?.name ?? first.def}`
+      : `Выбрано: ${selectedList.length} ед.`;
+
+    // 1. Info / Title
+    const titleEl = h('div', { class: 'hud-sec' },
+      isSingle && dFirst ? unitIcon(dFirst, first.rank) : null,
+      h('div', { class: 'hud-title' }, titleText),
+    );
+
+    // 2. Stop Button ("Стоп")
+    const stopBtn = h('button', {
+      class: 'hud-btn',
+      title: 'Остановить все действия юнита (S)',
+      onClick: () => {
+        send({ type: 'stop', units: [...selUnits] });
+        routePicker = null;
+      }
+    }, '🛑 Стоп');
+
+    // 3. Fire Mode ("Режим ведения огня")
+    const currentMode = first.fireMode ?? 'auto';
+    const fireGroup = h('div', { class: 'btn-group', title: 'Режим ведения огня' },
+      h('button', {
+        class: currentMode === 'auto' ? 'active' : '',
+        title: 'Автоматический режим: атаковать любого врага в радиусе поражения',
+        onClick: () => send({ type: 'fireMode', units: [...selUnits], mode: 'auto' })
+      }, 'Авто'),
+      h('button', {
+        class: currentMode === 'return' ? 'active' : '',
+        title: 'Ответный огонь: стрелять только в ответ при атаке',
+        onClick: () => send({ type: 'fireMode', units: [...selUnits], mode: 'return' })
+      }, 'Ответный'),
+      h('button', {
+        class: currentMode === 'hold' ? 'active' : '',
+        title: 'Не стрелять: скрытный режим без стрельбы',
+        onClick: () => send({ type: 'fireMode', units: [...selUnits], mode: 'hold' })
+      }, 'Не стрелять'),
+    );
+
+    // 4. "Быстрее" (Sprint / Turbo) + Stamina
+    const isSprinting = selectedList.some((u) => u.sprint);
+    const avgStamina = selectedList.reduce((acc, u) => acc + (u.stamina ?? 100), 0) / selectedList.length;
+
+    const sprintBtn = h('button', {
+      class: 'hud-btn sprint-btn' + (isSprinting ? ' active' : ''),
+      title: 'Ускорение x2 (тратит стамину за 60с, восст. 3 мин. У техники расход топлива x1.5)',
+      onClick: () => send({ type: 'sprint', units: [...selUnits], active: !isSprinting })
+    }, `⚡ Быстрее (${isSprinting ? 'ВКЛ' : 'ВЫКЛ'})`);
+
+    const staminaMeter = h('div', { class: 'meter-wrap', title: 'Запас стамины: 60с бега, 180с восстановления' },
+      h('div', { class: 'meter-label' }, h('span', {}, 'Стамина'), h('span', {}, `${Math.round(avgStamina)}%`)),
+      h('div', { class: 'meter-bar' },
+        h('div', { class: 'meter-fill stamina', style: { width: `${Math.max(0, Math.min(100, avgStamina))}%` } })
+      )
+    );
+
+    // 5. Fuel meter & Refuel button for vehicles
+    const hasVehicles = selectedList.some((u) => u.fuel !== undefined);
+    let fuelSec: HTMLElement | null = null;
+    if (hasVehicles) {
+      const avgFuel = selectedList.filter((u) => u.fuel !== undefined).reduce((acc, u) => acc + (u.fuel ?? 0), 0);
+      const avgMaxFuel = selectedList.filter((u) => u.maxFuel !== undefined).reduce((acc, u) => acc + (u.maxFuel ?? 100), 0) || 100;
+      const fuelPct = Math.round((avgFuel / avgMaxFuel) * 100);
+      fuelSec = h('div', { class: 'hud-sec' },
+        h('div', { class: 'meter-wrap', title: 'Запас топлива техники (пополняется на АЗС)' },
+          h('div', { class: 'meter-label' }, h('span', {}, '⛽ Топливо'), h('span', {}, `${fuelPct}%`)),
+          h('div', { class: 'meter-bar' },
+            h('div', { class: 'meter-fill fuel', style: { width: `${Math.max(0, Math.min(100, fuelPct))}%` } })
+          )
+        ),
+        h('button', {
+          class: 'hud-btn sm',
+          title: 'Поехать на ближайшую АЗС или топливозаправщик',
+          onClick: () => send({ type: 'refuel', units: [...selUnits] })
+        }, 'Заправиться')
+      );
+    }
+
+    // 6. Transports & Logistics Routes
+    let transportSec: HTMLElement | null = null;
+    if (isSingle && dFirst?.cargoCap) {
+      const curCargo = first.cargo?.res ?? {};
+      const cargoSum = Object.values(curCargo).reduce((a, b) => a + b, 0);
+      const isRouteActive = !!first.route;
+
+      const routeBtn = h('button', {
+        class: 'hud-btn' + (isRouteActive ? ' active' : ''),
+        onClick: () => {
+          if (isRouteActive) {
+            send({ type: 'stop', units: [first.id] });
+            toast('Маршрут отменен');
+          } else {
+            routePicker = { unitId: first.id };
+            toast('Кликните на здание для ЗАГРУЗКИ, затем на здание для РАЗГРУЗКИ');
+          }
+        }
+      }, isRouteActive ? '🔁 Отменить маршрут' : '🗺 Задать маршрут');
+
+      let cargoDetail = '';
+      if (dFirst.fuelOnly) {
+        cargoDetail = `Цистерна: ${Math.round(curCargo.fuel ?? 0)} / ${dFirst.cargoCap} л`;
+      } else {
+        const parts = Object.entries(curCargo).filter(([_, v]) => v > 0).map(([k, v]) => `${k}: ${Math.round(v)}`);
+        cargoDetail = `Груз: ${Math.round(cargoSum)} / ${dFirst.cargoCap} (${parts.length ? parts.join(', ') : 'пусто'})`;
+      }
+
+      let disembarkBtn: HTMLElement | null = null;
+      if (first.cargo?.passengers?.length) {
+        disembarkBtn = h('button', {
+          class: 'hud-btn sm',
+          title: 'Высадить десант рядом с машиной',
+          onClick: () => send({ type: 'disembark', transport: first.id })
+        }, 'Высадить десант');
+      }
+
+      transportSec = h('div', { class: 'hud-sec' },
+        routeBtn,
+        h('span', { style: { fontSize: '11px', color: '#cbd5e1' } }, cargoDetail),
+        disembarkBtn
+      );
+    }
+
+    // 7. Infantry boarding pickup
+    let boardSec: HTMLElement | null = null;
+    if (isSingle && first.def === 'infantry') {
+      const nearbyPickup = snap.units.find(
+        (t) => t.owner === me && t.def === 'pickup' && (!t.cargo?.passengers || t.cargo.passengers.length === 0) && distKm(curPos(first), curPos(t)) <= 6
+      );
+      if (nearbyPickup) {
+        boardSec = h('button', {
+          class: 'hud-btn sm',
+          title: 'Сесть в пикап для быстрой перевозки',
+          onClick: () => send({ type: 'board', unit: first.id, transport: nearbyPickup.id })
+        }, '🚗 Сесть в пикап');
+      }
+    }
+
+    const elementsToAppend: Node[] = [titleEl, stopBtn, fireGroup, sprintBtn, staminaMeter];
+    if (fuelSec) elementsToAppend.push(fuelSec);
+    if (transportSec) elementsToAppend.push(transportSec);
+    if (boardSec) elementsToAppend.push(boardSec);
+    unitHud.append(...elementsToAppend);
+  }
+
   function unitIcon(d: UnitDef, rank: number) {
     const c = h('canvas', { class: 'nato-ico', width: 128, height: 128 });
     c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: TEAM_COLOR[init!.team], symbol: d.symbol ?? 'infantry', echelon: '', rank, selected: false, own: true }), 0, 0);
@@ -715,6 +955,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       renderSide();
       if (!placing) buildPalette();
     }
+    renderUnitHud();
     renderGroups();
     if (mapReady) renderMap();
   }
@@ -722,6 +963,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   /** Full refresh after a local change (selection, grouping). */
   function render() {
     renderSide();
+    renderUnitHud();
     renderGroups();
     if (mapReady) renderMap();
   }
@@ -836,6 +1078,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.addEventListener('click', (ev) => {
           if (placing || b.owner !== me) return;
           ev.stopPropagation();
+          if (routePicker) {
+            if (!routePicker.fromBuilding) {
+              routePicker.fromBuilding = b.id;
+              toast(`Точка загрузки: ${d.name}. Теперь кликните здание для РАЗГРУЗКИ.`);
+            } else if (routePicker.fromBuilding === b.id) {
+              toast('Точка разгрузки не может совпадать с точкой загрузки!', true);
+            } else {
+              send({ type: 'setRoute', unit: routePicker.unitId, fromBuilding: routePicker.fromBuilding, toBuilding: b.id });
+              toast('Маршрут логистики запущен! Транспорт курсирует автоматически.');
+              routePicker = null;
+              render();
+            }
+            return;
+          }
           selBuilding = b.id;
           selUnits.clear();
           render();

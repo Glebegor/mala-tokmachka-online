@@ -6,6 +6,12 @@ export type Command =
   | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean }
   | { type: 'stop'; units: number[] }
   | { type: 'promote'; units: number[] }
-  | { type: 'demolish'; building: number };
+  | { type: 'demolish'; building: number }
+  | { type: 'fireMode'; units: number[]; mode: 'auto' | 'return' | 'hold' }
+  | { type: 'sprint'; units: number[]; active: boolean }
+  | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number }
+  | { type: 'board'; unit: number; transport: number }
+  | { type: 'disembark'; transport: number }
+  | { type: 'refuel'; units: number[] };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };
