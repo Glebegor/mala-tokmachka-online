@@ -8,7 +8,30 @@ const __dirname = dirname(__filename);
 const roadsPath = join(__dirname, '../mods/base/maps/ukraine.roads.json');
 const roads = JSON.parse(readFileSync(roadsPath, 'utf8'));
 
-// 1. Unpack polylines
+// 1. Explicit fix for Kyiv Brovary junction (road 46)
+const r46 = roads[46];
+const pts46 = [];
+for (let i = 1; i < r46.length; i += 2) pts46.push([r46[i], r46[i+1]]);
+const p0 = [pts46[0][0], pts46[0][1]];
+// Check if p0 is around [30.79416, 50.52816]
+if (Math.abs(p0[0] - 30.79416) < 0.001 && Math.abs(p0[1] - 50.52816) < 0.001) {
+  // Find index around 242
+  let idx242 = pts46.findIndex((p, idx) => idx > 200 && Math.abs(p[0] - 30.79291) < 0.001 && Math.abs(p[1] - 50.52654) < 0.001);
+  if (idx242 >= 0) {
+    pts46.splice(idx242 + 1, 0, [p0[0], p0[1]]);
+  }
+  // Find index around 239
+  let idx239 = pts46.findIndex((p, idx) => idx > 200 && Math.abs(p[0] - 30.79539) < 0.001 && Math.abs(p[1] - 50.52973) < 0.001);
+  if (idx239 >= 0) {
+    pts46.splice(idx239 + 1, 0, [p0[0], p0[1]]);
+  }
+  const flat46 = [r46[0]];
+  for (const [x, y] of pts46) flat46.push(x, y);
+  roads[46] = flat46;
+  console.log('Applied Kyiv Brovary intersection fix to road 46!');
+}
+
+// 2. Unpack all polylines
 const polylines = roads.map((r, idx) => {
   const major = r[0];
   const pts = [];
@@ -40,7 +63,6 @@ for (const pl of polylines) {
   }
 }
 
-// Map of endpoints by coordinate key (5 decimals ~ 1 meter)
 const endpointMap = new Map();
 function epKey(x, y) {
   return `${Math.round(x * 1e4)},${Math.round(y * 1e4)}`;
@@ -54,7 +76,6 @@ for (const pl of polylines) {
   }
 }
 
-// Dead ends are endpoints with count === 1
 const deadEnds = [];
 for (const pl of polylines) {
   for (const isStart of [true, false]) {
@@ -86,12 +107,12 @@ function distToSeg(p, a, b) {
 }
 
 let snappedCount = 0;
-const insertionsByRoad = new Map(); // plIdx -> array of { k, proj }
+const insertionsByRoad = new Map();
 
 for (const de of deadEnds) {
   const p = de.pt;
   const cx = Math.floor(p[0] / CELL), cy = Math.floor(p[1] / CELL);
-  let bestDist = 80; // max 80 meters gap
+  let bestDist = 220; // snap gaps up to 220 meters!
   let bestSeg = null;
 
   for (let x = cx - 1; x <= cx + 1; x++) {
@@ -99,7 +120,13 @@ for (const de of deadEnds) {
       const bucket = segGrid.get(`${x},${y}`);
       if (!bucket) continue;
       for (const item of bucket) {
-        if (item.plIdx === de.pl.idx) continue;
+        // If same road, only check if distant segment (> 5 segments away)
+        if (item.plIdx === de.pl.idx) {
+          const segCount = de.pl.pts.length;
+          if (de.isStart && item.k < 5) continue;
+          if (!de.isStart && item.k > segCount - 6) continue;
+        }
+
         const res = distToSeg(p, item.a, item.b);
         if (res.distM < bestDist) {
           bestDist = res.distM;
@@ -125,16 +152,13 @@ for (const de of deadEnds) {
   }
 }
 
-console.log(`Snapped ${snappedCount} dead ends across the road network!`);
+console.log(`Snapped ${snappedCount} dead ends across the road network (up to 220m)!`);
 
-// Apply insertions to target roads
 let totalInsertedPoints = 0;
 for (const [plIdx, items] of insertionsByRoad.entries()) {
   const pl = polylines[plIdx];
-  // Sort descending by segment index k so insertions don't invalidate earlier indices
   items.sort((a, b) => b.k - a.k);
   for (const { k, proj } of items) {
-    // Only insert if not already virtually identical to k or k+1
     const p1 = pl.pts[k], p2 = pl.pts[k + 1];
     if (p1 && (Math.hypot(p1[0] - proj[0], p1[1] - proj[1]) < 1e-4)) continue;
     if (p2 && (Math.hypot(p2[0] - proj[0], p2[1] - proj[1]) < 1e-4)) continue;
@@ -144,7 +168,6 @@ for (const [plIdx, items] of insertionsByRoad.entries()) {
 }
 console.log(`Inserted ${totalInsertedPoints} connection vertices into target roads.`);
 
-// Repack polylines back into roads format: [major, x1, y1, x2, y2, ...]
 const newRoads = polylines.map(pl => {
   const flat = [pl.major];
   for (const [x, y] of pl.pts) {

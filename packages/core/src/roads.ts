@@ -156,6 +156,16 @@ export class RoadNetwork {
     return best;
   }
 
+  nearestCandidates(p: LngLat, maxKm: number, limit = 3): number[] {
+    const list: { id: number; d: number }[] = [];
+    this.around(p, maxKm, (id) => {
+      const d = distKm(p, this.nodes[id]);
+      if (d <= maxKm) list.push({ id, d });
+    });
+    list.sort((x, y) => x.d - y.d);
+    return list.slice(0, limit).map((x) => x.id);
+  }
+
   isNear(p: LngLat, km: number): boolean {
     return this.nearest(p, km) >= 0;
   }
@@ -199,14 +209,47 @@ export class RoadNetwork {
   route(from: LngLat, to: LngLat, mult: number, accessKm = 40): LngLat[] {
     const direct = distKm(from, to);
     if (direct < 8 || mult <= 1) return [];
-    const a = this.nearest(from, accessKm);
-    const b = this.nearest(to, accessKm);
-    if (a < 0 || b < 0 || a === b) return [];
-    const p = this.path(a, b);
-    if (!p) return [];
-    const cost = distKm(from, this.nodes[a]) + p.km / mult + distKm(this.nodes[b], to);
-    if (cost > direct * 0.92) return [];
-    return p.nodes.map((id) => this.nodes[id]);
+    const fromNodes = this.nearestCandidates(from, accessKm, 3);
+    const toNodes = this.nearestCandidates(to, accessKm, 3);
+    if (!fromNodes.length || !toNodes.length) return [];
+
+    let bestP: { nodes: number[]; km: number } | null = null;
+    let bestCost = direct * 0.98;
+
+    for (const a of fromNodes) {
+      for (const b of toNodes) {
+        if (a === b) continue;
+        const p = this.path(a, b);
+        if (!p) continue;
+        const cost = distKm(from, this.nodes[a]) + p.km / mult + distKm(this.nodes[b], to);
+        if (cost < bestCost) {
+          bestCost = cost;
+          bestP = p;
+        }
+      }
+    }
+
+    if (!bestP) return [];
+    return this.smoothWaypoints(bestP.nodes.map((id) => this.nodes[id]));
+  }
+
+  private smoothWaypoints(pts: LngLat[]): LngLat[] {
+    if (pts.length <= 2) return pts;
+    const res: LngLat[] = [pts[0]];
+    for (let i = 1; i < pts.length - 1; i++) {
+      const prev = res[res.length - 1];
+      const cur = pts[i];
+      const next = pts[i + 1];
+      const dDirect = distKm(prev, next);
+      const dViaCur = distKm(prev, cur) + distKm(cur, next);
+      // Remove hairpin turn / loop if going straight between prev and next is significantly shorter
+      if (dDirect < dViaCur * 0.65 && dDirect < 2.5) {
+        continue;
+      }
+      res.push(cur);
+    }
+    res.push(pts[pts.length - 1]);
+    return res;
   }
 }
 
