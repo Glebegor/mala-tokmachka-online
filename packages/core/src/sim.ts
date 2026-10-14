@@ -24,6 +24,28 @@ export function isStrikeDrone(d: UnitDef | undefined): boolean {
   return d.droneType === 'strike';
 }
 
+export function isPosInCity(
+  pos: LngLat,
+  cp: { id: string; pos: LngLat; value?: number },
+  cityPolys?: Map<string, LngLat[][]> | Record<string, LngLat[][]>
+): boolean {
+  const val = Math.max(1, Math.min(5, cp.value ?? 1));
+  const rKm = val === 5 ? 12 : val === 4 ? 8 : val === 3 ? 5 : val === 2 ? 3.5 : 2.5;
+  // Fast degree check before calculating distKm
+  if (Math.abs(pos[1] - cp.pos[1]) > 0.15) return false;
+  const d = distKm(pos, cp.pos);
+  if (d > rKm * 1.5) return false;
+  if (cityPolys) {
+    const polys = cityPolys instanceof Map ? cityPolys.get(cp.id) : (cityPolys as any)[cp.id];
+    if (polys) {
+      for (const p of polys) {
+        if (pointInPolygon(pos, p)) return true;
+      }
+    }
+  }
+  return d <= rKm;
+}
+
 export class Sim {
   readonly defs: { b: Map<string, BuildingDef>; u: Map<string, UnitDef>; t: Map<string, TerrainDef> };
   readonly map: MapDef;
@@ -273,19 +295,7 @@ export class Sim {
   }
 
   isPosInCity(pos: LngLat, cp: { id: string; pos: LngLat; value?: number }): boolean {
-    const val = Math.max(1, Math.min(5, cp.value ?? 1));
-    const rKm = val === 5 ? 12 : val === 4 ? 8 : val === 3 ? 5 : val === 2 ? 3.5 : 2.5;
-    // Fast degree check before calculating distKm
-    if (Math.abs(pos[1] - cp.pos[1]) > 0.15) return false;
-    const d = distKm(pos, cp.pos);
-    if (d > rKm * 1.5) return false;
-    const polys = this.cityPolys.get(cp.id);
-    if (polys) {
-      for (const p of polys) {
-        if (pointInPolygon(pos, p)) return true;
-      }
-    }
-    return d <= rKm;
+    return isPosInCity(pos, cp, this.cityPolys);
   }
 
   cityDefenseBonus(team: Team, pos: LngLat): number {
@@ -324,6 +334,14 @@ export class Sim {
         const d = this.defs.b.get(cmd.def);
         if (!d) return fail('unknown building');
         if (d.maxPerPlayer && countOf(w, p.id, d.id) >= d.maxPerPlayer) return fail('limit reached');
+        if (d.id === 'housing') {
+          const cityCp = this.map.capturePoints.find((cp) => this.isPosInCity(cmd.pos, cp));
+          if (!cityCp) return fail('жилые дома можно строить только в границах городов');
+          const cityPt = w.points.find((pt) => pt.id === cityCp.id);
+          if (cityPt && cityPt.owner !== p.team) return fail('город должен контролироваться вашей стороной');
+          const cityHouses = w.buildings.filter((b) => b.def === 'housing' && this.isPosInCity(b.pos, cityCp));
+          if (cityHouses.length >= 20) return fail('достигнут лимит: максимум 20 жилых домов в городе');
+        }
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         if (sideOfWithPockets(w.front, w.pockets, cmd.pos) !== p.team) return fail('not your territory');
@@ -706,7 +724,7 @@ export class Sim {
     for (const o of this.world.buildings) {
       if (o.team !== b.team || o.progress < 1 || o === b) continue;
       if (o.def === 'power_plant' && distKm(o.pos, b.pos) <= 100) {
-        powerBoost = 1.25;
+        powerBoost = b.def === 'housing' ? 1.5 : 1.25;
       }
       const a = this.defs.b.get(o.def)!.aura;
       if (a && o.def !== 'power_plant' && distKm(o.pos, b.pos) <= a.radiusKm) m *= a.outputMult;
@@ -1355,73 +1373,65 @@ export class Sim {
     const rescuers = w.units.filter((u) => u.def === 'rescuers' && u.hp > 0 && !u.embarkedIn);
     if (!rescuers.length) return;
 
-    // Pre-filter damaged friendly cities off cooldown (most ticks this is empty!)
-    const damagedCities: { cp: CapturePointDef; pt: CapturePoint }[] = [];
-    for (const cp of this.map.capturePoints) {
-      const pt = w.points.find((p) => p.id === cp.id);
-      if (!pt) continue;
-      const maxHp = pt.maxHp ?? (8000 + (Math.max(1, Math.min(5, cp.value ?? 1)) - 1) * 3000);
-      if ((pt.hp ?? maxHp) < maxHp && w.time - (pt.lastDamagedTime ?? -100) >= 60) {
-        damagedCities.push({ cp, pt });
-      }
-    }
-
-    // Pre-filter damaged friendly buildings off cooldown
-    const damagedBuildings: Building[] = [];
-    for (const b of w.buildings) {
-      if (b.progress < 1) continue;
-      const bDef = this.defs.b.get(b.def);
-      if (bDef && b.hp < bDef.hp && w.time - (b.lastDamagedTime ?? -100) >= 60) {
-        damagedBuildings.push(b);
-      }
-    }
-
-    if (!damagedCities.length && !damagedBuildings.length) return;
-
-    const cityAssignments = new Map<string, number>();
-    const buildingAssignments = new Map<number, number>();
+    // Rescuers grouped by city (team -> cityId -> count)
+    const cityRescuers = new Map<string, { cp: CapturePointDef; team: Team; count: number }>();
+    const rescuersOutside: Unit[] = [];
 
     for (const u of rescuers) {
-      let bestTarget: { type: 'city'; id: string; dist: number } | { type: 'building'; id: number; dist: number } | null = null;
-
-      for (const { cp, pt } of damagedCities) {
-        if (pt.owner !== u.team) continue;
+      let inCity = false;
+      for (const cp of this.map.capturePoints) {
         if (this.isPosInCity(u.pos, cp)) {
-          const d = distKm(u.pos, cp.pos);
-          if (!bestTarget || d < bestTarget.dist) {
-            bestTarget = { type: 'city', id: cp.id, dist: d };
-          }
+          const key = `${u.team}:${cp.id}`;
+          const cur = cityRescuers.get(key);
+          if (cur) cur.count++;
+          else cityRescuers.set(key, { cp, team: u.team, count: 1 });
+          inCity = true;
+          break;
+        }
+      }
+      if (!inCity) rescuersOutside.push(u);
+    }
+
+    // 1. In-city repairs: Repair the city AND repair houses in turn (simultaneously)
+    for (const { cp, team, count } of cityRescuers.values()) {
+      const pt = w.points.find((p) => p.id === cp.id);
+      const repairRate = Math.min(10, count);
+
+      // (a) Repair the city itself (if owned by team and off 60s cooldown)
+      if (pt && pt.owner === team) {
+        const maxHp = pt.maxHp ?? (8000 + (Math.max(1, Math.min(5, cp.value ?? 1)) - 1) * 3000);
+        const cityOffCooldown = w.time - (pt.lastDamagedTime ?? -100) >= 60;
+        if (cityOffCooldown && (pt.hp ?? maxHp) < maxHp) {
+          pt.hp = Math.min(maxHp, (pt.hp ?? maxHp) + repairRate * dt);
         }
       }
 
-      for (const b of damagedBuildings) {
-        if (b.team !== u.team) continue;
+      // (b) Repair houses in this city "по очереди, но одновременно с городом"
+      const cityHouses = w.buildings.filter(
+        (b) => b.team === team && b.def === 'housing' && b.progress >= 1 && this.isPosInCity(b.pos, cp)
+      );
+      const damagedHouse = cityHouses.find(
+        (b) => b.hp < 500 && w.time - (b.lastDamagedTime ?? -100) >= 60
+      );
+      if (damagedHouse) {
+        damagedHouse.hp = Math.min(500, damagedHouse.hp + repairRate * dt);
+      }
+    }
+
+    // 2. Rescuers outside cities repair nearby non-housing or field buildings (within 2.0 km)
+    const buildingAssignments = new Map<number, number>();
+    for (const u of rescuersOutside) {
+      for (const b of w.buildings) {
+        if (b.team !== u.team || b.progress < 1) continue;
+        const bDef = this.defs.b.get(b.def);
+        if (!bDef || b.hp >= bDef.hp || w.time - (b.lastDamagedTime ?? -100) < 60) continue;
         if (Math.abs(u.pos[1] - b.pos[1]) > 0.03) continue;
         const d = distKm(u.pos, b.pos);
         if (d <= 2.0) {
-          if (!bestTarget || d < bestTarget.dist) {
-            bestTarget = { type: 'building', id: b.id, dist: d };
-          }
+          buildingAssignments.set(b.id, (buildingAssignments.get(b.id) ?? 0) + 1);
+          break;
         }
       }
-
-      if (bestTarget) {
-        if (bestTarget.type === 'city') {
-          cityAssignments.set(bestTarget.id, (cityAssignments.get(bestTarget.id) ?? 0) + 1);
-        } else {
-          buildingAssignments.set(bestTarget.id, (buildingAssignments.get(bestTarget.id) ?? 0) + 1);
-        }
-      }
-    }
-
-    // Apply repairs: 1 HP/s per rescuer, max 10 HP/s
-    for (const [cityId, count] of cityAssignments) {
-      const pt = w.points.find((p) => p.id === cityId);
-      if (!pt) continue;
-      const cp = this.map.capturePoints.find((p) => p.id === cityId);
-      const maxHp = pt.maxHp ?? (8000 + (Math.max(1, Math.min(5, cp?.value ?? 1)) - 1) * 3000);
-      const repairRate = Math.min(10, count);
-      pt.hp = Math.min(maxHp, (pt.hp ?? maxHp) + repairRate * dt);
     }
 
     for (const [bId, count] of buildingAssignments) {

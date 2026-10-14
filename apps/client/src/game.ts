@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  distKm, distToFrontKm, offsetKm, RoadNetwork, sideOfWithPockets, TerrainGrid,
+  distKm, distToFrontKm, isPosInCity, offsetKm, RoadNetwork, sideOfWithPockets, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
   SPECIAL_ZONES, isInSpecialZone, isKremenchukRefinery, isAlabugaDroneZone,
 } from '@sw/core';
@@ -119,6 +119,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const pMarkers = new Map<string, HTMLElement>();
   let shown: FrontNode[] = [];
   let gameOver = false;
+  const cityPolys = new Map<string, LngLat[][]>();
   const unitPos = new Map<number, { lng: number; lat: number }>();
   const curPos = (u: UnitView): LngLat => {
     const p = unitPos.get(u.id);
@@ -131,6 +132,30 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     switch (msg.t) {
       case 'init':
         init = msg;
+        cityPolys.clear();
+        if (msg.map.cities?.features) {
+          for (const f of msg.map.cities.features) {
+            const cityId = f.properties?.id;
+            if (!cityId) continue;
+            if (f.geometry?.type === 'Polygon') {
+              const poly = f.geometry.coordinates?.[0] as LngLat[];
+              if (poly) {
+                const list = cityPolys.get(cityId) ?? [];
+                list.push(poly);
+                cityPolys.set(cityId, list);
+              }
+            } else if (f.geometry?.type === 'MultiPolygon') {
+              for (const polyCoords of f.geometry.coordinates) {
+                const poly = polyCoords?.[0] as LngLat[];
+                if (poly) {
+                  const list = cityPolys.get(cityId) ?? [];
+                  list.push(poly);
+                  cityPolys.set(cityId, list);
+                }
+              }
+            }
+          }
+        }
         defB = new Map(msg.ruleset.buildings.map((b) => [b.id, b]));
         defU = new Map(msg.ruleset.units.map((u) => [u.id, u]));
         terrain = msg.map.terrain ? new TerrainGrid(msg.map.terrain) : null;
@@ -640,6 +665,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       mapEl.classList.toggle('zoom-overview', z < 5.3);
       mapEl.classList.toggle('zoom-very-far', z < 6.0);
       mapEl.classList.toggle('zoom-far', z < 6.8);
+      mapEl.classList.toggle('zoom-max', z >= 9.2);
     };
     map.on('zoom', setScale);
     map.on('zoom', updateZoomClasses);
@@ -947,6 +973,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
     if (d < 0) return 'not your territory';
     if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
+    if (def.id === 'housing') {
+      const cityCp = init.map.capturePoints.find((cp) => isPosInCity(p, cp, cityPolys));
+      if (!cityCp) return 'Строительство жилых домов возможно только в границах городов!';
+      const cityPt = snap.points.find((pt) => pt.id === cityCp.id);
+      if (cityPt && cityPt.owner !== init.team) return 'Город должен контролироваться вашей стороной!';
+      const cityHouses = snap.buildings.filter((b) => b.def === 'housing' && isPosInCity(b.pos, cityCp, cityPolys));
+      if (cityHouses.length >= 20) return 'В этом городе уже построен максимум (20) домов!';
+    }
     if (terrain?.at(p) === 'water') return 'cannot build on water';
     if (snap.buildings.some((b) => distKm(b.pos, p) < r.minBuildSpacing)) return `too close to another building (min ${r.minBuildSpacing}km)`;
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
@@ -969,6 +1003,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       specialBonus = ' · ★ БОНУС КРЕМЕНЧУГА: x1.5 к производству топлива!';
     } else if (placing.id === 'drone_factory' && isAlabugaDroneZone(p)) {
       specialBonus = ' · ★ БОНУС ОЭЗ «АЛАБУГА»: x1.5 к скорости производства дронов!';
+    } else if (placing.id === 'housing') {
+      const cityCp = init.map.capturePoints.find((cp) => isPosInCity(p, cp, cityPolys));
+      if (cityCp && snap) {
+        const count = snap.buildings.filter((b) => b.def === 'housing' && isPosInCity(b.pos, cityCp, cityPolys)).length;
+        specialBonus = ` · 🏙 ${cityCp.name}: ${count}/20 жилых домов`;
+      }
     }
     hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''}${specialBonus} (Shift keeps placing, Esc cancels)`;
   }
@@ -1138,7 +1178,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
         const hasPower = snap.buildings.some((o) => o.team === b.team && o.progress >= 1 && o.def === 'power_plant' && distKm(o.pos, b.pos) <= 100);
         if (hasPower) {
-          side.append(h('div', { class: 'stat', style: { color: '#38bdf8' } }, '⚡ Электросеть: +25% к скорости производства'));
+          if (b.def === 'housing') {
+            side.append(h('div', { class: 'stat', style: { color: '#38bdf8', fontWeight: 'bold' } }, '⚡ Электросеть: подключено (+50% к доходу, x1.5)'));
+          } else {
+            side.append(h('div', { class: 'stat', style: { color: '#38bdf8' } }, '⚡ Электросеть: +25% к скорости производства'));
+          }
+        } else if (b.def === 'housing') {
+          side.append(h('div', { class: 'stat', style: { color: '#94a3b8' } }, '⚡ Электросеть: нет подключения (нужна электростанция в радиусе 100 км)'));
+        }
+        if (b.def === 'housing') {
+          const cityCp = init.map.capturePoints.find((cp) => isPosInCity(b.pos, cp, cityPolys));
+          const cityName = cityCp?.name ?? 'Город';
+          const housesCount = cityCp ? snap.buildings.filter((x) => x.def === 'housing' && isPosInCity(x.pos, cityCp, cityPolys)).length : 0;
+          side.append(h('div', { class: 'stat', style: { color: '#e2e8f0' } }, `🏙 ${cityName}: ${housesCount} / 20 жилых домов`));
         }
         if (b.def === 'oil_refinery' && isKremenchukRefinery(b.pos)) {
           side.append(h('div', { class: 'stat', style: { color: '#06b6d4', fontWeight: 'bold' } }, '★ Бонус Кременчугского НПЗ: x1.5 к производству топлива!'));
@@ -2149,12 +2201,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // Power lines along roads connecting power plants to buildings <= 100km (visible ONLY when a power plant is selected)
     if (map.getSource('power-lines')) {
       const selectedPowerPlant = selBuilding !== null ? snap.buildings.find((b) => b.id === selBuilding && b.owner === me && b.progress >= 1 && b.def === 'power_plant') : null;
-      if (!selectedPowerPlant) {
+      const selectedConsumer = (!selectedPowerPlant && selBuilding !== null) ? snap.buildings.find((b) => b.id === selBuilding && b.owner === me && b.progress >= 1) : null;
+      if (!selectedPowerPlant && !selectedConsumer) {
         if (lastPowerLineKey !== 'none') {
           lastPowerLineKey = 'none';
           (map.getSource('power-lines') as GeoJSONSource).setData(empty());
         }
-      } else {
+      } else if (selectedPowerPlant) {
         const pp = selectedPowerPlant;
         const pKey = `${pp.id}|` + snap.buildings.filter((b) => b.team === myTeam && b.progress >= 1).map((b) => `${b.id}:${b.pos[0].toFixed(3)},${b.pos[1].toFixed(3)}`).sort().join(';');
         if (pKey !== lastPowerLineKey) {
@@ -2182,6 +2235,38 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             features: powerLineFeatures,
           });
         }
+      } else if (selectedConsumer) {
+        let bestPp: any = null;
+        let bestDist = 1e9;
+        for (const pp of snap.buildings) {
+          if (pp.team === myTeam && pp.progress >= 1 && pp.def === 'power_plant') {
+            const d = distKm(selectedConsumer.pos, pp.pos);
+            if (d <= 100 && d < bestDist) {
+              bestDist = d;
+              bestPp = pp;
+            }
+          }
+        }
+        const cKey = `consumer:${selectedConsumer.id}:${bestPp ? bestPp.id : 'none'}`;
+        if (cKey !== lastPowerLineKey) {
+          lastPowerLineKey = cKey;
+          const powerLineFeatures: any[] = [];
+          if (bestPp) {
+            let coords: LngLat[] = [];
+            if (roads) coords = roads.powerRoute(bestPp.pos, selectedConsumer.pos, 35);
+            if (coords.length >= 2) {
+              powerLineFeatures.push({
+                type: 'Feature',
+                properties: { from: bestPp.id, to: selectedConsumer.id },
+                geometry: { type: 'LineString', coordinates: coords },
+              });
+            }
+          }
+          (map.getSource('power-lines') as GeoJSONSource).setData({
+            type: 'FeatureCollection',
+            features: powerLineFeatures,
+          });
+        }
       }
     }
 
@@ -2193,7 +2278,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const d = defB.get(b.def)!;
       let m = bMarkers.get(b.id);
       if (!m) {
-        const el = h('div', { class: `bm t${b.team}` });
+        const el = h('div', { class: `bm t${b.team} def-${b.def}` });
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div>`;
         el.querySelector('.glyph')!.textContent = d.icon;
         el.addEventListener('click', (ev) => {
@@ -2237,6 +2322,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       m.el.classList.toggle('building', !done);
       m.el.classList.toggle('mine', b.owner === me);
       m.el.classList.toggle('selected', selBuilding === b.id);
+      m.el.classList.toggle('def-housing', b.def === 'housing');
       m.el.classList.toggle('route-candidate', !!routePicker && b.owner === me && routePicker.fromBuilding !== b.id);
       m.el.classList.toggle('route-from', routePicker?.fromBuilding === b.id);
       m.el.style.setProperty('--p', String(b.progress));
