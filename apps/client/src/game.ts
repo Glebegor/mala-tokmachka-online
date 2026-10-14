@@ -8,10 +8,10 @@ import type { Session } from './api';
 import { clear, h } from './dom';
 import { ShotFx } from './fx';
 import { iconHtml, STATUS, statusIconHtml } from './icons';
-import { FrontArrows } from './arrows';
 import { FogOverlay } from './fog';
 import { renderUnitHud, type Pickers } from './unitHud';
-import { drawNato, echelonFor, natoId, parseNatoId } from './nato';
+import { drawNato, echelonFor, natoId, parseNatoId, REL_COLOR, type Relation } from './nato';
+import { aircraftSprite } from './sprites';
 
 /**
  * Basemap: OpenStreetMap rendered almost monochrome and dark, with real relief shading on top, so that the game layers
@@ -66,10 +66,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let map: maplibregl.Map;
   let mapReady = false;
   let fx: ShotFx | null = null;
-  let arrows: FrontArrows | null = null;
   let fog: FogOverlay | null = null;
   /** Click modes for delivery routes and artillery barrages. */
-  const pick: Pickers = { route: null, bombard: null };
+  const pick: Pickers = { route: null, bombard: null, launch: null };
   /** City boundaries per capture point (housing may only go inside a held city). */
   const cityPolys = new Map<string, LngLat[][]>();
   /** Smoothly interpolated unit positions between 5 Hz snapshots. */
@@ -98,12 +97,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const basemapBtn = h('button', { class: 'ghost', title: 'Hide or show the real map underneath (M)', onClick: () => toggleBasemap() }, 'Map: ON');
   const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
+  /** Ceasefire at the start: a banner with the time left until the war begins. */
+  const peaceBanner = h('div', { class: 'peace-banner', style: { display: 'none' } });
+  const modeBadge = h('span', { class: 'mode-badge', style: { display: 'none' } }, 'SANDBOX');
+  /** Whether teammates may use my buildings. */
+  let sharing = true;
+  const shareBtn = h('button', { class: 'ghost', style: { display: 'none' }, title: 'Let teammates train at, supply and use your buildings, or keep them to yourself', onClick: () => {
+    send({ type: 'share', allow: !sharing });
+  } }, 'Buildings: shared');
   const routeBanner = h('div', { class: 'route-banner', style: { display: 'none' } });
   const leave = () => {
     closed = true;
     ws.close();
     fx?.destroy();
-    arrows?.destroy();
     fog?.destroy();
     card.remove();
     window.removeEventListener('keydown', onKey);
@@ -114,8 +120,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   };
   app.append(
     h('div', { class: 'game' }, mapEl,
-      h('div', { class: 'hud top' }, resBar, scoreBar, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
-      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner),
+      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner),
   );
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
@@ -124,6 +130,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     toasts.append(el);
     setTimeout(() => el.remove(), 4200);
   };
+
+  /** Own units are blue, allies green, the enemy red (markers and aircraft sprites). */
+  const relOf = (u: { owner: string; team: number }): Relation => (u.owner === me ? 'own' : u.team === init?.team ? 'ally' : 'enemy');
+  /** Mobility indicator under a vehicle's marker ('' for troops on foot and aircraft). */
+  const mobilityOf = (d: UnitDef | undefined) => (d && d.kind === 'ground' && d.mobility && d.mobility !== 'foot' ? d.mobility : '');
 
   // ---------- state ----------
   let placing: BuildingDef | null = null;
@@ -178,7 +189,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (u.minRange) extra.push(`Indirect fire ${u.minRange}–${u.range} km, needs a spotter`);
     if (u.cargoCap) extra.push(`${u.fuelOnly ? 'Fuel tank' : 'Cargo'} ${u.cargoCap}${u.passengerCap ? ` · carries ${u.passengerCap} infantry` : ''}`);
     if (u.maxFuel) extra.push(`Fuel tank ${u.maxFuel}${u.droneType === 'strike' ? ' (one way)' : ''}`);
-    if (u.droneType) extra.push(u.droneType === 'strike' ? `Explodes on its target (${u.damage} damage, 1.8 km blast)` : 'Circles its area, refuels at an airfield');
+    if (u.missile) extra.push(`${u.missile === 'ballistic' ? 'Ballistic' : 'Cruise'} missile: about ${Math.round((u.maxFuel ?? 0) / 0.08).toLocaleString('en-US')} km range, ${Math.round((u.interceptChance ?? 1) * 100)}% of anti-air shots hit it`);
+    if (u.droneType) extra.push(u.droneType === 'strike' ? `Explodes on its target (${u.damage} damage, ${u.blastKm ?? 1.8} km blast)` : 'Circles its area, refuels at an airfield');
+    if (u.launchable) extra.push("Small: rides on a pickup's launcher");
+    if (u.droneCap) extra.push(`Launcher for ${u.droneCap} small drones`);
     if (u.side) extra.push(`${u.side === 'ua' ? 'Ukraine' : 'Russia'} only`);
     return [
       ...extra,
@@ -221,6 +235,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
         document.getElementById('mod-theme')!.textContent = msg.ruleset.themes.map((t) => t.css).join('\n');
         terrainBtn.style.display = terrain ? '' : 'none';
+        modeBadge.style.display = msg.ruleset.rules.sandbox ? '' : 'none';
+        modeBadge.title = 'Sandbox: endless resources, stocked stores, building and training ten times faster, no victory or time limit';
+        shareBtn.style.display = msg.players.filter((p) => p.team === msg.team).length > 1 ? '' : 'none';
         buildMap();
         buildPalette();
         hint.textContent = HINT;
@@ -289,12 +306,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (map.hasImage(e.id)) return;
       const spec = parseNatoId(e.id);
       if (spec) return void map.addImage(e.id, drawNato(spec), { pixelRatio: 2 });
-      // drone sprites (side-specific, from the akira branch) and strike smoke
-      const src = e.id.startsWith('drone|') ? (() => { const [, def, side, sel] = e.id.split('|'); return `/drones/${def}_${side}${sel === '1' ? '_sel' : ''}.png`; })() : e.id === 'smoke' ? '/drones/smoke.png' : null;
-      if (!src) return;
+      // aircraft sprites tinted by relation, and strike smoke
+      if (e.id.startsWith('drone|')) {
+        const [, def, rel, sel] = e.id.split('|');
+        void aircraftSprite(def, REL_COLOR[rel as Relation] ?? REL_COLOR.enemy, sel === '1').then((c) => {
+          if (!map.hasImage(e.id)) map.addImage(e.id, c.getContext('2d')!.getImageData(0, 0, c.width, c.height), { pixelRatio: 2 });
+        });
+        return;
+      }
+      if (e.id !== 'smoke') return;
       const img = new Image();
       img.onload = () => !map.hasImage(e.id) && map.addImage(e.id, img, { pixelRatio: 2 });
-      img.src = src;
+      img.src = '/drones/smoke.png';
     });
 
     map.on('load', () => {
@@ -393,9 +416,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       fog = new FogOverlay(map);
       map.on('move', () => drawFog());
-      arrows = new FrontArrows(map, mapEl, TEAM_COLOR, () => snap?.front ?? []);
       fx = new ShotFx(map, mapEl, (def) => defU.get(def) ?? defB.get(def)?.attack, TEAM_COLOR);
-      if (import.meta.env.DEV) (window as any).__sw = { map, fx, arrows, snap: () => snap, fakePockets: [], select: (ids: number[]) => ((selUnits = new Set(ids)), (selBuilding = null), render()) };
+      if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap, init: () => init, units: () => lastUnitFeatures, fakePockets: [], select: (ids: number[]) => ((selUnits = new Set(ids)), (selBuilding = null), render()) };
       mapReady = true;
       if (snap) render();
       showStart();
@@ -428,6 +450,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.bombard = null;
         return render();
       }
+      if (pick.launch) {
+        send({ type: 'launch', transport: pick.launch.transport, target: p });
+        pick.launch = null;
+        return render();
+      }
       if (pick.route) return toast('Click one of your buildings (Esc cancels)');
       if (placing) {
         send({ type: 'build', def: placing.id, pos: p });
@@ -452,7 +479,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.bombard = null;
         return render();
       }
-      if (pick.route) return void ((pick.route = null), render());
+      if (pick.route || pick.launch) return void ((pick.route = pick.launch = null), render());
       if (placing) return cancelPlacing();
       if (!selUnits.size) return;
       const ev = e.originalEvent;
@@ -501,7 +528,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
     if (e.key === 'Escape') {
-      if (pick.route || pick.bombard) return void ((pick.route = pick.bombard = null), render());
+      if (pick.route || pick.bombard || pick.launch) return void ((pick.route = pick.bombard = pick.launch = null), render());
       return cancelPlacing();
     }
     const k = e.key.toLowerCase();
@@ -560,6 +587,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     } else {
       countEl.className = 'countdown';
     }
+  }
+
+  /** Ceasefire banner while it lasts, then a big "war" call once it ends. */
+  let peaceWas = -1;
+  function showPeace() {
+    if (!init || !snap) return;
+    const total = init.ruleset.rules.peaceSeconds;
+    const left = Math.max(0, total - snap.time);
+    const on = total > 0 && left > 0 && snap.countdown === 0;
+    peaceBanner.style.display = on ? 'flex' : 'none';
+    if (on) {
+      clear(peaceBanner);
+      peaceBanner.append(
+        h('b', {}, `CEASEFIRE ${Math.floor(left / 60)}:${String(Math.floor(left % 60)).padStart(2, '0')}`),
+        h('span', {}, 'Build and deploy: no shooting, and nobody may cross the front until it ends'),
+        h('i', { style: { width: `${(left / total) * 100}%` } }),
+      );
+    }
+    if (peaceWas > 0 && left === 0) {
+      countEl.textContent = 'THE WAR BEGINS';
+      countEl.className = 'countdown show pop go war';
+      setTimeout(() => (countEl.className = 'countdown'), 2600);
+      toast('The ceasefire is over: the front is open');
+    }
+    peaceWas = total > 0 ? left : 0;
   }
 
   // ---------- groups ----------
@@ -830,8 +882,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!init || !snap) return;
     const total = Math.max(1, snap.scores[0] + snap.scores[1]);
     // an unlimited match ("until victory") shows the time played instead of the time left
-    const unlimited = init.ruleset.rules.matchSeconds <= 0;
-    const left = unlimited ? snap.time : Math.max(0, init.ruleset.rules.matchSeconds - snap.time);
+    const { matchSeconds, peaceSeconds } = init.ruleset.rules;
+    const unlimited = matchSeconds <= 0;
+    // the match clock starts when the ceasefire ends
+    const left = unlimited ? Math.max(0, snap.time - peaceSeconds) : Math.max(0, peaceSeconds + matchSeconds - Math.max(snap.time, peaceSeconds));
     const held = [0, 1].map((t) => snap!.points.filter((p) => p.owner === t).length);
     clear(scoreBar);
     scoreBar.append(
@@ -861,7 +915,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           h('div', { class: 'muted' }, d.description ?? ''),
           h('div', { class: 'stat' }, `HP ${b.hp}/${d.levels?.[b.level - 2]?.hp ?? d.hp}`),
         );
-        if (b.owner !== me) side.append(h('div', { class: 'muted' }, `Built by ${init.players.find((p) => p.id === b.owner)?.name ?? 'a teammate'}: shared with your side`));
+        // a teammate may keep their buildings to themselves
+        const locked = b.owner !== me && snap.closed.includes(b.owner);
+        const ownerName = init.players.find((p) => p.id === b.owner)?.name ?? 'a teammate';
+        if (b.owner !== me) side.append(h('div', { class: locked ? 'stat warn' : 'muted' }, locked ? `Built by ${ownerName}, who keeps it private: you cannot use it` : `Built by ${ownerName}: shared with your side`));
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
         const rules = init.ruleset.rules;
         if (b.def !== 'power_plant') {
@@ -885,8 +942,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               return h('div', { class: 'storage-item' }, ico, h('span', {}, res?.name ?? k), h('b', {}, Math.floor(v).toLocaleString('en-US')));
             }))));
         }
-        if (b.def === 'missile_factory' || b.def === 'aircraft_plant') side.append(h('div', { class: 'muted' }, 'Production starts with a coming update.'));
-        if (d.training && b.progress >= 1) {
+        if (b.def === 'aircraft_plant') side.append(h('div', { class: 'muted' }, 'Production starts with a coming update.'));
+        if (d.training && b.progress >= 1 && !locked) {
           const t = d.training;
           const inside = b.inside ?? [];
           const rk = ranks();
@@ -919,7 +976,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           }
         }
         const next = d.levels?.[b.level - 1];
-        if (d.levels && b.progress >= 1) {
+        if (d.levels && b.progress >= 1 && !locked) {
           const maxLevel = d.levels.length + 1;
           const cur = d.levels[b.level - 2]?.defenseMult ?? d.defense?.mult ?? 0;
           side.append(h('div', { class: 'stat' }, `Level ${b.level}/${maxLevel}${d.defense ? ` · defence +${Math.round(cur * 100)}%` : ''}`));
@@ -936,7 +993,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (d.attack) side.append(h('div', { class: 'stat' }, `Engages ${d.attack.targets} targets within ${d.attack.range} km`));
         if (d.crossing) side.append(h('div', { class: 'stat' }, `River crossing radius ${d.crossing.radiusKm} km`));
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
-        if (b.progress >= 1) {
+        if (b.progress >= 1 && !locked) {
           const mySide = init.team === 0 ? 'ua' : 'ru';
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
@@ -954,7 +1011,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           if (q.length) side.append(h('div', { class: 'stat' }, 'Queue: ' + q.map((x) => `${defU.get(x.unit)?.name} (${x.remaining}s)`).join(', ')));
         }
         if (b.def === 'power_plant' || b.progress >= 1) ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'powerLines', building: b.id } satisfies ClientMsg));
-        if (b.def !== 'hq') side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
+        if (b.def !== 'hq' && b.owner === me) side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
       }
     } else if (selUnits.size) {
       const mine = snap.units.filter((u) => selUnits.has(u.id));
@@ -1034,11 +1091,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function unitIcon(d: UnitDef, rank: number) {
     if (d.kind === 'air') {
-      const def = d.id === 'drone' ? (init!.team === 0 ? 'drone_pd2' : 'drone_orion') : d.id;
-      return h('img', { class: 'nato-ico drone-ico', src: `/drones/${def}_${init!.team === 0 ? 'ua' : 'ru'}.png`, alt: d.name });
+      const c = h('canvas', { class: 'nato-ico drone-ico', width: 128, height: 128, title: d.name });
+      void aircraftSprite(d.id, REL_COLOR.own, false).then((img) => c.getContext('2d')!.drawImage(img, 0, 0, 128, 128));
+      return c;
     }
     const c = h('canvas', { class: 'nato-ico', width: 128, height: 128 });
-    c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: TEAM_COLOR[init!.team], symbol: d.symbol ?? 'infantry', echelon: '', rank, selected: false, own: true, transport: false }), 0, 0);
+    c.getContext('2d')!.putImageData(drawNato({ hostile: false, color: REL_COLOR.own, symbol: d.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank, selected: false, own: true, transport: false }), 0, 0);
     return c;
   }
 
@@ -1052,8 +1110,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     for (const id of selUnits) if (!s.units.some((u) => u.id === id)) selUnits.delete(id);
     showCountdown(s.countdown);
     showStart();
+    showPeace();
+    sharing = !s.closed.includes(me);
+    shareBtn.textContent = sharing ? 'Buildings: shared' : 'Buildings: private';
+    shareBtn.classList.toggle('on', !sharing);
     fx?.add(s.shots);
-    arrows?.feed(s.shots);
     renderRes();
     renderScore();
     // side panel and palette hold buttons: rebuild them at most once a second so clicks are never lost
@@ -1077,7 +1138,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     routeBanner.textContent = pick.route
       ? pick.route.fromBuilding ? 'Delivery route — step 2: click the building to unload at (Esc cancels)' : 'Delivery route — step 1: click the building to load at (Esc cancels)'
       : '';
-    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard));
+    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch));
   }
 
   /** Full refresh after a local change (selection, grouping). */
@@ -1107,7 +1168,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const symbol = kinds.size === 1 ? [...kinds][0] : kinds.has('armor') && kinds.has('infantry') ? 'mechanized' : [...kinds].sort((a, b) => us.filter((u) => defU.get(u.def)?.symbol === b).length - us.filter((u) => defU.get(u.def)?.symbol === a).length)[0];
       const sel = us.every((u) => selUnits.has(u.id)) && selUnits.size === us.length;
       const rank = Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length);
-      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, icon: natoId({ hostile: false, color: TEAM_COLOR[myTeam], symbol, echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
+      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, icon: natoId({ hostile: false, color: REL_COLOR.own, symbol, mobility: sharedMobility(us), echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
     }
     // zoomed out, everything else is merged into formation markers per ~30 km cell (mine / allied / hostile kept apart)
     const cells = new Map<string, UnitView[]>();
@@ -1125,7 +1186,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const sel = own && us.every((u) => selUnits.has(u.id));
       formations.push({
         type: 'Feature',
-        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, icon: natoId({ hostile: us[0].team !== myTeam, color: TEAM_COLOR[us[0].team], symbol, echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
+        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, icon: natoId({ hostile: us[0].team !== myTeam, color: REL_COLOR[relOf(us[0])], symbol, mobility: sharedMobility(us), echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
         geometry: { type: 'Point', coordinates: centroid(us) },
       });
     }
@@ -1255,15 +1316,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     drawFog();
   }
 
+  /** A formation shows wheels or tracks only when all of it drives the same way. */
+  function sharedMobility(us: UnitView[]): string {
+    const kinds = new Set(us.map((u) => mobilityOf(defU.get(u.def))));
+    return kinds.size === 1 ? [...kinds][0] : '';
+  }
+
   /** Units: NATO markers on the ground, side-specific drone sprites in the air, all at interpolated positions. */
   function renderUnits() {
     if (!init || !snap || !mapReady) return;
     const myTeam = init.team;
     const grouped = new Set<number>();
     for (const g of groups.values()) for (const id of g.ids) grouped.add(id);
-    (map.getSource('units') as GeoJSONSource).setData({
-      type: 'FeatureCollection',
-      features: snap.units.map((u) => {
+    lastUnitFeatures = snap.units.map((u) => {
         const d = defU.get(u.def);
         const own = u.owner === me;
         const sel = selUnits.has(u.id);
@@ -1273,19 +1338,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         let bearing = 0;
         let scale = 1;
         if (air) {
-          const side = u.team === 0 ? 'ua' : 'ru';
-          const def = u.def === 'drone' ? (u.team === 0 ? 'drone_pd2' : 'drone_orion') : u.def;
-          icon = `drone|${def}|${side}|${sel ? 1 : 0}`;
+          icon = `drone|${u.def}|${relOf(u)}|${sel ? 1 : 0}`;
           bearing = droneBearing.get(u.id)?.b ?? u.bearing ?? 0;
           // a strike drone shrinks as it dives on the last 18 km
           if (isStrikeDrone(d) && u.target) scale = Math.min(1, 0.45 + 0.55 * (distKm(pos, u.target) / 18));
         } else {
-          icon = natoId({ hostile: u.team !== myTeam, color: TEAM_COLOR[u.team], symbol: d?.symbol ?? 'infantry', echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
+          icon = natoId({ hostile: u.team !== myTeam, color: REL_COLOR[relOf(u)], symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
         }
         return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), air, icon, bearing, scale, z: sel ? 4 : air ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: pos } };
-      }),
-    } as any);
+    });
+    (map.getSource('units') as GeoJSONSource).setData({ type: 'FeatureCollection', features: lastUnitFeatures } as any);
   }
+  let lastUnitFeatures: any[] = [];
 
   /** Route lines for the selection: the planned path (along the roads), plus each queued stop. */
   function renderSelLines() {

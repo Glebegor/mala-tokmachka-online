@@ -143,7 +143,6 @@ button.ghost.on { color: var(--accent); }
 .side .row:has(> button) { flex-wrap: wrap; }
 
 /* iteration 4 */
-.fx.arrows { z-index: 0; }
 .info-card { position: fixed; display: none; z-index: 20; width: 270px; background: var(--panel); border: 1px solid var(--line); border-left: 2px solid var(--accent); padding: 10px 12px; pointer-events: none; backdrop-filter: blur(6px); }
 .info-card p { margin: 6px 0 8px; color: var(--text); line-height: 1.45; }
 .fact { color: var(--muted); font-size: 11px; }
@@ -224,3 +223,15 @@ small.warn { color: #f59e0b; }
 .cp-hp b { display: block; height: 100%; }
 .cp.hurt .cp-hp { display: block; }
 .cp-major span { font-weight: 700; }
+
+/* ceasefire at the start */
+.peace-banner { position: absolute; top: 58px; left: 50%; transform: translateX(-50%); z-index: 4; display: flex; flex-direction: column; align-items: center; gap: 2px; padding: 8px 18px 10px; border: 1px solid rgba(255, 216, 74, 0.45); border-radius: 8px; background: rgba(11, 13, 16, 0.86); pointer-events: none; overflow: hidden; }
+.peace-banner b { font-size: 18px; letter-spacing: .12em; color: #ffd84a; font-variant-numeric: tabular-nums; }
+.peace-banner span { font-size: 12px; color: var(--muted); }
+.peace-banner i { position: absolute; left: 0; bottom: 0; height: 3px; background: #ffd84a; transition: width 0.3s linear; }
+.countdown.war { font-size: 64px; letter-spacing: .08em; color: #ff5a4f; }
+.mode-badge { padding: 3px 8px; border: 1px solid #ffd84a; border-radius: 4px; color: #ffd84a; font-size: 11px; font-weight: 700; letter-spacing: .14em; }
+.lobby .room .tag { margin-left: 6px; padding: 1px 6px; border: 1px solid #ffd84a; border-radius: 3px; color: #ffd84a; font-size: 10px; letter-spacing: .1em; }
+.settings .hint-line { margin: -4px 0 0; font-size: 11px; }
+.hud.top button { white-space: nowrap; }
+.side .stat.warn { color: #ffb347; }

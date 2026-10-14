@@ -19,7 +19,12 @@ export type Command =
   | { type: 'sprint'; units: number[]; active: boolean }
   /** Standing delivery order for a truck (resType: what to carry, 'any' for anything but fuel). */
   | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number; resType?: string }
+  /** Infantry ride in a vehicle with seats; small drones ride on a vehicle with a launcher (`droneCap`). */
   | { type: 'board'; unit: number; transport: number }
+  /** Launch the drones a vehicle carries, optionally straight at a target. */
+  | { type: 'launch'; transport: number; target?: [number, number] }
+  /** Let teammates use your buildings (train, deliver, school, refuel) or keep them to yourself. */
+  | { type: 'share'; allow: boolean }
   | { type: 'disembark'; transport: number }
   | { type: 'refuel'; units: number[] }
   /** Artillery barrage on an area (null stops it). */

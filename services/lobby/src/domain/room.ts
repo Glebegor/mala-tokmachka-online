@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type RoomInfo, type RoomSettings, type RoomSlot } from '@sw/core';
+import { DEFAULT_SETTINGS, PEACE_OPTIONS, type RoomInfo, type RoomSettings, type RoomSlot } from '@sw/core';
 
 export const MAX_TEAM_SIZE = 8;
 
@@ -46,5 +46,7 @@ export function sanitizeSettings(input: Partial<RoomSettings> | undefined, base:
     startResources: oneOf(i.startResources, ['low', 'normal', 'high'] as const, base.startResources),
     frontSpeed: oneOf(Number(i.frontSpeed), [0.5, 1, 2] as const, base.frontSpeed),
     fogOfWar: typeof i.fogOfWar === 'boolean' ? i.fogOfWar : base.fogOfWar,
+    mode: oneOf(i.mode, ['standard', 'sandbox'] as const, base.mode),
+    peaceMinutes: oneOf(Number(i.peaceMinutes), PEACE_OPTIONS, base.peaceMinutes),
   };
 }

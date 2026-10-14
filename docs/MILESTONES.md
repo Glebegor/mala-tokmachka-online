@@ -114,6 +114,24 @@ Everything from the akira branch now runs on hlib's core:
   arrival times, building stores, smooth 60 fps unit movement.
 - **Lobby**: Rejoin is only offered to players who were in the match when it started.
 
+## M7.1 — Modes, ceasefire, missiles (v0.9.0)
+- **Sandbox game type** (lobby): a test range with full treasuries and stores, building, upgrades, courses and training
+  ten times faster, and no victory or time limit.
+- **Ceasefire at the start** (lobby, default 15 min): build and deploy, but nobody shoots, nobody may cross the front (ground
+  units halt at the line, drones turn back), the front stands still and nothing is captured. The match clock starts when
+  it ends; a banner counts it down and "THE WAR BEGINS" marks the end.
+- **Private buildings**: the top bar toggle "Buildings: shared / private" decides whether teammates may train at, supply,
+  school at, upgrade or refuel at your buildings. Closing them also stops teammates' standing deliveries to and from them.
+  Only the owner may demolish a building.
+- **Missiles**: the missile factory builds Iskander-M (ballistic) and Kh-101 (cruise) for Russia, R-360 Neptune and FP-5
+  Flamingo (cruise) for Ukraine. A missile waits on the launcher until it gets a target, flies there and explodes. Ballistic
+  missiles are fast and rarely intercepted; cruise missiles are slower and anti-air stations shoot many of them down.
+- **Drones from pickups**: a pickup carries two small drones (generic recon drone, Mini Shark, FP-2, and the new Russian
+  Lancet and ZALA). Select the drones next to it and press *Load*, then *Launch at…* (click the target) or *Launch here*.
+- **Markers**: own units blue, allies green, the enemy red (aircraft sprites too). Vehicles carry the APP-6 mobility
+  indicator (two wheels, or a track); in column it turns yellow with a ». The supply bar reads properly on enemy markers.
+- The attack arrows were removed.
+
 ## M8 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.

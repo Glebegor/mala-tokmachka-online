@@ -3,11 +3,16 @@
  * Frame shape = affiliation (friendly rectangle, hostile diamond); colour = side; icon = branch;
  * mark on top of the frame = echelon (size of the formation); chevrons to its right = veterancy rank;
  * triangles to its left = buffs (green, up) and debuffs (red, down);
- * wheels below = transport mode.
+ * below the frame: the mobility indicator of vehicles (two wheels = wheeled, a track = tracked), and for troops on foot
+ * three wheels while they ride in column (transport mode). A vehicle in column gets a yellow indicator and a » mark.
  */
 export const NATO_PREFIX = 'nato|';
 const SIZE = 64; // css px, rendered at 2x
 const INK = '#0b0d10';
+
+/** Marker colours by relation: own units blue, allies green, the enemy red. */
+export const REL_COLOR = { own: '#3d8bff', ally: '#34c26b', enemy: '#ff4d4d' } as const;
+export type Relation = keyof typeof REL_COLOR;
 
 export interface NatoSpec {
   hostile: boolean;
@@ -18,6 +23,8 @@ export interface NatoSpec {
   selected: boolean;
   own: boolean;
   transport: boolean;
+  /** Vehicle mobility shown under the frame: 'wheeled', 'tracked' or '' (on foot). */
+  mobility?: string;
   /** Cut off in a cauldron. */
   encircled?: boolean;
   /** Number of buffs / debuffs shown as pips on the left of the frame. */
@@ -26,13 +33,13 @@ export interface NatoSpec {
 }
 
 export function natoId(s: NatoSpec): string {
-  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}|${s.encircled ? 1 : 0}|${Math.min(4, s.buffs ?? 0)}|${Math.min(4, s.debuffs ?? 0)}`;
+  return `${NATO_PREFIX}${s.hostile ? 'h' : 'f'}|${s.color}|${s.symbol}|${s.echelon}|${s.rank}|${s.selected ? 1 : 0}|${s.own ? 1 : 0}|${s.transport ? 1 : 0}|${s.encircled ? 1 : 0}|${Math.min(4, s.buffs ?? 0)}|${Math.min(4, s.debuffs ?? 0)}|${s.mobility ?? ''}`;
 }
 
 export function parseNatoId(id: string): NatoSpec | null {
   if (!id.startsWith(NATO_PREFIX)) return null;
-  const [, aff, color, symbol, echelon, rank, sel, own, tr, enc, bf, df] = id.split('|');
-  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1', encircled: enc === '1', buffs: Number(bf) || 0, debuffs: Number(df) || 0 };
+  const [, aff, color, symbol, echelon, rank, sel, own, tr, enc, bf, df, mob] = id.split('|');
+  return { hostile: aff === 'h', color, symbol, echelon, rank: Number(rank), selected: sel === '1', own: own === '1', transport: tr === '1', encircled: enc === '1', buffs: Number(bf) || 0, debuffs: Number(df) || 0, mobility: mob ?? '' };
 }
 
 /** Echelon mark for a formation of n units. */
@@ -155,8 +162,23 @@ export function drawNato(spec: NatoSpec): ImageData {
       g.quadraticCurveTo(cx - 6, cy + 1, cx, cy - 7);
       g.fill();
       break;
-    case 'supply':
-      line(-hw, hh - 7, hw, hh - 7);
+    case 'supply': {
+      // a bar across the lower part of the frame (in a diamond it must sit higher to stay readable)
+      const y = spec.hostile ? hh * 0.42 : hh - 7;
+      line(-hw, y, hw, y);
+      break;
+    }
+    case 'missile':
+      g.beginPath();
+      g.moveTo(cx, cy - 9);
+      g.lineTo(cx + 3, cy - 4);
+      g.lineTo(cx + 3, cy + 5);
+      g.lineTo(cx + 6, cy + 9);
+      g.lineTo(cx - 6, cy + 9);
+      g.lineTo(cx - 3, cy + 5);
+      g.lineTo(cx - 3, cy - 4);
+      g.closePath();
+      g.fill();
       break;
     default:
       g.beginPath();
@@ -183,19 +205,49 @@ export function drawNato(spec: NatoSpec): ImageData {
   }
 
   let below = cy + hh + (spec.hostile ? 1 : 3.5);
-  // mobility indicator: wheels under the frame while driving in column (transport mode)
-  if (spec.transport) {
+  const wheel = (x: number, y: number, fill: string) => {
+    g.beginPath();
+    g.arc(x, y, 2.3, 0, Math.PI * 2);
+    g.fillStyle = fill;
+    g.fill();
+    g.strokeStyle = INK;
+    g.lineWidth = 1.3;
+    g.stroke();
+  };
+  const squeeze = spec.hostile ? 0.6 : 1;
+  const fill = spec.transport ? '#ffd84a' : '#ffffff';
+  if (spec.mobility === 'wheeled') {
+    // APP-6 mobility indicator: two wheels under the frame
     below += 1.5;
-    for (const ox of [-8, 0, 8]) {
-      g.beginPath();
-      g.arc(cx + ox * (spec.hostile ? 0.6 : 1), below, 2.3, 0, Math.PI * 2);
-      g.fillStyle = '#ffffff';
-      g.fill();
-      g.strokeStyle = INK;
-      g.lineWidth = 1.3;
-      g.stroke();
-    }
+    for (const ox of [-6, 6]) wheel(cx + ox * squeeze, below, fill);
     below += 4.5;
+  } else if (spec.mobility === 'tracked') {
+    // a track: an elongated rounded band under the frame
+    below += 1.2;
+    g.beginPath();
+    g.roundRect(cx - 11 * squeeze, below - 2.6, 22 * squeeze, 5.2, 2.6);
+    g.fillStyle = fill;
+    g.fill();
+    g.strokeStyle = INK;
+    g.lineWidth = 1.4;
+    g.stroke();
+    below += 4.5;
+  } else if (spec.transport) {
+    // troops on foot riding in column: three wheels
+    below += 1.5;
+    for (const ox of [-8, 0, 8]) wheel(cx + ox * squeeze, below, '#ffffff');
+    below += 4.5;
+  }
+  if (spec.transport && spec.mobility) {
+    // vehicle driving in column: » beside the indicator
+    g.font = '700 9px ui-monospace, Menlo, monospace';
+    g.textAlign = 'left';
+    g.textBaseline = 'middle';
+    g.lineWidth = 2.6;
+    g.strokeStyle = INK;
+    g.fillStyle = '#ffd84a';
+    g.strokeText('»', cx + 13 * squeeze, below - 4.5);
+    g.fillText('»', cx + 13 * squeeze, below - 4.5);
   }
 
   // encircled: broken ring around the marker

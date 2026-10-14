@@ -123,7 +123,7 @@ export class Sim {
     const r = this.ruleset.rules;
     const startRes: ResourceAmounts = {};
     for (const res of this.ruleset.resources) startRes[res.id] = res.start;
-    const players: Player[] = slots.map((s) => ({ ...s, res: { ...startRes } }));
+    const players: Player[] = slots.map((s) => ({ ...s, res: { ...startRes }, share: true }));
     const w: World = {
       tick: 0,
       time: 0,
@@ -171,7 +171,8 @@ export class Sim {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
     const goods = this.storageFor(d);
-    const storage = goods.length ? Object.fromEntries(goods.map((k) => [k, k === 'ore' && d.id === 'metalworks' ? 0 : this.ruleset.rules.startStorage])) : undefined;
+    const stock = (k: string) => (this.ruleset.rules.sandbox ? this.storageCap({ def } as Building) : k === 'ore' && d.id === 'metalworks' ? 0 : this.ruleset.rules.startStorage);
+    const storage = goods.length ? Object.fromEntries(goods.map((k) => [k, stock(k)])) : undefined;
     const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, cooldown: 0, level: 1, upgrade: null, inside: [], course: null, storage };
     this.world.buildings.push(b);
     return b;
@@ -189,7 +190,7 @@ export class Sim {
       stamina: d.kind === 'ground' && (d.mobility ?? 'foot') === 'foot' && !d.maxFuel ? 100 : undefined,
       fuel: d.maxFuel,
       maxFuel: d.maxFuel,
-      cargo: d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined,
+      cargo: d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [], drones: d.droneCap ? [] : undefined } : undefined,
       // recon drones circle where they are until told otherwise
       loiterCenter: recon ? [pos[0], pos[1]] : undefined,
       loiterRadius: recon ? 4 : undefined,
@@ -220,7 +221,7 @@ export class Sim {
       if (d < bestD) (bestD = d), (best = p);
     };
     for (const b of this.world.buildings) {
-      if (b.team !== u.team || b.progress < 1) continue;
+      if (b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner)) continue;
       if (air ? b.def === 'airfield' : b.def === 'gas_station' || b.def === 'hq') take(b.pos);
     }
     if (!air) for (const t of this.world.units) if (t !== u && t.owner === u.owner && this.defs.u.get(t.def)!.fuelOnly && (t.cargo?.res.fuel ?? 0) > 0) take(t.pos);
@@ -349,7 +350,17 @@ export class Sim {
       top = Math.max(top, u.rank + 1);
       perTick += r.courseCostPerTick + r.courseCostPerRank * u.rank;
     }
-    return { perSecond: perTick * r.tickRate, seconds: t.baseTime + t.timePerRank * top, pupils };
+    return { perSecond: perTick * r.tickRate, seconds: (t.baseTime + t.timePerRank * top) * r.buildTimeMult, pupils };
+  }
+
+  /** A teammate's building can be used unless its owner has closed their buildings to the team. */
+  usable(b: Building, playerId: string): boolean {
+    return b.owner === playerId || this.player(b.owner)?.share !== false;
+  }
+
+  /** Seconds of ceasefire left (0 once the war is on). */
+  peaceLeft(): number {
+    return Math.max(0, this.ruleset.rules.peaceSeconds - this.world.time);
   }
 
   /** Which team holds the ground here: cauldrons first, then the main front. */
@@ -434,6 +445,7 @@ export class Sim {
         // factories are shared by the whole team; the unit belongs to whoever ordered it
         const b = w.buildings.find((x) => x.id === cmd.building);
         if (!b || b.team !== p.team || b.progress < 1) return fail('building unavailable');
+        if (!this.usable(b, p.id)) return fail(`${this.player(b.owner)?.name ?? 'Its owner'} keeps this building to themselves`);
         const bd = this.defs.b.get(b.def)!;
         const ud = this.defs.u.get(cmd.unit);
         if (!ud || !bd.trains?.includes(ud.id)) return fail('cannot train that here');
@@ -449,13 +461,14 @@ export class Sim {
         pay(p.res, treasury);
         pay(b.storage, site);
         for (const [k, v] of Object.entries(site)) p.res[k] = Math.max(0, (p.res[k] ?? 0) - v);
-        w.queue.push({ building: b.id, unit: ud.id, owner: p.id, remaining: ud.trainTime });
+        w.queue.push({ building: b.id, unit: ud.id, owner: p.id, remaining: ud.trainTime * r.trainTimeMult });
         return ok();
       }
       case 'move': {
         if (!isFinitePos(cmd.to) || !Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
         const mine = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
+        if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
         for (const u of mine) u.haul = undefined; // a manual order cancels a delivery round
         const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct');
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
@@ -492,6 +505,7 @@ export class Sim {
         const from = w.buildings.find((x) => x.id === cmd.fromBuilding && x.team === p.team);
         const to = w.buildings.find((x) => x.id === cmd.toBuilding && x.team === p.team);
         if (!from || !to || from === to) return fail('pick two different buildings of your side');
+        if (!this.usable(from, p.id) || !this.usable(to, p.id)) return fail('a teammate keeps that building to themselves');
         const loaded = !!u.cargo && Object.values(u.cargo.res).some((v) => v > 0);
         this.orderMove([u], loaded ? to.pos : from.pos, false, false, false);
         u.haul = { fromBuilding: from.id, toBuilding: to.id, resType: cmd.resType, state: loaded ? 'to_to' : 'to_from' };
@@ -503,6 +517,19 @@ export class Sim {
         if (!u || !t || u === t) return fail('unit not found');
         const td = this.defs.u.get(t.def)!;
         const ud = this.defs.u.get(u.def)!;
+        if (ud.kind === 'air') {
+          // small drones ride on a vehicle's launcher
+          if (!ud.launchable) return fail('only small drones can be carried');
+          if (!td.droneCap) return fail('that vehicle has no drone launcher');
+          t.cargo ??= { res: {}, cap: td.cargoCap ?? 0, passengers: [] };
+          t.cargo.drones ??= [];
+          if (t.cargo.drones.length >= td.droneCap) return fail('launcher full');
+          if (distKm(u.pos, t.pos) > 10) return fail('too far from the vehicle');
+          u.embarkedIn = t.id;
+          (u.path = []), (u.target = null), (u.pos = [t.pos[0], t.pos[1]]), (u.isLoitering = false), (u.loiterCenter = undefined);
+          t.cargo.drones.push(u.id);
+          return ok();
+        }
         if (!td.passengerCap) return fail('that vehicle carries no passengers');
         if (ud.kind !== 'ground' || (ud.mobility ?? 'foot') !== 'foot') return fail('only infantry can ride along');
         t.cargo ??= { res: {}, cap: td.cargoCap ?? 0, passengers: [] };
@@ -512,6 +539,31 @@ export class Sim {
         u.embarkedIn = t.id;
         (u.path = []), (u.target = null), (u.pos = [t.pos[0], t.pos[1]]);
         t.cargo.passengers.push(u.id);
+        return ok();
+      }
+      case 'launch': {
+        const t = w.units.find((x) => x.id === cmd.transport && x.owner === p.id);
+        if (!t?.cargo?.drones?.length) return fail('no drones on board');
+        if (cmd.target && !isFinitePos(cmd.target)) return fail('bad target');
+        if (cmd.target && this.peaceLeft() > 0 && this.side(cmd.target) !== p.team) return fail('ceasefire: nobody may cross the front yet');
+        const drones = t.cargo.drones.map((id) => w.units.find((x) => x.id === id)).filter((x): x is Unit => !!x);
+        t.cargo.drones = [];
+        drones.forEach((u, i) => {
+          u.embarkedIn = undefined;
+          u.pos = offsetKm(t.pos, 0.15 * Math.cos(i * 2.1), 0.15 * Math.sin(i * 2.1));
+          u.bearing = t.bearing;
+          if (cmd.target) this.orderMove([u], cmd.target, false, false, false);
+          else if (isReconDrone(this.defs.u.get(u.def))) (u.loiterCenter = [t.pos[0], t.pos[1]]), (u.loiterRadius = 4), (u.isLoitering = true), (u.path = []);
+        });
+        return ok();
+      }
+      case 'share': {
+        p.share = !!cmd.allow;
+        // a closed door also stops teammates' standing deliveries to and from these buildings
+        if (!p.share) for (const u of w.units) if (u.haul && u.owner !== p.id && u.team === p.team) {
+          const ends = [u.haul.fromBuilding, u.haul.toBuilding].map((id) => w.buildings.find((b) => b.id === id));
+          if (ends.some((b) => b?.owner === p.id)) (u.haul = undefined), (u.path = []), (u.target = null);
+        }
         return ok();
       }
       case 'disembark': {
@@ -533,6 +585,7 @@ export class Sim {
       }
       case 'bombard': {
         if (cmd.target && !isFinitePos(cmd.target)) return fail('bad target');
+        if (cmd.target && this.peaceLeft() > 0) return fail('ceasefire: no shooting yet');
         const set = new Set(cmd.units);
         for (const u of w.units) {
           if (!set.has(u.id) || u.owner !== p.id || !this.defs.u.get(u.def)!.minRange) continue;
@@ -545,6 +598,7 @@ export class Sim {
         const b = w.buildings.find((x) => x.id === cmd.building);
         const t = b && this.defs.b.get(b.def)!.training;
         if (!b || !t || b.team !== p.team || b.progress < 1) return fail('not a training centre of your side');
+        if (!this.usable(b, p.id)) return fail('a teammate keeps this training centre to themselves');
         if (b.course) return fail('a course is in progress');
         if (!Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
@@ -561,6 +615,7 @@ export class Sim {
         const b = w.buildings.find((x) => x.id === cmd.building);
         const t = b && this.defs.b.get(b.def)!.training;
         if (!b || !t || b.team !== p.team) return fail('not a training centre of your side');
+        if (!this.usable(b, p.id)) return fail('a teammate keeps this training centre to themselves');
         if (b.course) return fail('a course is already running');
         const terms = this.courseTerms(b);
         if (terms.pupils < t.minUnits) return fail(`a course needs at least ${t.minUnits} units inside`);
@@ -571,6 +626,7 @@ export class Sim {
       case 'release': {
         const b = w.buildings.find((x) => x.id === cmd.building);
         if (!b || b.team !== p.team || !b.inside.length) return fail('nobody inside');
+        if (!this.usable(b, p.id)) return fail('a teammate keeps this training centre to themselves');
         if (b.course) return fail('a course is in progress');
         this.evict(b);
         return ok();
@@ -578,17 +634,19 @@ export class Sim {
       case 'upgrade': {
         const b = w.buildings.find((x) => x.id === cmd.building);
         if (!b || b.team !== p.team || b.progress < 1) return fail('building unavailable');
+        if (!this.usable(b, p.id)) return fail('a teammate keeps this building to themselves');
         const next = this.defs.b.get(b.def)!.levels?.[b.level - 1];
         if (!next) return fail('already at the highest level');
         if (b.upgrade) return fail('upgrade already in progress');
         if (!canAfford(p.res, next.cost)) return fail('not enough resources');
         pay(p.res, next.cost);
-        b.upgrade = { remaining: next.time, total: next.time };
+        b.upgrade = { remaining: next.time * r.buildTimeMult, total: next.time * r.buildTimeMult };
         return ok();
       }
       case 'demolish': {
-        const i = w.buildings.findIndex((x) => x.id === cmd.building && x.team === p.team);
-        if (i < 0) return fail('not found');
+        // only the owner may tear a building down
+        const i = w.buildings.findIndex((x) => x.id === cmd.building && x.owner === p.id);
+        if (i < 0) return fail('not your building');
         const b = w.buildings[i];
         if (b.def === 'hq') return fail('cannot demolish HQ');
         const d = this.defs.b.get(b.def)!;
@@ -713,6 +771,7 @@ export class Sim {
       if (queue && u.path.filter((w) => w.end).length >= r.maxQueuedOrders) return;
       u.bombardTarget = null;
       if (d.kind === 'air') {
+        if (this.peaceLeft() > 0 && this.side(to) !== u.team) return; // ceasefire: the front is closed
         // drones fly straight; a strike drone dives on the spot, a recon drone circles it once there
         const leg: Waypoint = { p: to, road: false, end: true };
         u.path = queue && u.path.length && !u.isLoitering ? [...u.path, leg] : [leg];
@@ -725,6 +784,7 @@ export class Sim {
         return;
       }
       if (!this.isPlayableGround(to, this.roads?.isNear(to, 2) ?? false)) return; // into the sea or a neutral country
+      if (this.peaceLeft() > 0 && this.side(to) !== u.team) return; // ceasefire: the front is closed
       // artillery never drives up to (or over) the front line
       if (d.minRange && distToFrontKm(this.world.front, to) * (u.team === 0 ? 1 : -1) < 0.5) return;
       const ring = Math.ceil(Math.sqrt(i));
@@ -775,23 +835,38 @@ export class Sim {
     const prevSec = Math.floor(w.time);
     w.time += dt;
 
+    const peace = this.peaceLeft() > 0;
     this.construction(dt);
     this.courses(dt);
     this.economy(dt);
+    if (r.sandbox && w.tick % r.tickRate === 0) this.restock();
     this.training(dt);
     this.units(dt);
     this.repairs(dt);
-    this.frontline(dt);
+    // during the ceasefire the line is frozen, nothing is captured and nobody can win
+    if (!peace) this.frontline(dt);
     if (w.smokes.length && w.tick % r.tickRate === 0) w.smokes = w.smokes.filter((x) => x.expiresAt > w.time);
-    this.territory(dt);
-    this.checkVictory();
+    if (!peace) this.territory(dt);
+    if (!peace && !r.sandbox) this.checkVictory();
     if (w.tick % 2 === 0) this.refreshStatus();
-    if (w.tick % r.tickRate === 0) this.greyZones();
+    if (!peace && w.tick % r.tickRate === 0) this.greyZones();
+    if (r.peaceSeconds > 0 && w.time >= r.peaceSeconds && w.time - dt < r.peaceSeconds) this.hooks.emit('ceasefireOver', {});
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
-    if (r.matchSeconds > 0 && w.time >= r.matchSeconds && w.winner === null) {
+    // the clock for the time limit starts when the ceasefire ends
+    if (!r.sandbox && r.matchSeconds > 0 && w.time >= r.peaceSeconds + r.matchSeconds && w.winner === null) {
       w.winner = w.scores[0] === w.scores[1] ? null : w.scores[0] > w.scores[1] ? 0 : 1;
       w.winReason = 'time limit';
+    }
+  }
+
+  /** Sandbox: treasuries and building stores are kept full so every feature can be tried at once. */
+  private restock() {
+    for (const p of this.world.players) for (const res of this.ruleset.resources) p.res[res.id] = res.cap;
+    for (const b of this.world.buildings) {
+      if (!b.storage) continue;
+      const cap = this.storageCap(b);
+      for (const k of Object.keys(b.storage)) b.storage[k] = cap;
     }
   }
 
@@ -799,7 +874,7 @@ export class Sim {
     for (const b of this.world.buildings) {
       if (b.progress >= 1) continue;
       const d = this.defs.b.get(b.def)!;
-      b.progress = Math.min(1, b.progress + dt / d.buildTime);
+      b.progress = Math.min(1, b.progress + dt / (d.buildTime * this.ruleset.rules.buildTimeMult));
       if (b.progress >= 1) {
         this.stat(b.owner).buildingsBuilt++;
         this.hooks.emit('buildingCompleted', { id: b.id, def: b.def, owner: b.owner });
@@ -1152,7 +1227,7 @@ export class Sim {
     const need = u.maxFuel - u.fuel;
     const fromStore = (kinds: string[], km: number, rate: number) => {
       for (const b of this.world.buildings) {
-        if (!kinds.includes(b.def) || b.team !== u.team || b.progress < 1 || distKm(u.pos, b.pos) > km) continue;
+        if (!kinds.includes(b.def) || b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner) || distKm(u.pos, b.pos) > km) continue;
         const have = b.storage?.fuel ?? 0;
         if (have <= 0) continue;
         const take = Math.min(rate * dt, need, have);
@@ -1235,6 +1310,7 @@ export class Sim {
   private units(dt: number) {
     const w = this.world;
     const r = this.ruleset.rules;
+    const peace = this.peaceLeft() > 0;
     this.indexWorld();
     for (const u of w.units) {
       if (u.embarkedIn) {
@@ -1263,7 +1339,7 @@ export class Sim {
       if (u.haul) this.haulStep(u, d, dt);
 
       // fire discipline: hold = never, return = only once hit, auto = anything in range
-      const canFire = u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
+      const canFire = !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
 
       // artillery barrage on a chosen area (2 s salvos, 1 km blast, a little scatter)
       let barrage = false;
@@ -1367,7 +1443,7 @@ export class Sim {
     // static weapons (air defence and the like)
     for (const b of w.buildings) {
       const a = this.defs.b.get(b.def)!.attack;
-      if (!a || b.progress < 1) continue;
+      if (!a || b.progress < 1 || peace) continue;
       b.cooldown = Math.max(0, b.cooldown - dt);
       if (b.cooldown > 0) continue;
       let tgt: Unit | null = null;
@@ -1380,10 +1456,13 @@ export class Sim {
         if (dist <= best) (best = dist), (tgt = e);
       }
       if (!tgt) continue;
+      const target: Unit = tgt;
       b.cooldown = 1;
-      tgt.hp -= a.damage;
-      this.shots.push({ def: b.def, team: b.team, from: b.pos, to: tgt.pos });
-      if (tgt.hp <= 0) this.stat(b.owner).kills++;
+      this.shots.push({ def: b.def, team: b.team, from: b.pos, to: target.pos });
+      // fast missiles are hard to intercept: most shots miss them
+      if (Math.random() >= (this.defs.u.get(target.def)!.interceptChance ?? 1)) continue;
+      target.hp -= a.damage;
+      if (target.hp <= 0) this.stat(b.owner).kills++;
     }
     if (this.shots.length > 4000) this.shots.splice(0, this.shots.length - 4000);
 
@@ -1439,10 +1518,18 @@ export class Sim {
     const want = Math.abs(dx) + Math.abs(dy) > 1e-9 ? (Math.atan2(dx, dy) * 180) / Math.PI : u.bearing ?? 0;
     u.bearing ??= want;
     const diff = ((want - u.bearing + 540) % 360) - 180;
-    u.bearing = (u.bearing + clamp(diff, -30 * dt, 30 * dt) + 360) % 360;
+    const turn = (d.turnRate ?? 30) * dt;
+    u.bearing = (u.bearing + clamp(diff, -turn, turn) + 360) % 360;
     const rad = (u.bearing * Math.PI) / 180;
     const step = speed * dt;
-    u.pos = offsetKm(u.pos, Math.sin(rad) * step, Math.cos(rad) * step);
+    const next = offsetKm(u.pos, Math.sin(rad) * step, Math.cos(rad) * step);
+    if (this.peaceLeft() > 0 && this.side(next) !== u.team && this.side(u.pos) === u.team) {
+      // ceasefire: turn back at the line; a recon drone circles a little further back
+      (u.path = []), (u.target = null);
+      if (recon) u.loiterCenter = offsetKm(u.pos, -Math.sin(rad) * 5, -Math.cos(rad) * 5);
+      return;
+    }
+    u.pos = next;
     if (u.fuel !== undefined) {
       u.fuel = Math.max(0, u.fuel - step * 0.08);
       if (u.fuel <= 0) return void (u.hp = 0); // out of fuel: the drone is lost
@@ -1451,8 +1538,10 @@ export class Sim {
     const ndx = (wp.p[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
     const ndy = (wp.p[1] - u.pos[1]) * 111.32;
     const off = Math.abs(((((Math.atan2(ndx, ndy) * 180) / Math.PI - u.bearing) + 540) % 360) - 180);
-    const reach = strike && u.path.length === 1 ? Math.max(0.25, speed * 1.5) : Math.max(0.6, speed * 2.5);
+    // missiles are too fast for the drone rule of thumb: they hit when the next step would carry them past the target
+    const reach = d.missile ? Math.max(0.25, step * 1.05) : strike && u.path.length === 1 ? Math.max(0.25, speed * 1.5) : Math.max(0.6, speed * 2.5);
     if (left > reach && !(left <= 0.8 && off > 90)) return;
+    if (d.missile && strike && u.path.length === 1) u.pos = [wp.p[0], wp.p[1]];
     const done = u.path.shift()!;
     if (recon && u.isLoitering) u.path.push(done); // keep circling
     if (recon && !u.path.length) {
@@ -1462,7 +1551,7 @@ export class Sim {
     u.target = u.path.length ? u.path[u.path.length - 1].p : null;
     if (strike && !u.path.length) {
       // impact
-      const dealt = this.blast(u, u.pos, d.id === 'drone_fire_point' ? 1.2 : 1.8, d.damage || 320, true);
+      const dealt = this.blast(u, u.pos, d.blastKm ?? 1.8, d.damage || 320, true);
       this.stat(u.owner).damage += dealt;
       this.shots.push({ def: u.def, team: u.team, from: u.pos, to: u.pos });
       this.world.smokes.push({ id: this.world.nextId++, pos: [u.pos[0], u.pos[1]], createdAt: this.world.time, expiresAt: this.world.time + 600 });
@@ -1559,6 +1648,10 @@ export class Sim {
         budget = 0;
         if (distKm(u.pos, wp.p) < 0.02 || (before[0] === u.pos[0] && before[1] === u.pos[1])) u.path.shift();
       }
+    }
+    if (this.peaceLeft() > 0 && this.side(u.pos) !== u.team && this.side(start) === u.team) {
+      // ceasefire: the line is closed, halt on our side of it
+      (u.pos = start), (u.path = []);
     }
     const moved = distKm(start, u.pos);
     if (moved > 0) {

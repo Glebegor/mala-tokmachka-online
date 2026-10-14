@@ -9,6 +9,8 @@ export interface Player {
   team: Team;
   bot: boolean;
   res: ResourceAmounts;
+  /** Teammates may train at, supply and use this player's buildings. */
+  share: boolean;
 }
 
 export interface Building {
@@ -43,6 +45,7 @@ export interface UnitCargo {
   res: Record<string, number>;
   cap: number;
   passengers?: number[]; // ids of units riding inside
+  drones?: number[]; // ids of launchable drones carried (pickups)
 }
 
 /** A standing delivery order for a truck: load at one building, unload at another, repeat. */

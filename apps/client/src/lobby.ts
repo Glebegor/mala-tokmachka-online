@@ -1,4 +1,4 @@
-import type { BotDifficulty, RoomInfo, RoomSettings } from '@sw/core';
+import { PEACE_OPTIONS, type BotDifficulty, type GameMode, type RoomInfo, type RoomSettings } from '@sw/core';
 import { api, type Session } from './api';
 import { clear, h } from './dom';
 import { showProfile } from './profile';
@@ -43,12 +43,15 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
     const set = (patch: Partial<RoomSettings>) => guard(() => api.settings(room.id, patch));
     return h('div', { class: 'settings' },
       h('h3', {}, 'Match settings', isHost ? null : h('span', { class: 'muted' }, ' (host only)')),
+      select<GameMode>('Game type', st.mode, [{ v: 'standard', label: 'Standard match' }, { v: 'sandbox', label: 'Sandbox (test features)' }], !isHost, (v) => set({ mode: v })),
+      st.mode === 'sandbox' ? h('p', { class: 'muted hint-line' }, 'Endless resources, stocked stores, building and training 10× faster, no victory and no time limit.') : null,
+      select('Ceasefire at start', st.peaceMinutes, PEACE_OPTIONS.map((m) => ({ v: m as number, label: m ? `${m} min` : 'None' })), !isHost, (v) => set({ peaceMinutes: v })),
       select('Map', st.mapId, (maps.length ? maps : [{ id: st.mapId, name: st.mapId }]).map((m) => ({ v: m.id, label: m.name })), !isHost, (v) => set({ mapId: v })),
-      select('Duration', st.matchMinutes, [{ v: 0, label: 'Until victory' }, ...[10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` }))], !isHost, (v) => set({ matchMinutes: v })),
+      st.mode === 'sandbox' ? null : select('Duration', st.matchMinutes, [{ v: 0, label: 'Until victory' }, ...[10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` }))], !isHost, (v) => set({ matchMinutes: v })),
       select('Team size', st.teamSize, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ v: n, label: `${n} v ${n}` })), !isHost, (v) => set({ teamSize: v })),
       toggle('Fill empty slots with bots', st.fillBots, !isHost, (v) => set({ fillBots: v })),
       select<BotDifficulty>('Bot difficulty', st.botDifficulty, [{ v: 'easy', label: 'Easy' }, { v: 'normal', label: 'Normal' }, { v: 'hard', label: 'Hard' }], !isHost, (v) => set({ botDifficulty: v })),
-      select('Starting resources', st.startResources, [{ v: 'low', label: 'Low (×0.5)' }, { v: 'normal', label: 'Normal' }, { v: 'high', label: 'High (×2.5)' }], !isHost, (v) => set({ startResources: v })),
+      st.mode === 'sandbox' ? null : select('Starting resources', st.startResources, [{ v: 'low', label: 'Low (×0.5)' }, { v: 'normal', label: 'Normal' }, { v: 'high', label: 'High (×2.5)' }], !isHost, (v) => set({ startResources: v })),
       select('Front speed', st.frontSpeed, [{ v: 0.5, label: 'Slow' }, { v: 1, label: 'Normal' }, { v: 2, label: 'Fast' }], !isHost, (v) => set({ frontSpeed: v as 0.5 | 1 | 2 })),
       toggle('Fog of war', st.fogOfWar, !isHost, (v) => set({ fogOfWar: v })),
     );
@@ -120,8 +123,8 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
           rooms.length === 0 ? h('p', { class: 'muted' }, 'No rooms yet. Create one.') : null,
           ...rooms.map((r) =>
             h('div', { class: 'room' },
-              h('span', {}, r.name),
-              h('span', { class: 'muted' }, `${r.slots.filter((x) => !x.bot).length} players · ${r.settings.teamSize}v${r.settings.teamSize} · ${r.status}`),
+              h('span', {}, r.name, r.settings.mode === 'sandbox' ? h('span', { class: 'tag' }, 'SANDBOX') : null),
+              h('span', { class: 'muted' }, `${r.slots.filter((x) => !x.bot).length} players · ${r.settings.teamSize}v${r.settings.teamSize} · ${r.settings.peaceMinutes ? `${r.settings.peaceMinutes} min ceasefire · ` : ''}${r.status}`),
               // a running match can only be re-entered by someone who was in it when it started
               r.status === 'open'
                 ? h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, 'Join')

@@ -15,7 +15,7 @@ interface Effect {
   seed: number;
 }
 
-const DUR: Record<string, number> = { burst: 420, shell: 520, arc: 1500, beam: 380, missile: 900 };
+const DUR: Record<string, number> = { burst: 420, shell: 520, arc: 1500, beam: 380, missile: 900, blast: 1800 };
 
 /** Canvas overlay that animates weapon fire. Misses are cosmetic: the server has already resolved damage. */
 export class ShotFx {
@@ -139,6 +139,15 @@ export class ShotFx {
         if (impactT > 0 && impactT < 1) {
           this.flash(b.x, b.y, (e.hit ? 14 : 9) * k * (0.5 + impactT), e.hit ? '#ff7a2f' : '#8a8f98', (1 - impactT) * (e.hit ? 1 : 0.6));
           this.ring(b.x, b.y, 20 * k * impactT, e.hit ? '#ffd27a' : '#9aa0a8', 1 - impactT);
+        }
+      } else if (e.kind === 'blast') {
+        // missile warhead: a fireball, a bright core and two shock rings rolling outwards
+        if (t <= 1) {
+          const grow = 1 - (1 - t) * (1 - t);
+          this.flash(b.x, b.y, 26 * k * (0.35 + grow), '#ff6a1f', 0.75 * (1 - t));
+          this.flash(b.x, b.y, 12 * k * (0.5 + grow * 0.6), '#ffe7a8', 1 - t);
+          this.ring(b.x, b.y, 46 * k * grow, '#ffd27a', 1 - t);
+          this.ring(b.x, b.y, 30 * k * Math.max(0, grow - 0.15), '#ffffff', 0.7 * (1 - t));
         }
       } else if (e.kind === 'missile') {
         // air-defence missile: accelerating streak with a smoke trail, bursts in the air
