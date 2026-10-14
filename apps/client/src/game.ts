@@ -673,13 +673,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
         // Building local storage
         const stor = b.storage ?? {};
+        const isGasStation = b.def === 'gas_station';
         const storBox = h('div', { class: 'storage-box' },
-          h('b', { style: { fontSize: '11px', color: '#94a3b8' } }, 'Склад здания (до 30,000 на ресурс):'),
+          h('b', { style: { fontSize: '11px', color: '#94a3b8' } }, isGasStation ? 'Резервуар АЗС (до 20,000 л топлива):' : 'Склад сырья (до 30,000 на ресурс):'),
           h('div', { class: 'storage-grid' },
-            h('div', { class: 'storage-item' }, h('span', {}, '💰 Деньги'), h('b', {}, `${Math.floor(stor.money ?? 0)}`)),
             h('div', { class: 'storage-item' }, h('span', {}, '🔩 Металл'), h('b', {}, `${Math.floor(stor.metal ?? 0)}`)),
-            h('div', { class: 'storage-item' }, h('span', {}, '⛽ Топливо'), h('b', {}, `${Math.floor(stor.fuel ?? 0)}`)),
-            h('div', { class: 'storage-item' }, h('span', {}, '👥 Люди'), h('b', {}, `${Math.floor(stor.people ?? 0)}`)),
+            h('div', { class: 'storage-item' }, h('span', {}, '⛽ Топливо'), h('b', {}, `${Math.floor(stor.fuel ?? 0)}${isGasStation ? ' / 20k' : ''}`)),
             h('div', { class: 'storage-item' }, h('span', {}, '⛏ Руда'), h('b', {}, `${Math.floor(stor.ore ?? 0)}`)),
           )
         );
@@ -688,12 +687,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (b.progress >= 1) {
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
-            const canAffordStorage = Object.entries(u.cost).every(([k, v]) => (stor[k] ?? 0) >= v);
+            const globalCost: Record<string, number> = {};
+            const storageCost: Record<string, number> = {};
+            for (const [k, v] of Object.entries(u.cost)) {
+              if (k === 'money' || k === 'people') globalCost[k] = v;
+              else storageCost[k] = v;
+            }
+            const canAffordGlobal = Object.entries(globalCost).every(([k, v]) => (snap!.res[k] ?? 0) >= v);
+            const canAffordStorage = Object.entries(storageCost).every(([k, v]) => (stor[k] ?? 0) >= v);
+            const canTrain = canAffordGlobal && canAffordStorage;
+
+            const effectiveHave: Record<string, number> = {
+              ...stor,
+              money: snap.res.money ?? 0,
+              people: snap.res.people ?? 0,
+            };
+
             const trainBtn = h('button', {
-              class: 'bld' + (!canAffordStorage ? ' cant-afford-storage' : ''),
+              class: 'bld' + (!canTrain ? ' cant-afford-storage' : ''),
               onClick: () => {
+                if (!canAffordGlobal) {
+                  toast(`Недостаточно средств (деньги / рекруты) в казне!`, true);
+                  return;
+                }
                 if (!canAffordStorage) {
-                  toast(`Недостаточно ресурсов на складе здания! Доставьте припасы грузовиком.`, true);
+                  toast(`Недостаточно сырья (металл / топливо) на складе здания! Доставьте припасы грузовиком.`, true);
                   return;
                 }
                 send({ type: 'train', building: b.id, unit: uid });
@@ -702,8 +720,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               unitIcon(u, 0),
               h('span', { class: 'meta' },
                 h('b', {}, `Train ${u.name} · ${u.trainTime}s`),
-                costHtml(u.cost, stor),
-                !canAffordStorage ? h('div', { class: 'warn-storage' }, '⚠ Требуется доставка припасов на склад') : null
+                costHtml(u.cost, effectiveHave),
+                !canAffordStorage ? h('div', { class: 'warn-storage' }, '⚠ Требуется доставка сырья на склад') : (!canAffordGlobal ? h('div', { class: 'warn-storage' }, '⚠ Недостаточно денег / рекрутов') : null)
               )
             );
             side.append(trainBtn);
@@ -824,22 +842,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }, 'Не стрелять'),
     );
 
-    // 4. "Быстрее" (Sprint / Turbo) + Stamina
-    const isSprinting = selectedList.some((u) => u.sprint);
-    const avgStamina = selectedList.reduce((acc, u) => acc + (u.stamina ?? 100), 0) / selectedList.length;
+    // 4. "Быстрее" (Sprint / Turbo) + Stamina (исключаем дроны и авиацию)
+    const hasNonDrones = selectedList.some((u) => u.def !== 'drone' && defU.get(u.def)?.kind !== 'air');
+    let sprintBtn: HTMLElement | null = null;
+    let staminaMeter: HTMLElement | null = null;
 
-    const sprintBtn = h('button', {
-      class: 'hud-btn sprint-btn' + (isSprinting ? ' active' : ''),
-      title: 'Ускорение x2 (тратит стамину за 60с, восст. 3 мин. У техники расход топлива x1.5)',
-      onClick: () => send({ type: 'sprint', units: [...selUnits], active: !isSprinting })
-    }, `⚡ Быстрее (${isSprinting ? 'ВКЛ' : 'ВЫКЛ'})`);
+    if (hasNonDrones) {
+      const isSprinting = selectedList.some((u) => u.sprint);
+      const staminaUnits = selectedList.filter((u) => u.stamina !== undefined);
+      const avgStamina = staminaUnits.reduce((acc, u) => acc + (u.stamina ?? 100), 0) / (staminaUnits.length || 1);
 
-    const staminaMeter = h('div', { class: 'meter-wrap', title: 'Запас стамины: 60с бега, 180с восстановления' },
-      h('div', { class: 'meter-label' }, h('span', {}, 'Стамина'), h('span', {}, `${Math.round(avgStamina)}%`)),
-      h('div', { class: 'meter-bar' },
-        h('div', { class: 'meter-fill stamina', style: { width: `${Math.max(0, Math.min(100, avgStamina))}%` } })
-      )
-    );
+      sprintBtn = h('button', {
+        class: 'hud-btn sprint-btn' + (isSprinting ? ' active' : ''),
+        title: 'Ускорение x2 (тратит стамину за 60с, восст. 3 мин. У техники расход топлива x1.5)',
+        onClick: () => send({ type: 'sprint', units: [...selUnits], active: !isSprinting })
+      }, `⚡ Быстрее (${isSprinting ? 'ВКЛ' : 'ВЫКЛ'})`);
+
+      staminaMeter = h('div', { class: 'meter-wrap', title: 'Запас стамины: 60с бега, 180с восстановления' },
+        h('div', { class: 'meter-label' }, h('span', {}, 'Стамина'), h('span', {}, `${Math.round(avgStamina)}%`)),
+        h('div', { class: 'meter-bar' },
+          h('div', { class: 'meter-fill stamina', style: { width: `${Math.max(0, Math.min(100, avgStamina))}%` } })
+        )
+      );
+    }
 
     // 5. Fuel meter & Refuel button for vehicles
     const hasVehicles = selectedList.some((u) => u.fuel !== undefined);
@@ -922,7 +947,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
     }
 
-    const elementsToAppend: Node[] = [titleEl, stopBtn, fireGroup, sprintBtn, staminaMeter];
+    const elementsToAppend: Node[] = [titleEl, stopBtn, fireGroup];
+    if (sprintBtn) elementsToAppend.push(sprintBtn);
+    if (staminaMeter) elementsToAppend.push(staminaMeter);
     if (fuelSec) elementsToAppend.push(fuelSec);
     if (transportSec) elementsToAppend.push(transportSec);
     if (boardSec) elementsToAppend.push(boardSec);

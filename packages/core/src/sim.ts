@@ -92,11 +92,9 @@ export class Sim {
     const d = this.defs.b.get(def)!;
     const road = this.roads?.isNear(pos, this.ruleset.rules.roadAccessKm) ?? false;
     const storage: Record<string, number> = {
-      money: def === 'hq' ? 2000 : 0,
-      metal: def === 'hq' ? 500 : 0,
-      fuel: def === 'hq' ? 500 : 0,
-      people: def === 'hq' ? 500 : 0,
-      ore: def === 'hq' ? 500 : 0,
+      metal: 500,
+      fuel: 500,
+      ore: 500,
     };
     const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, storage };
     this.world.buildings.push(b);
@@ -105,8 +103,9 @@ export class Sim {
 
   spawnUnit(def: string, p: Player, pos: LngLat): Unit {
     const d = this.defs.u.get(def)!;
-    const isVehicle = (d.mobility !== 'foot' && d.kind !== 'air') || !!d.maxFuel;
-    const maxFuel = d.maxFuel ?? (isVehicle ? 100 : undefined);
+    const isDrone = def === 'drone' || d.kind === 'air';
+    const isVehicle = !isDrone && (d.mobility !== 'foot' || !!d.maxFuel);
+    const maxFuel = isDrone ? undefined : (d.maxFuel ?? (isVehicle ? 100 : undefined));
     const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined;
     const u: Unit = {
       id: this.world.nextId++,
@@ -121,7 +120,7 @@ export class Sim {
       rank: 0,
       path: [],
       cap: 0,
-      stamina: 100,
+      stamina: isDrone ? undefined : 100,
       sprint: false,
       fireMode: 'auto',
       fuel: maxFuel,
@@ -183,10 +182,24 @@ export class Sim {
         const ud = this.defs.u.get(cmd.unit);
         if (!ud || !bd.trains?.includes(ud.id)) return fail('cannot train that here');
         if (w.queue.filter((q) => q.building === b.id).length >= 5) return fail('queue full');
+
+        // Split cost: money & people are paid from player.res; physical goods (metal, fuel, ore) from b.storage
+        const globalCost: ResourceAmounts = {};
+        const localCost: ResourceAmounts = {};
+        for (const [k, v] of Object.entries(ud.cost)) {
+          if (k === 'money' || k === 'people') globalCost[k] = v;
+          else localCost[k] = v;
+        }
+
+        if (!canAfford(p.res, globalCost)) return fail('Недостаточно денег или рекрутов');
         if (!b.storage) b.storage = {};
-        if (!canAfford(b.storage, ud.cost)) return fail('Недостаточно ресурсов на складе здания');
-        pay(b.storage, ud.cost);
-        if (canAfford(p.res, ud.cost)) pay(p.res, ud.cost);
+        if (!canAfford(b.storage, localCost)) return fail('Недостаточно сырья (металл/топливо) на складе здания');
+
+        pay(p.res, globalCost);
+        pay(b.storage, localCost);
+        for (const [k, v] of Object.entries(localCost)) {
+          if ((p.res[k] ?? 0) >= v) p.res[k] -= v;
+        }
         w.queue.push({ building: b.id, unit: ud.id, owner: p.id, remaining: ud.trainTime });
         return ok();
       }
@@ -240,7 +253,8 @@ export class Sim {
       case 'sprint': {
         const set = new Set(cmd.units);
         for (const u of w.units) {
-          if (set.has(u.id) && u.owner === p.id && u.def !== 'drone') {
+          const ud = this.defs.u.get(u.def);
+          if (set.has(u.id) && u.owner === p.id && u.def !== 'drone' && ud?.kind !== 'air') {
             if (cmd.active && (u.stamina ?? 0) <= 0) continue;
             u.sprint = cmd.active;
           }
@@ -302,6 +316,12 @@ export class Sim {
             if ((b.def === 'gas_station' || b.def === 'hq') && b.owner === p.id && b.progress >= 1) {
               const d = distKm(u.pos, b.pos);
               if (d < bestDist) { bestDist = d; bestStation = b.pos; }
+            }
+          }
+          for (const ft of w.units) {
+            if (ft.id !== u.id && ft.def === 'fuel_truck' && ft.owner === p.id && (ft.cargo?.res?.fuel ?? 0) > 0) {
+              const d = distKm(u.pos, ft.pos);
+              if (d < bestDist) { bestDist = d; bestStation = ft.pos; }
             }
           }
           if (bestStation) {
@@ -436,7 +456,12 @@ export class Sim {
         }
         for (const [k, v] of Object.entries(d.produces)) {
           if (k === 'energy') continue;
-          const cap = 30000;
+          if (k === 'money' || k === 'people') {
+            p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v * m * dt);
+            inc[k] = (inc[k] ?? 0) + v * m;
+            continue;
+          }
+          const cap = (b.def === 'gas_station' && k === 'fuel') ? 20000 : 30000;
           const cur = b.storage[k] ?? 0;
           const added = Math.min(cap - cur, v * m * dt);
           b.storage[k] = Math.min(cap, cur + added);
@@ -491,38 +516,68 @@ export class Sim {
       u.cooldown = Math.max(0, u.cooldown - dt);
 
       // Stamina update
-      if (u.sprint && u.def !== 'drone') {
-        if (u.path.length > 0) {
-          u.stamina = Math.max(0, (u.stamina ?? 100) - (100 / 60) * dt);
-          if (u.stamina <= 0) u.sprint = false;
+      const isDrone = u.def === 'drone' || d.kind === 'air';
+      if (!isDrone) {
+        if (u.sprint) {
+          if (u.path.length > 0) {
+            u.stamina = Math.max(0, (u.stamina ?? 100) - (100 / 60) * dt);
+            if (u.stamina <= 0) u.sprint = false;
+          }
+        } else {
+          u.stamina = Math.min(100, (u.stamina ?? 100) + (100 / 180) * dt);
         }
       } else {
-        u.stamina = Math.min(100, (u.stamina ?? 100) + (100 / 180) * dt);
+        u.stamina = undefined;
+        u.sprint = false;
       }
 
-      // Refueling for vehicles
+      // Refueling for vehicles: tanks and vehicles refuel from gas_station storage tank (20k capacity) or fuel truck
       if (u.fuel !== undefined && u.maxFuel !== undefined && u.fuel < u.maxFuel) {
-        let refuelRate = 0;
+        let refueled = false;
+        // 1. Check if near friendly gas_station (АЗС)
         for (const b of w.buildings) {
-          if ((b.def === 'gas_station' || b.def === 'hq') && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
-            refuelRate = 25;
-            break;
+          if (b.def === 'gas_station' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+            const avail = b.storage?.fuel ?? 0;
+            if (avail > 0) {
+              const needed = u.maxFuel - u.fuel;
+              const transfer = Math.min(30 * dt, needed, avail);
+              b.storage!.fuel -= transfer;
+              u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
+              refueled = true;
+              break;
+            }
           }
         }
-        if (!refuelRate) {
+        // 2. Check if near friendly fuel_truck
+        if (!refueled) {
           for (const ft of w.units) {
             if (ft.id !== u.id && ft.def === 'fuel_truck' && ft.owner === u.owner && distKm(u.pos, ft.pos) <= 5) {
               const avail = ft.cargo?.res?.fuel ?? 0;
               if (avail > 0) {
-                const transfer = Math.min(25 * dt, avail, u.maxFuel - u.fuel);
+                const needed = u.maxFuel - u.fuel;
+                const transfer = Math.min(25 * dt, avail, needed);
                 ft.cargo!.res.fuel -= transfer;
+                u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
+                refueled = true;
+                break;
+              }
+            }
+          }
+        }
+        // 3. Fallback: HQ emergency refuel
+        if (!refueled) {
+          for (const b of w.buildings) {
+            if (b.def === 'hq' && b.owner === u.owner && b.progress >= 1 && distKm(u.pos, b.pos) <= 8) {
+              const avail = b.storage?.fuel ?? 0;
+              if (avail > 0) {
+                const needed = u.maxFuel - u.fuel;
+                const transfer = Math.min(15 * dt, needed, avail);
+                b.storage!.fuel -= transfer;
                 u.fuel = Math.min(u.maxFuel, u.fuel + transfer);
                 break;
               }
             }
           }
-        } else {
-          u.fuel = Math.min(u.maxFuel, u.fuel + refuelRate * dt);
         }
       }
 
@@ -550,7 +605,8 @@ export class Sim {
                   fromB.storage.fuel = avail - toTake;
                   u.cargo.res.fuel = (u.cargo.res.fuel ?? 0) + toTake;
                 } else {
-                  const resKeys = ['metal', 'money', 'fuel', 'ore', 'people'];
+                  // Only load physical transportable goods (NO money, NO people!)
+                  const resKeys = ['metal', 'fuel', 'ore'];
                   for (const k of resKeys) {
                     const avail = fromB.storage[k] ?? 0;
                     if (avail > 0) {
@@ -569,9 +625,10 @@ export class Sim {
           } else if (u.route.state === 'to_to') {
             if (dTo <= 3.5 || !u.path.length) {
               if (!toB.storage) toB.storage = {};
+              const cap = toB.def === 'gas_station' ? 20000 : 30000;
               if (u.cargo.res) {
                 for (const [k, v] of Object.entries(u.cargo.res)) {
-                  toB.storage[k] = Math.min(30000, (toB.storage[k] ?? 0) + v);
+                  toB.storage[k] = Math.min(cap, (toB.storage[k] ?? 0) + v);
                 }
                 u.cargo.res = {};
               }
