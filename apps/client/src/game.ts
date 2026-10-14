@@ -137,11 +137,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     render();
   });
   let sideQueue: { list: QueueList; building: number } | null = null;
+  /** The queue panel sits to the left of the building's description window. */
+  const queueSlot = h('div', { class: 'queue-slot' });
   /** Orders seen in the last snapshot, to announce units as they are ready. */
   let lastQueue = new Map<number, SnapMsg['queue'][number]>();
   function updateQueues(s: SnapMsg) {
     dock.update(s.queue);
-    if (sideQueue?.list.el.isConnected) sideQueue.list.update(s.queue.filter((q) => q.building === sideQueue!.building));
+    if (sideQueue && selBuilding !== sideQueue.building) (sideQueue = null), queueSlot.replaceChildren();
+    if (sideQueue) sideQueue.list.update(s.queue.filter((q) => q.building === sideQueue!.building));
     const now = new Set(s.queue.map((q) => q.id));
     for (const [id, q] of lastQueue) {
       if (now.has(id) || cancelled.has(id) || q.owner !== me || q.remaining > 3) continue;
@@ -152,7 +155,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   app.append(
-    h('div', { class: 'game' }, mapEl, dock.el,
+    h('div', { class: 'game' }, mapEl, dock.el, queueSlot,
       h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner),
   );
@@ -950,6 +953,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         );
         // a teammate may keep their buildings to themselves
         const locked = b.owner !== me && snap.closed.includes(b.owner);
+        if (locked || b.progress < 1) (sideQueue = null), queueSlot.replaceChildren();
         const ownerName = init.players.find((p) => p.id === b.owner)?.name ?? 'a teammate';
         if (b.owner !== me) side.append(h('div', { class: locked ? 'stat warn' : 'muted' }, locked ? `Built by ${ownerName}, who keeps it private: you cannot use it` : `Built by ${ownerName}: shared with your side`));
         if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
@@ -1029,11 +1033,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (b.progress >= 1 && !locked) {
           const mySide = init.team === 0 ? 'ua' : 'ru';
           const queued = snap.queue.filter((x) => x.building === b.id);
-          if (d.trains?.length) {
-            const list = new QueueList(queueCtx, 5);
+          // the queue panel lives beside the description window and survives its rebuilds
+          if (d.trains?.length && sideQueue?.building !== b.id) {
+            const list = new QueueList(queueCtx, 5, d.name);
             list.update(queued);
             sideQueue = { list, building: b.id };
-            side.append(list.el);
+            queueSlot.replaceChildren(list.el);
           }
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
@@ -1184,6 +1189,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   /** Full refresh after a local change (selection, grouping). */
   function render() {
+    if (sideQueue && selBuilding !== sideQueue.building) (sideQueue = null), queueSlot.replaceChildren();
     renderSide();
     renderGroups();
     renderHud();

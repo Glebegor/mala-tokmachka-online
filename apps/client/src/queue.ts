@@ -26,29 +26,27 @@ export function finishTimes(items: Item[]): Map<number, number> {
 }
 
 /**
- * Training queue of one building, updated in place every snapshot (rows are keyed by order id, so a click on a
- * cancel button is never lost to a rebuild). The first row is in progress and shows a live bar.
+ * Training queue of one building as columns: one card per order (icon, name, time, progress), empty slots dashed.
+ * Cards are keyed by order id and updated in place every snapshot, so a click on × is never lost to a rebuild.
  */
 export class QueueList {
   readonly el: HTMLElement;
-  private head: HTMLElement;
-  private list: HTMLElement;
-  private rows = new Map<number, { row: HTMLElement; bar: HTMLElement; status: HTMLElement; pos: HTMLElement }>();
+  private title = h('b', {});
+  private sub = h('span', {});
+  private list = h('div', { class: 'queue-cols' });
+  private slots: HTMLElement[] = [];
+  private rows = new Map<number, { row: HTMLElement; bar: HTMLElement; time: HTMLElement; pos: HTMLElement }>();
 
-  constructor(private ctx: QueueContext, private cap: number) {
-    this.head = h('div', { class: 'queue-head' });
-    this.list = h('div', { class: 'queue-list' });
-    this.el = h('div', { class: 'queue-box' }, this.head, this.list);
+  constructor(private ctx: QueueContext, private cap: number, name: string) {
+    this.title.textContent = name;
+    this.el = h('div', { class: 'queue-panel' }, h('div', { class: 'queue-head' }, h('em', {}, 'Production'), this.title, this.sub), this.list);
   }
 
   update(items: Item[]) {
     const { ctx } = this;
     const done = finishTimes(items);
     const total = items.length ? Math.max(...items.map((q) => done.get(q.id)!)) : 0;
-    this.head.replaceChildren(
-      h('b', {}, 'Production'),
-      h('span', { class: 'muted' }, items.length ? `${items.length}/${this.cap} · all done in ${fmt(total)}` : `empty · up to ${this.cap} orders`),
-    );
+    this.sub.textContent = items.length ? `${items.length}/${this.cap} · done in ${fmt(total)}` : `empty · ${this.cap} slots`;
     const alive = new Set(items.map((q) => q.id));
     for (const [id, r] of this.rows) if (!alive.has(id)) r.row.remove(), this.rows.delete(id);
     items.forEach((q, i) => {
@@ -56,28 +54,32 @@ export class QueueList {
       const d = ctx.defU.get(q.unit);
       if (!r) {
         const bar = h('i', {});
-        const status = h('small', {});
+        const time = h('small', {});
         const pos = h('span', { class: 'qpos' });
         const mine = q.owner === ctx.me;
-        const row = h('div', { class: 'qrow' + (mine ? ' mine' : '') },
+        const row = h('div', { class: 'qcard' + (mine ? ' mine' : ' theirs'), title: `${d?.name ?? q.unit}${mine ? '' : ` · ordered by ${ctx.playerName(q.owner)}`}` },
           pos,
-          d ? ctx.icon(d) : h('span', {}),
-          h('div', { class: 'qmeta' }, h('b', {}, d?.name ?? q.unit), status, h('div', { class: 'qbar' }, bar)),
           mine ? h('button', { class: 'qx', title: 'Cancel this order (full refund)', onClick: (e: MouseEvent) => (e.stopPropagation(), ctx.cancel(q.id)) }, '×') : null,
+          h('div', { class: 'qicon' }, d ? ctx.icon(d) : ''),
+          h('b', {}, d?.name ?? q.unit),
+          time,
+          h('div', { class: 'qbar' }, bar),
         );
-        r = { row, bar, status, pos };
+        r = { row, bar, time, pos };
         this.rows.set(q.id, r);
       }
-      // keep DOM order equal to queue order
       if (this.list.children[i] !== r.row) this.list.insertBefore(r.row, this.list.children[i] ?? null);
       const active = i === 0;
       r.row.classList.toggle('active', active);
-      r.pos.textContent = active ? '▶' : String(i + 1);
+      r.pos.textContent = String(i + 1);
       const pct = active ? Math.max(0, Math.min(1, 1 - q.remaining / Math.max(0.01, q.total))) : 0;
       r.bar.style.width = `${pct * 100}%`;
-      const who = q.owner === ctx.me ? '' : ` · for ${ctx.playerName(q.owner)}`;
-      r.status.textContent = active ? `training · ${fmt(q.remaining)} left${who}` : `waiting · ready in ${fmt(done.get(q.id)!)}${who}`;
+      r.time.textContent = active ? fmt(q.remaining) : `in ${fmt(done.get(q.id)!)}`;
     });
+    // dashed placeholders for the free slots, always after the orders
+    while (this.slots.length < this.cap - items.length) this.slots.push(h('div', { class: 'qcard empty' }));
+    while (this.slots.length > this.cap - items.length) this.slots.pop()!.remove();
+    for (const e of this.slots) this.list.append(e);
   }
 }
 

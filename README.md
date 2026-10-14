@@ -33,7 +33,7 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 | Real map on / off | M |
 | Delivery route for a truck | select it, *Set delivery route*, click the loading then the unloading building |
 | Artillery barrage | select guns, *Barrage area*, click the target |
-| Cancel a training order (full refund) | × next to it in the building's Production list |
+| Cancel a training order (full refund) | × on its card in the Production panel (beside the building window) |
 | Fire a missile | select it at the missile factory, right click the target |
 | Drones on a pickup | select small drones next to a pickup, *Load*; select the pickup, *Launch at…* and click the target |
 | Keep your buildings from teammates | top bar *Buildings: shared / private* |
