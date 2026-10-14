@@ -1,6 +1,6 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { Building, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
+import type { Building, FrontNode, Player, Pocket, Shot, Team, UnitView, CapturePoint } from './state';
 
 export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' };
 
@@ -26,6 +26,7 @@ export interface SnapMsg {
   /** Shots fired since the previous snapshot (animation only). */
   shots: Shot[];
   front: FrontNode[];
+  pockets?: Pocket[];
   points: CapturePoint[];
   scores: [number, number];
   queue: { building: number; unit: string; remaining: number }[];

@@ -47,6 +47,10 @@ const cities: [string, [number, number]][] = [
   ['Rostov-on-Don', [39.72, 47.23]],
   ['Krasnodar', [38.98, 45.04]],
   ['Voronezh', [39.20, 51.67]],
+  ['Moscow', [37.62, 55.75]],
+  ['Saint Petersburg', [30.33, 59.93]],
+  ['Kazan', [49.12, 55.79]],
+  ['Ulyanovsk', [48.40, 54.32]],
 ];
 
 for (const [name, pos] of cities) {
@@ -71,6 +75,9 @@ const pairs: [[string, [number, number]], [string, [number, number]]][] = [
   [['Belgorod', [36.59, 50.60]], ['Kursk', [36.19, 51.73]]],
   [['Rostov-on-Don', [39.72, 47.23]], ['Krasnodar', [38.98, 45.04]]],
   [['Voronezh', [39.20, 51.67]], ['Belgorod', [36.59, 50.60]]],
+  [['Moscow', [37.62, 55.75]], ['Saint Petersburg', [30.33, 59.93]]],
+  [['Moscow', [37.62, 55.75]], ['Kazan', [49.12, 55.79]]],
+  [['Kazan', [49.12, 55.79]], ['Ulyanovsk', [48.40, 54.32]]],
 ];
 
 for (const [[fromName, fromPos], [toName, toPos]] of pairs) {

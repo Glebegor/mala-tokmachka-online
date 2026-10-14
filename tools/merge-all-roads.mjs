@@ -1,7 +1,7 @@
 import { readFileSync, writeFileSync } from 'node:fs';
 
 const ukrPath = 'C:/Users/AKIRA/.gemini/antigravity/scratch/ukr_extracted_lines.json';
-const ruPath = 'C:/Users/AKIRA/.gemini/antigravity/scratch/ru_extracted_lines.json';
+const ruPath = 'C:/Users/AKIRA/.gemini/antigravity/scratch/ru_expanded_lines.json';
 const outFile = 'mods/base/maps/ukraine.roads.json';
 
 console.log('Loading extracted road datasets...');
