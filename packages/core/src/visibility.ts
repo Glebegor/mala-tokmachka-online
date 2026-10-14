@@ -38,6 +38,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       pos: p4(b.pos),
       hp: Math.round(b.hp),
       storage: b.team === team ? b.storage : undefined,
+      storedDrones: b.team === team ? b.storedDrones : undefined,
     })),
     units: w.units
       .filter((u) => {

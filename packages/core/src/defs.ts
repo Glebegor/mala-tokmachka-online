@@ -55,6 +55,7 @@ export interface UnitDef {
   vision: number; // km
   cargoCap?: number;
   passengerCap?: number;
+  droneCap?: number;
   fuelOnly?: boolean;
   maxFuel?: number;
   droneType?: 'strike' | 'recon';

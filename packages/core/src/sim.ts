@@ -191,7 +191,7 @@ export class Sim {
   allowedStorageResources(d: BuildingDef): string[] {
     if (d.id === 'gas_station') return ['fuel'];
     if (d.id === 'oil_refinery') return ['fuel'];
-    if (d.id === 'airfield') return ['fuel'];
+    if (d.id === 'airfield' || d.id === 'launch_pad') return ['fuel'];
     if (d.id === 'mine') return ['ore'];
     if (d.id === 'warehouse') return ['metal', 'fuel', 'ore'];
 
@@ -227,12 +227,12 @@ export class Sim {
     if (allowed.length > 0) {
       storage = {};
       for (const k of allowed) {
-        if (k === 'fuel' && (d.id === 'gas_station' || d.id === 'airfield')) storage[k] = 500;
+        if (k === 'fuel' && (d.id === 'gas_station' || d.id === 'airfield' || d.id === 'launch_pad')) storage[k] = 500;
         else if (k === 'ore' && d.id === 'metalworks') storage[k] = 0;
         else storage[k] = 500;
       }
     }
-    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, storage };
+    const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, storage, storedDrones: {} };
     this.world.buildings.push(b);
     return b;
   }
@@ -242,8 +242,8 @@ export class Sim {
     const isDrone = def === 'drone' || d.kind === 'air';
     const isVehicle = !isDrone && (d.mobility !== 'foot' || !!d.maxFuel);
     const isInfantry = d.kind === 'ground' && d.mobility === 'foot' && !d.maxFuel;
-    const maxFuel = isDrone ? (d.maxFuel ?? 100) : (d.maxFuel ?? (isVehicle ? 100 : undefined));
-    const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined;
+    const maxFuel = isDrone ? (d.maxFuel ?? 115) : (d.maxFuel ?? (isVehicle ? 100 : undefined));
+    const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [], drones: {} } : undefined;
     const isRecon = isReconDrone(d);
     const u: Unit = {
       id: this.world.nextId++,
@@ -519,6 +519,66 @@ export class Sim {
         t.cargo.passengers = [];
         return ok();
       }
+      case 'launchDrone': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
+        if (!b || b.progress < 1) return fail('Здание недоступно');
+        if (b.def !== 'airfield' && b.def !== 'launch_pad') return fail('Дроны можно запускать только с аэродрома или пусковой площадки');
+        const ud = this.defs.u.get(cmd.droneDef);
+        if (!ud) return fail('Неизвестный тип БПЛА');
+        const isDrone = isReconDrone(ud) || isStrikeDrone(ud) || ud.kind === 'air';
+        if (b.def === 'launch_pad' && !isDrone) return fail('Пусковая площадка может запускать только дроны');
+        const count = b.storedDrones?.[cmd.droneDef] ?? 0;
+        if (count <= 0) return fail('В ангаре нет такого дрона');
+        b.storedDrones![cmd.droneDef] = count - 1;
+        if (b.storedDrones![cmd.droneDef] <= 0) delete b.storedDrones![cmd.droneDef];
+        const u = this.spawnUnit(cmd.droneDef, p, [b.pos[0] + 0.015, b.pos[1] + 0.015]);
+        this.hooks.emit('unitLaunched', { owner: p.id, unitId: u.id, def: cmd.droneDef, from: b.id });
+        return ok();
+      }
+      case 'transferDrones': {
+        const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id);
+        if (!u) return fail('Юнит не найден');
+        const ud = this.defs.u.get(u.def)!;
+        const droneCap = ud.droneCap ?? 0;
+        if (droneCap <= 0) return fail('Данная техника не может перевозить дроны');
+        const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
+        if (!b || b.progress < 1) return fail('Здание не найдено или строится');
+        if (distKm(u.pos, b.pos) > 6) return fail('Слишком далеко от здания (макс 6 км)');
+
+        if (!u.cargo) u.cargo = { res: {}, cap: ud.cargoCap ?? 500, passengers: [], drones: {} };
+        if (!u.cargo.drones) u.cargo.drones = {};
+        if (!b.storedDrones) b.storedDrones = {};
+
+        if (cmd.direction === 'load') {
+          let curTotal = Object.values(u.cargo.drones).reduce((a, b) => a + b, 0);
+          let space = droneCap - curTotal;
+          if (space <= 0) return fail(`Кузов полон (вместимость ${droneCap} дрон.)`);
+          let transferred = 0;
+          const droneKeys = cmd.droneDef ? [cmd.droneDef] : Object.keys(b.storedDrones);
+          for (const k of droneKeys) {
+            const avail = b.storedDrones[k] ?? 0;
+            if (avail <= 0) continue;
+            const take = Math.min(space, avail);
+            u.cargo.drones[k] = (u.cargo.drones[k] ?? 0) + take;
+            b.storedDrones[k] -= take;
+            if (b.storedDrones[k] <= 0) delete b.storedDrones[k];
+            space -= take;
+            transferred += take;
+            if (space <= 0) break;
+          }
+          if (transferred <= 0) return fail('В здании нет готовых дронов для погрузки');
+          return ok();
+        } else {
+          let curTotal = Object.values(u.cargo.drones).reduce((a, b) => a + b, 0);
+          if (curTotal <= 0) return fail('В кузове нет дронов для выгрузки');
+          for (const [k, v] of Object.entries(u.cargo.drones)) {
+            if (v <= 0) continue;
+            b.storedDrones[k] = (b.storedDrones[k] ?? 0) + v;
+          }
+          u.cargo.drones = {};
+          return ok();
+        }
+      }
       case 'refuel': {
         const set = new Set(cmd.units);
         for (const u of w.units) {
@@ -528,11 +588,11 @@ export class Sim {
           if (isStrikeDrone(ud)) continue; // Combat / strike drones CANNOT be refueled!
 
           if (isReconDrone(ud)) {
-            // Recon drones can ONLY refuel at friendly airfields!
+            // Recon drones can ONLY refuel at friendly airfields or launch pads!
             let bestAirfield: LngLat | null = null;
             let bestDist = 1e9;
             for (const b of w.buildings) {
-              if (b.def === 'airfield' && b.team === p.team && b.progress >= 1) {
+              if ((b.def === 'airfield' || b.def === 'launch_pad') && b.team === p.team && b.progress >= 1) {
                 const d = distKm(u.pos, b.pos);
                 if (d < bestDist) { bestDist = d; bestAirfield = b.pos; }
               }
@@ -866,9 +926,17 @@ export class Sim {
       q.remaining -= dt * speed;
       if (q.remaining > 0) return true;
       const p = this.player(q.owner)!;
-      const n = w.units.length;
-      this.spawnUnit(q.unit, p, [b.pos[0] + 0.03 * Math.cos(n * 1.9), b.pos[1] + 0.02 * Math.sin(n * 1.9)]);
-      this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit });
+      const ud = this.defs.u.get(q.unit);
+      const isDrone = isReconDrone(ud) || isStrikeDrone(ud) || ud?.kind === 'air';
+      if (b.def === 'drone_factory' && isDrone) {
+        if (!b.storedDrones) b.storedDrones = {};
+        b.storedDrones[q.unit] = (b.storedDrones[q.unit] ?? 0) + 1;
+        this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit, storedIn: b.id });
+      } else {
+        const n = w.units.length;
+        this.spawnUnit(q.unit, p, [b.pos[0] + 0.03 * Math.cos(n * 1.9), b.pos[1] + 0.02 * Math.sin(n * 1.9)]);
+        this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit });
+      }
       return false;
     });
   }
@@ -923,7 +991,7 @@ export class Sim {
         let refueled = false;
         if (isReconDrone(d)) {
           for (const b of w.buildings) {
-            if (b.def === 'airfield' && b.team === u.team && b.progress >= 1 && distKm(u.pos, b.pos) <= 12) {
+            if ((b.def === 'airfield' || b.def === 'launch_pad') && b.team === u.team && b.progress >= 1 && distKm(u.pos, b.pos) <= 12) {
               const avail = b.storage?.fuel ?? 0;
               if (avail > 0) {
                 const needed = u.maxFuel - u.fuel;
@@ -1006,38 +1074,62 @@ export class Sim {
             if (u.route.timer <= 0) {
               if (!fromB.storage) fromB.storage = {};
               if (!u.cargo.res) u.cargo.res = {};
-              let curTotal = Object.values(u.cargo.res).reduce((a, b) => a + b, 0);
-              const remainingCap = u.cargo.cap - curTotal;
-              if (remainingCap > 0) {
-                if (isFuelTruck) {
-                  const avail = fromB.storage.fuel ?? 0;
-                  const toTake = Math.min(remainingCap, avail);
-                  fromB.storage.fuel = avail - toTake;
-                  u.cargo.res.fuel = (u.cargo.res.fuel ?? 0) + toTake;
-                } else {
-                  // Non-fuel trucks: CANNOT take fuel under any circumstances! Only fuel_truck can carry fuel.
-                  let allowedKeys: string[];
-                  if (u.route.resType && u.route.resType !== 'any') {
-                    allowedKeys = [u.route.resType];
-                  } else {
-                    // Prioritize resource produced by fromB if available, otherwise non-fuel goods
-                    const bDef = this.defs.b.get(fromB.def);
-                    const prodKey = bDef?.produces ? Object.keys(bDef.produces)[0] : null;
-                    if (prodKey && prodKey !== 'fuel' && (fromB.storage[prodKey] ?? 0) > 0) {
-                      allowedKeys = [prodKey];
-                    } else {
-                      allowedKeys = ['ore', 'metal', 'ammo'];
+
+              // Check if loading drones from drone factory or warehouse
+              if (u.route.resType === 'drones' || (u.route.resType === 'any' && fromB.def === 'drone_factory')) {
+                const droneCap = d.droneCap ?? 0;
+                if (droneCap > 0 && fromB.storedDrones) {
+                  if (!u.cargo.drones) u.cargo.drones = {};
+                  let curTotal = Object.values(u.cargo.drones).reduce((a, b) => a + b, 0);
+                  let space = droneCap - curTotal;
+                  if (space > 0) {
+                    for (const [droneId, count] of Object.entries(fromB.storedDrones)) {
+                      if (count <= 0) continue;
+                      const take = Math.min(space, count);
+                      u.cargo.drones[droneId] = (u.cargo.drones[droneId] ?? 0) + take;
+                      fromB.storedDrones[droneId] -= take;
+                      if (fromB.storedDrones[droneId] <= 0) delete fromB.storedDrones[droneId];
+                      space -= take;
+                      if (space <= 0) break;
                     }
                   }
-                  for (const k of allowedKeys) {
-                    if (k === 'fuel') continue; // Strict safety: normal trucks CANNOT take fuel
-                    const avail = fromB.storage[k] ?? 0;
-                    if (avail > 0) {
-                      const toTake = Math.min(u.cargo.cap - curTotal, avail);
-                      fromB.storage[k] = avail - toTake;
-                      u.cargo.res[k] = (u.cargo.res[k] ?? 0) + toTake;
-                      curTotal += toTake;
-                      if (curTotal >= u.cargo.cap) break;
+                }
+              }
+
+              if (u.route.resType !== 'drones') {
+                let curTotal = Object.values(u.cargo.res).reduce((a, b) => a + b, 0);
+                const remainingCap = u.cargo.cap - curTotal;
+                if (remainingCap > 0) {
+                  if (isFuelTruck) {
+                    const avail = fromB.storage.fuel ?? 0;
+                    const toTake = Math.min(remainingCap, avail);
+                    fromB.storage.fuel = avail - toTake;
+                    u.cargo.res.fuel = (u.cargo.res.fuel ?? 0) + toTake;
+                  } else {
+                    // Non-fuel trucks: CANNOT take fuel under any circumstances! Only fuel_truck can carry fuel.
+                    let allowedKeys: string[];
+                    if (u.route.resType && u.route.resType !== 'any') {
+                      allowedKeys = [u.route.resType];
+                    } else {
+                      // Prioritize resource produced by fromB if available, otherwise non-fuel goods
+                      const bDef = this.defs.b.get(fromB.def);
+                      const prodKey = bDef?.produces ? Object.keys(bDef.produces)[0] : null;
+                      if (prodKey && prodKey !== 'fuel' && (fromB.storage[prodKey] ?? 0) > 0) {
+                        allowedKeys = [prodKey];
+                      } else {
+                        allowedKeys = ['ore', 'metal', 'ammo'];
+                      }
+                    }
+                    for (const k of allowedKeys) {
+                      if (k === 'fuel') continue; // Strict safety: normal trucks CANNOT take fuel
+                      const avail = fromB.storage[k] ?? 0;
+                      if (avail > 0) {
+                        const toTake = Math.min(u.cargo.cap - curTotal, avail);
+                        fromB.storage[k] = avail - toTake;
+                        u.cargo.res[k] = (u.cargo.res[k] ?? 0) + toTake;
+                        curTotal += toTake;
+                        if (curTotal >= u.cargo.cap) break;
+                      }
                     }
                   }
                 }
@@ -1055,8 +1147,18 @@ export class Sim {
           } else if (u.route.state === 'unloading') {
             u.route.timer = (u.route.timer ?? 4.0) - dt;
             if (u.route.timer <= 0) {
+              // Unload carried drones into destination building
+              if (u.cargo.drones && Object.keys(u.cargo.drones).length > 0) {
+                if (!toB.storedDrones) toB.storedDrones = {};
+                for (const [droneId, count] of Object.entries(u.cargo.drones)) {
+                  if (count <= 0) continue;
+                  toB.storedDrones[droneId] = (toB.storedDrones[droneId] ?? 0) + count;
+                }
+                u.cargo.drones = {};
+              }
+
               if (!toB.storage) toB.storage = {};
-              const cap = toB.def === 'gas_station' || toB.def === 'airfield' ? 20000 : 30000;
+              const cap = toB.def === 'gas_station' || toB.def === 'airfield' ? 20000 : toB.def === 'launch_pad' ? 5000 : 30000;
               const toDef = this.defs.b.get(toB.def)!;
               const allowed = this.allowedStorageResources(toDef);
               if (u.cargo.res) {

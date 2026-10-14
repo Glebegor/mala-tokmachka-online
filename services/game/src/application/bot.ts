@@ -94,6 +94,18 @@ export class Bot {
     const hq = w.buildings.find((b) => b.owner === p.id && (b.def === 'military_base' || b.def === 'hq'));
     const anchor: LngLat = hq?.pos ?? sim.map.center;
 
+    // Launch stored drones from airfield or launch_pad
+    for (const b of w.buildings.filter((x) => x.owner === p.id && (x.def === 'airfield' || x.def === 'launch_pad') && x.progress >= 1)) {
+      if (b.storedDrones) {
+        for (const [droneId, count] of Object.entries(b.storedDrones)) {
+          if (count > 0) {
+            sim.apply(p.id, { type: 'launchDrone', building: b.id, droneDef: droneId });
+            break;
+          }
+        }
+      }
+    }
+
     // air units / drones scout or attack
     for (const u of w.units.filter((x) => x.owner === p.id && sim.defs.u.get(x.def)?.kind === 'air')) {
       if (u.target) continue;

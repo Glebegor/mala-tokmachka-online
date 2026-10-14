@@ -100,6 +100,7 @@
     "missRate": 0.4,
     "cargoCap": 500,
     "passengerCap": 1,
+    "droneCap": 1,
     "maxFuel": 80
   },
   {
@@ -123,6 +124,7 @@
     "missRate": 0.5,
     "cargoCap": 3000,
     "passengerCap": 4,
+    "droneCap": 5,
     "maxFuel": 120
   },
   {
@@ -235,7 +237,7 @@
     "droneType": "recon",
     "fx": "beam",
     "missRate": 0.12,
-    "maxFuel": 100
+    "maxFuel": 115
   },
   {
     "id": "drone_shahed",
@@ -258,7 +260,7 @@
     "side": "ru",
     "fx": "burst",
     "missRate": 0,
-    "maxFuel": 100
+    "maxFuel": 115
   },
   {
     "id": "drone_orion",
@@ -281,7 +283,7 @@
     "side": "ru",
     "fx": "beam",
     "missRate": 0.1,
-    "maxFuel": 100
+    "maxFuel": 115
   },
   {
     "id": "drone_liutyi",
@@ -304,7 +306,7 @@
     "side": "ua",
     "fx": "burst",
     "missRate": 0,
-    "maxFuel": 100
+    "maxFuel": 115
   },
   {
     "id": "drone_pd2",
@@ -327,7 +329,7 @@
     "side": "ua",
     "fx": "beam",
     "missRate": 0.1,
-    "maxFuel": 100
+    "maxFuel": 115
   },
   {
     "id": "drone_mini_shark",
@@ -350,7 +352,7 @@
     "side": "ua",
     "fx": "beam",
     "missRate": 0.1,
-    "maxFuel": 100
+    "maxFuel": 115
   },
   {
     "id": "drone_fire_point",
@@ -373,6 +375,6 @@
     "side": "ua",
     "fx": "burst",
     "missRate": 0,
-    "maxFuel": 100
+    "maxFuel": 115
   }
 ]

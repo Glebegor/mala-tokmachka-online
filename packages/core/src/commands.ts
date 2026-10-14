@@ -13,6 +13,8 @@ export type Command =
   | { type: 'board'; unit: number; transport: number }
   | { type: 'disembark'; transport: number }
   | { type: 'refuel'; units: number[] }
-  | { type: 'bombard'; units: number[]; target: LngLat | null };
+  | { type: 'bombard'; units: number[]; target: LngLat | null }
+  | { type: 'launchDrone'; building: number; droneDef: string }
+  | { type: 'transferDrones'; unit: number; building: number; direction: 'load' | 'unload'; droneDef?: string };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

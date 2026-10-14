@@ -1170,7 +1170,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function allowedStorageResources(d: BuildingDef): string[] {
     if (d.id === 'gas_station') return ['fuel'];
     if (d.id === 'oil_refinery') return ['fuel'];
-    if (d.id === 'airfield') return ['fuel'];
+    if (d.id === 'airfield' || d.id === 'launch_pad') return ['fuel'];
     if (d.id === 'mine') return ['ore'];
     if (d.id === 'warehouse') return ['metal', 'fuel', 'ore'];
 
@@ -1243,10 +1243,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (allowedRes.length > 0) {
           const isGasStation = b.def === 'gas_station';
           const isAirfield = b.def === 'airfield';
+          const isLaunchPad = b.def === 'launch_pad';
           const title = isGasStation
             ? 'Резервуар АЗС (до 20,000 л топлива):'
             : isAirfield
             ? 'Резервуар авиатоплива (до 20,000 л):'
+            : isLaunchPad
+            ? 'Резервуар авиатоплива (до 5,000 л):'
             : d.id === 'mine'
             ? 'Склад руды (до 30,000):'
             : d.id === 'oil_refinery'
@@ -1262,8 +1265,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const items: HTMLElement[] = [];
           for (const k of allowedRes) {
             const meta = resMeta[k] ?? { name: k, icon: '📦' };
-            const isSpecialFuel = (isGasStation || isAirfield) && k === 'fuel';
-            const valText = `${Math.floor(stor[k] ?? 0)}${isSpecialFuel ? ' / 20k' : ''}`;
+            const isSpecialFuel = (isGasStation || isAirfield || isLaunchPad) && k === 'fuel';
+            const fuelCapLabel = isLaunchPad ? ' / 5k' : ' / 20k';
+            const valText = `${Math.floor(stor[k] ?? 0)}${isSpecialFuel ? fuelCapLabel : ''}`;
             items.push(h('div', { class: 'storage-item' }, h('span', {}, `${meta.icon} ${meta.name}`), h('b', {}, valText)));
           }
 
@@ -1272,6 +1276,57 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             h('div', { class: 'storage-grid' }, ...items)
           );
           side.append(storBox);
+        }
+
+        // Drone Hangar & Inventory for drone_factory, airfield, launch_pad
+        if (b.def === 'drone_factory' || b.def === 'airfield' || b.def === 'launch_pad') {
+          const stored = b.storedDrones ?? {};
+          const totalDrones = Object.values(stored).reduce((a, b) => a + b, 0);
+          const isLauncher = b.def === 'airfield' || b.def === 'launch_pad';
+          const boxTitle = isLauncher
+            ? `🚀 Ангар БПЛА (готово к запуску: ${totalDrones} шт.)`
+            : `📦 Склад готовых БПЛА (готово к вывозу: ${totalDrones} шт.)`;
+
+          const droneItems: HTMLElement[] = [];
+          for (const [droneId, count] of Object.entries(stored)) {
+            if (count <= 0) continue;
+            const uDef = defU.get(droneId);
+            if (!uDef) continue;
+            const droneRow = h('div', { class: 'drone-inventory-item' },
+              h('span', {}, `${uDef.name}: `),
+              h('b', { style: { color: '#38bdf8' } }, `${count} шт.`)
+            );
+            if (isLauncher) {
+              const launchBtn = h('button', {
+                class: 'hud-btn sm',
+                style: { marginLeft: 'auto', background: '#22c55e', color: '#fff', border: 'none', padding: '3px 10px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' },
+                onClick: (e: MouseEvent) => {
+                  e.stopPropagation();
+                  send({ type: 'launchDrone', building: b.id, droneDef: droneId });
+                  toast(`🚀 Запуск ${uDef.name}!`);
+                }
+              }, '▶ Запустить');
+              droneRow.append(launchBtn);
+            }
+            droneItems.push(droneRow);
+          }
+
+          const droneBox = h('div', { class: 'storage-box drone-hangar-box' },
+            h('b', { style: { fontSize: '11px', color: isLauncher ? '#38bdf8' : '#f59e0b' } }, boxTitle),
+            droneItems.length > 0
+              ? h('div', { class: 'drone-hangar-grid' }, ...droneItems)
+              : h('div', { class: 'muted', style: { fontSize: '11px', fontStyle: 'italic', padding: '3px 0' } },
+                  isLauncher
+                    ? 'Ангар пуст. Доставьте дроны с завода дронов на грузовике (до 5 шт.) или пикапе (1 шт.).'
+                    : 'Склад пуст. Закажите производство дронов ниже.'
+                ),
+            !isLauncher && totalDrones > 0
+              ? h('div', { class: 'muted', style: { fontSize: '10px', color: '#94a3b8', marginTop: '4px' } },
+                  'ℹ Для запуска доставьте дроны грузовиком (до 5 шт.) или пикапом (1 шт.) на аэродром или пусковую площадку.'
+                )
+              : null
+          );
+          side.append(droneBox);
         }
 
         if (b.def === 'aircraft_plant' && b.progress >= 1) {
@@ -1343,7 +1398,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (u.route) {
           const resLabel = u.route.resType === 'ore' ? ' [Руда]' :
                            u.route.resType === 'metal' ? ' [Металл]' :
-                           u.route.resType === 'fuel' ? ' [Топливо]' : '';
+                           u.route.resType === 'fuel' ? ' [Топливо]' :
+                           u.route.resType === 'drones' ? ' [Дроны]' : '';
           if (u.route.state === 'loading') {
             routeEtaStr = `⏳ Погрузка${resLabel} (${Math.ceil(u.route.timer ?? 5)}с)`;
           } else if (u.route.state === 'unloading') {
@@ -1607,10 +1663,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const resOptions: { id: string; label: string }[] = [];
           if (fromDef?.produces?.ore || fromB.storage?.ore) resOptions.push({ id: 'ore', label: '⛏ Руда' });
           if (fromDef?.produces?.metal || fromB.storage?.metal) resOptions.push({ id: 'metal', label: '🔩 Металл' });
+          if (dFirst.droneCap && (fromB.def === 'drone_factory' || (fromB.storedDrones && Object.keys(fromB.storedDrones).length > 0))) {
+            resOptions.push({ id: 'drones', label: '✈ Дроны' });
+          }
           resOptions.push({ id: 'any', label: '📦 Любой груз' });
 
           if (!routePicker.resType) {
-            routePicker.resType = resOptions[0]?.id ?? 'ore';
+            routePicker.resType = (fromB.def === 'drone_factory' && dFirst.droneCap) ? 'drones' : (resOptions[0]?.id ?? 'ore');
           }
 
           resSelector = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px', flexWrap: 'wrap' } },
@@ -1628,7 +1687,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
 
         const resDesc = routePicker.resType === 'ore' ? ' [Груз: Руда]' :
-                        routePicker.resType === 'metal' ? ' [Груз: Металл]' : '';
+                        routePicker.resType === 'metal' ? ' [Груз: Металл]' :
+                        routePicker.resType === 'drones' ? ' [Груз: Дроны]' : '';
 
         routeControl = h('div', { class: 'route-wizard-box' },
           h('div', { class: 'route-wizard-header' },
@@ -1661,6 +1721,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const resLabel = first.route?.resType === 'ore' ? ' (Руда)' :
                          first.route?.resType === 'metal' ? ' (Металл)' :
                          first.route?.resType === 'fuel' ? ' (Топливо)' :
+                         first.route?.resType === 'drones' ? ' (Дроны)' :
                          first.route?.resType ? ` (${first.route.resType})` : '';
 
         routeControl = h('div', { class: 'route-active-box' },
@@ -1701,6 +1762,51 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         passDetail = ` | Десант: ${passCount} / ${dFirst.passengerCap}`;
       }
 
+      const droneCargo = first.cargo?.drones ?? {};
+      const droneCount = Object.values(droneCargo).reduce((a, b) => a + b, 0);
+      let droneDetail = '';
+      if (dFirst.droneCap && dFirst.droneCap > 0) {
+        const droneParts = Object.entries(droneCargo).filter(([_, v]) => v > 0).map(([k, v]) => `${defU.get(k)?.name ?? k}: ${v}`);
+        droneDetail = ` | ✈ Дроны: ${droneCount} / ${dFirst.droneCap}${droneParts.length ? ` (${droneParts.join(', ')})` : ''}`;
+      }
+
+      let droneTransferBtns: HTMLElement | null = null;
+      if (dFirst.droneCap && dFirst.droneCap > 0) {
+        const nearB = snap.buildings.find((b) => b.team === myTeam && b.progress >= 1 && distKm(first.pos, b.pos) <= 6);
+        if (nearB) {
+          const nearDef = defB.get(nearB.def);
+          const hasDronesInBuilding = Object.values(nearB.storedDrones ?? {}).reduce((a, b) => a + b, 0) > 0;
+          const canLoad = (droneCount < dFirst.droneCap) && hasDronesInBuilding;
+          const canUnload = droneCount > 0;
+          const btns: HTMLElement[] = [];
+          if (canLoad) {
+            btns.push(h('button', {
+              class: 'hud-btn sm',
+              style: { background: '#0284c7', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' },
+              title: `Загрузить дроны из здания (${nearDef?.name ?? 'Здание'})`,
+              onClick: () => {
+                send({ type: 'transferDrones', unit: first.id, building: nearB.id, direction: 'load' });
+                toast(`📥 Загрузка дронов в ${dFirst.name}`);
+              }
+            }, '📥 Загрузить дроны'));
+          }
+          if (canUnload) {
+            btns.push(h('button', {
+              class: 'hud-btn sm',
+              style: { background: '#16a34a', color: '#fff', border: 'none', padding: '3px 8px', borderRadius: '4px', cursor: 'pointer', fontWeight: 'bold' },
+              title: `Выгрузить дроны в здание (${nearDef?.name ?? 'Здание'})`,
+              onClick: () => {
+                send({ type: 'transferDrones', unit: first.id, building: nearB.id, direction: 'unload' });
+                toast(`📤 Выгрузка дронов в ${nearDef?.name ?? 'здание'}`);
+              }
+            }, '📤 Выгрузить дроны'));
+          }
+          if (btns.length > 0) {
+            droneTransferBtns = h('div', { style: { display: 'flex', gap: '6px', alignItems: 'center', marginTop: '4px' } }, ...btns);
+          }
+        }
+      }
+
       let disembarkBtn: HTMLElement | null = null;
       if (passCount > 0) {
         disembarkBtn = h('button', {
@@ -1716,9 +1822,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       transportSec = h('div', { class: 'hud-sec', style: { display: 'flex', flexDirection: 'column', gap: '6px' } },
         routeControl,
         h('div', { style: { display: 'flex', gap: '8px', alignItems: 'center', flexWrap: 'wrap' } },
-          h('span', { style: { fontSize: '11px', color: '#cbd5e1' } }, cargoDetail + passDetail),
+          h('span', { style: { fontSize: '11px', color: '#cbd5e1' } }, cargoDetail + passDetail + droneDetail),
           disembarkBtn
-        )
+        ),
+        droneTransferBtns
       );
     }
 
@@ -1878,7 +1985,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const fromName = fromB ? (defB.get(fromB.def)?.name ?? 'Склад') : 'Склад';
         const resLabel = routePicker.resType === 'ore' ? ' [Руда]' :
                          routePicker.resType === 'metal' ? ' [Металл]' :
-                         routePicker.resType === 'fuel' ? ' [Топливо]' : '';
+                         routePicker.resType === 'fuel' ? ' [Топливо]' :
+                         routePicker.resType === 'drones' ? ' [Дроны]' : '';
         routeBanner.textContent = `🚚 ВЫБОР МАРШРУТА: [Шаг 2] Загрузка: ${fromName}${resLabel} ➔ Кликните склад РАЗГРУЗКИ (Esc — отмена)`;
       }
       routeBanner.style.display = 'block';

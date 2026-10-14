@@ -21,6 +21,7 @@ export interface Building {
   progress: number; // 0..1, 1 = complete
   road: boolean; // connected to the road network
   storage?: Record<string, number>; // local resource storage (max 30,000 per resource)
+  storedDrones?: Record<string, number>; // drone def -> count in hangar/inventory
   lastDamagedTime?: number;
 }
 
@@ -28,6 +29,7 @@ export interface UnitCargo {
   res: Record<string, number>;
   cap: number;
   passengers?: number[]; // IDs of embarked units
+  drones?: Record<string, number>; // drone def -> count carried
 }
 
 export interface UnitRoute {
