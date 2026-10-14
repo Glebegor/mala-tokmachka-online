@@ -47,5 +47,6 @@ export const api = {
   removeBot: (id: string, slot: string) => call<RoomInfo>(`/api/lobby/rooms/${id}/bots/remove`, { slot }),
   join: (id: string, team: 0 | 1) => call<RoomInfo>(`/api/lobby/rooms/${id}/join`, { team }),
   leave: (id: string) => call(`/api/lobby/rooms/${id}/leave`, {}),
+  leaveAll: () => call('/api/lobby/rooms/leave', {}),
   start: (id: string) => call<RoomInfo>(`/api/lobby/rooms/${id}/start`, {}),
 };

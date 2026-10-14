@@ -57,7 +57,6 @@ export class LobbyService {
 
   leaveAll(playerId: string) {
     for (const room of this.rooms.values()) {
-      if (room.status === 'playing') continue;
       room.slots = room.slots.filter((s) => s.id !== playerId);
       if (!room.slots.some((s) => !s.bot)) this.rooms.delete(room.id);
       else if (room.host === playerId) room.host = room.slots.find((s) => !s.bot)!.id;

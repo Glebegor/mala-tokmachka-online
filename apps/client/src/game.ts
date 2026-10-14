@@ -4,7 +4,7 @@ import {
   distKm, distToFrontKm, offsetKm, RoadNetwork, sideOfWithPockets, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
-import type { Session } from './api';
+import { api, type Session } from './api';
 import { clear, h } from './dom';
 import { ShotFx } from './fx';
 import { iconHtml } from './icons';
@@ -74,13 +74,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const basemapBtn = h('button', { class: 'ghost', onClick: () => toggleBasemap(), title: 'Toggle real map filter (M)' }, 'Map: ON');
   const leave = () => {
     closed = true;
-    ws.close();
+    try { ws.close(); } catch {}
     fx?.destroy();
     window.removeEventListener('keydown', onKey);
     window.removeEventListener('mousemove', onBoxMove);
     window.removeEventListener('mouseup', onBoxUp);
-    map?.remove();
-    onExit();
+    try { map?.remove(); } catch {}
+    void api.leaveAll().catch(() => {}).finally(() => onExit());
   };
   app.append(
     h('div', { class: 'game' }, mapEl,

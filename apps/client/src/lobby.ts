@@ -76,8 +76,18 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
     const rooms = await api.rooms();
     const mine = rooms.find((r) => r.slots.some((x) => x.id === s.user.id));
     if (mine?.status === 'playing' && mine.matchId) {
-      stopped = true;
-      return cb.onMatch(mine.matchId);
+      clear(body);
+      body.append(
+        h('div', { class: 'card', style: { textAlign: 'center' } },
+          h('h2', {}, mine.name),
+          h('p', { class: 'muted' }, 'У вас есть матч в процессе игры.'),
+          h('div', { class: 'row', style: { justifyContent: 'center', gap: '8px' } },
+            h('button', { class: 'primary', onClick: () => { stopped = true; cb.onMatch(mine.matchId!); } }, 'Войти в игру'),
+            h('button', { onClick: () => guard(() => api.leaveAll()) }, 'Покинуть матч'),
+          ),
+        ),
+      );
+      return;
     }
     clear(body);
     if (mine) {
