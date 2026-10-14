@@ -59,6 +59,7 @@ export interface UnitDef {
   maxFuel?: number;
   droneType?: 'strike' | 'recon';
   side?: 'ua' | 'ru';
+  turnSpeed?: number; // deg/sec (for smooth drone/vehicle rotation)
 }
 
 export interface TerrainDef {

@@ -430,9 +430,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'icon-rotation-alignment': 'map',
           'icon-size': [
             'interpolate', ['linear'], ['zoom'],
-            4, ['*', ['coalesce', ['get', 'scale'], 1], 0.14],
-            8, ['*', ['coalesce', ['get', 'scale'], 1], 0.22],
-            11, ['*', ['coalesce', ['get', 'scale'], 1], 0.32]
+            4, ['*', ['coalesce', ['get', 'scale'], 1], 0.18],
+            8, ['*', ['coalesce', ['get', 'scale'], 1], 0.28],
+            11, ['*', ['coalesce', ['get', 'scale'], 1], 0.40]
           ],
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
@@ -446,7 +446,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         source: 'smokes',
         layout: {
           'icon-image': 'smoke',
-          'icon-size': ['interpolate', ['linear'], ['zoom'], 4, 0.45, 8, 0.8, 12, 1.25],
+          'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.05, 8, 0.8, 12, 12.8],
           'icon-allow-overlap': true,
           'icon-ignore-placement': true,
         },
@@ -505,26 +505,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         },
       });
 
-      const zoneFeatures = SPECIAL_ZONES.map((z) => ({
-        type: 'Feature',
-        properties: {
-          id: z.id,
-          name: z.name,
-          side: z.side,
-          color: z.color,
-          bonusTitle: z.bonusTitle,
-          bonusDesc: z.bonusDesc,
-          label: `${z.name}\n(${z.side === 'ua' ? 'Бонус x2 топлива' : 'Бонус x2 БПЛА'})`,
-        },
-        geometry: {
-          type: 'Polygon',
-          coordinates: [z.polygon],
-        },
-      }));
-      (map.getSource('special-zones') as GeoJSONSource)?.setData({
-        type: 'FeatureCollection',
-        features: zoneFeatures,
-      });
+      (map.getSource('special-zones') as GeoJSONSource)?.setData(empty());
 
       let zonePopup: maplibregl.Popup | null = null;
       map.on('mouseenter', 'special-zones-fill', (e) => {
@@ -610,7 +591,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       });
 
       for (const cp of init!.map.capturePoints) {
-        const el = h('div', { class: `cp val-${cp.value}` + (cp.value >= 3 ? ' cp-major' : ' cp-minor') }, h('i', {}), h('span', {}, cp.name));
+        const el = h('div', { class: `cp val-${cp.value}` + (cp.value >= 3 ? ' cp-major' : ' cp-minor') },
+          h('i', {}),
+          h('div', { class: 'cp-label' },
+            h('span', {}, cp.name),
+            h('div', { class: 'cp-hp', style: { display: 'none' } },
+              h('div', { class: 'cp-hp-ghost' }),
+              h('div', { class: 'cp-hp-fill' })
+            )
+          )
+        );
         new maplibregl.Marker({ element: el }).setLngLat(cp.pos).addTo(map);
         pMarkers.set(cp.id, el);
       }
@@ -845,7 +835,47 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   // ---------- placement ----------
+  function updateSpecialZones() {
+    const src = map.getSource('special-zones') as GeoJSONSource | undefined;
+    if (!src || !init) return;
+    if (!placing) {
+      src.setData(empty());
+      return;
+    }
+    const mySide = init.team === 0 ? 'ua' : 'ru';
+    // Ukraine only sees Kremenchuk when placing oil_refinery
+    // Russia only sees Alabuga when placing drone_factory
+    const allowed = SPECIAL_ZONES.filter((z) => {
+      if (z.side !== mySide) return false;
+      if (z.buildingDef !== placing?.id) return false;
+      return true;
+    });
+
+    const features = allowed.map((z) => ({
+      type: 'Feature',
+      properties: {
+        id: z.id,
+        name: z.name,
+        side: z.side,
+        color: z.color,
+        bonusTitle: z.bonusTitle,
+        bonusDesc: z.bonusDesc,
+        label: `${z.name}\n(${z.side === 'ua' ? 'Бонус x1.5 топлива' : 'Бонус x1.5 БПЛА'})`,
+      },
+      geometry: {
+        type: 'Polygon',
+        coordinates: [z.polygon],
+      },
+    }));
+
+    src.setData({
+      type: 'FeatureCollection',
+      features,
+    });
+  }
+
   function updateRestrictedZones() {
+    updateSpecialZones();
     if (!placing || !init || !snap) {
       (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData(empty());
       return;
@@ -869,6 +899,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     mapEl.classList.remove('placing');
     (map.getSource('ghost') as GeoJSONSource | undefined)?.setData(empty());
     updateRestrictedZones();
+    updateSpecialZones();
     buildPalette();
   }
 
@@ -901,9 +932,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const bonus = Math.round((init.ruleset.rules.roadOutputMult - 1) * 100);
     let specialBonus = '';
     if (placing.id === 'oil_refinery' && isKremenchukRefinery(p)) {
-      specialBonus = ' · ★ БОНУС КРЕМЕНЧУГА: x2 к производству топлива!';
+      specialBonus = ' · ★ БОНУС КРЕМЕНЧУГА: x1.5 к производству топлива!';
     } else if (placing.id === 'drone_factory' && isAlabugaDroneZone(p)) {
-      specialBonus = ' · ★ БОНУС ОЭЗ «АЛАБУГА»: x2 к скорости производства дронов!';
+      specialBonus = ' · ★ БОНУС ОЭЗ «АЛАБУГА»: x1.5 к скорости производства дронов!';
     }
     hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''}${specialBonus} (Shift keeps placing, Esc cancels)`;
   }
@@ -1035,10 +1066,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           side.append(h('div', { class: 'stat', style: { color: '#38bdf8' } }, '⚡ Электросеть: +25% к скорости производства'));
         }
         if (b.def === 'oil_refinery' && isKremenchukRefinery(b.pos)) {
-          side.append(h('div', { class: 'stat', style: { color: '#06b6d4', fontWeight: 'bold' } }, '★ Бонус Кременчугского НПЗ: x2 к производству топлива!'));
+          side.append(h('div', { class: 'stat', style: { color: '#06b6d4', fontWeight: 'bold' } }, '★ Бонус Кременчугского НПЗ: x1.5 к производству топлива!'));
         }
         if (b.def === 'drone_factory' && isAlabugaDroneZone(b.pos)) {
-          side.append(h('div', { class: 'stat', style: { color: '#f59e0b', fontWeight: 'bold' } }, '★ Бонус ОЭЗ «Алабуга»: x2 к скорости производства БПЛА!'));
+          side.append(h('div', { class: 'stat', style: { color: '#f59e0b', fontWeight: 'bold' } }, '★ Бонус ОЭЗ «Алабуга»: x1.5 к скорости производства БПЛА!'));
         }
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
 
@@ -1600,29 +1631,39 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const droneDef = u.def === 'drone' ? (u.team === 0 ? 'drone_pd2' : 'drone_orion') : u.def;
           icon = `drone|${droneDef}|${side}|${sel ? 1 : 0}`;
 
-          const targetPos = u.path?.[0] || u.target;
-          if (targetPos) {
-            const dx = (targetPos[0] - pos[0]) * Math.cos((pos[1] * Math.PI) / 180);
-            const dy = targetPos[1] - pos[1];
-            if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
-              const targetBearing = (Math.atan2(dx, dy) * 180) / Math.PI;
-              let prev = droneBearings.get(u.id);
-              if (prev === undefined) prev = targetBearing;
-              let diff = (targetBearing - prev) % 360;
-              if (diff > 180) diff -= 360;
-              if (diff < -180) diff += 360;
-              const currentBearing = prev + diff * 0.2;
-              droneBearings.set(u.id, currentBearing);
-              bearing = currentBearing;
-            } else {
-              bearing = droneBearings.get(u.id) ?? 0;
+          let targetBearing: number | null = null;
+          if (u.bearing !== undefined) {
+            targetBearing = u.bearing;
+          } else {
+            const targetPos = u.path?.[0] || u.target;
+            if (targetPos) {
+              const dx = (targetPos[0] - pos[0]) * Math.cos((pos[1] * Math.PI) / 180);
+              const dy = targetPos[1] - pos[1];
+              if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+                targetBearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+              }
             }
+          }
+
+          if (targetBearing !== null) {
+            let prev = droneBearings.get(u.id);
+            if (prev === undefined) prev = targetBearing;
+            let diff = (targetBearing - prev) % 360;
+            if (diff > 180) diff -= 360;
+            if (diff < -180) diff += 360;
+            // Smooth realistic turn maneuverability limit (~70 deg/s)
+            const maxTurnDeg = 4.5;
+            const turnStep = Math.sign(diff) * Math.min(Math.abs(diff), maxTurnDeg);
+            const currentBearing = (prev + turnStep + 360) % 360;
+            droneBearings.set(u.id, currentBearing);
+            bearing = currentBearing;
           } else {
             bearing = droneBearings.get(u.id) ?? 0;
           }
 
-          if (d?.droneType === 'strike' && u.target) {
-            const dToTarget = distKm(pos, u.target);
+          if (d?.droneType === 'strike' && (u.target || u.path?.[0])) {
+            const diveTarget = (u.path && u.path.length > 0) ? u.path[u.path.length - 1] : u.target!;
+            const dToTarget = distKm(pos, diveTarget);
             const diveDist = 18;
             if (dToTarget < diveDist) {
               scale = 0.45 + 0.55 * (dToTarget / diveDist);
@@ -1801,18 +1842,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             for (const b of friendlyBuildings) {
               const d = distKm(pp.pos, b.pos);
               if (d <= 100) {
-                let coords: LngLat[];
+                let coords: LngLat[] = [];
                 if (roads) {
-                  const r = roads.route(pp.pos, b.pos, 1.0, 30);
-                  coords = r.length > 0 ? [pp.pos, ...r, b.pos] : [pp.pos, b.pos];
-                } else {
-                  coords = [pp.pos, b.pos];
+                  coords = roads.powerRoute(pp.pos, b.pos, 35);
                 }
-                powerLineFeatures.push({
-                  type: 'Feature',
-                  properties: { from: pp.id, to: b.id },
-                  geometry: { type: 'LineString', coordinates: coords },
-                });
+                if (coords.length >= 2) {
+                  powerLineFeatures.push({
+                    type: 'Feature',
+                    properties: { from: pp.id, to: b.id },
+                    geometry: { type: 'LineString', coordinates: coords },
+                  });
+                }
               }
             }
           }
@@ -1899,22 +1939,25 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!el) return;
       el.style.setProperty('--c', TEAM_COLOR[p.owner]);
       if (p.hp !== undefined && p.maxHp !== undefined) {
-        let hpBar = el.querySelector('.cp-hp') as HTMLElement;
-        if (p.hp < p.maxHp) {
-          if (!hpBar) {
-            hpBar = h('div', { class: 'cp-hp' }, h('div', { class: 'cp-hp-fill' }));
-            el.appendChild(hpBar);
-          }
-          const fill = hpBar.querySelector('.cp-hp-fill') as HTMLElement;
-          if (fill) {
+        const hpBar = el.querySelector('.cp-hp') as HTMLElement | null;
+        if (hpBar) {
+          if (p.hp < p.maxHp) {
+            hpBar.style.display = 'block';
+            const fill = hpBar.querySelector('.cp-hp-fill') as HTMLElement | null;
+            const ghost = hpBar.querySelector('.cp-hp-ghost') as HTMLElement | null;
             const pct = Math.max(0, Math.min(100, (p.hp / p.maxHp) * 100));
-            fill.style.width = `${pct}%`;
-            if (pct < 35) fill.style.background = '#ef4444';
-            else if (pct < 70) fill.style.background = '#eab308';
-            else fill.style.background = '#22c55e';
+            if (fill) {
+              fill.style.width = `${pct}%`;
+              if (pct < 35) fill.style.background = '#ef4444';
+              else if (pct < 70) fill.style.background = '#eab308';
+              else fill.style.background = '#22c55e';
+            }
+            if (ghost) {
+              ghost.style.width = `${pct}%`;
+            }
+          } else {
+            hpBar.style.display = 'none';
           }
-        } else if (hpBar) {
-          hpBar.remove();
         }
         const nameSpan = el.querySelector('span');
         el.title = `${nameSpan?.textContent ?? p.id} · ${Math.round(p.hp)} / ${p.maxHp} HP`;

@@ -65,12 +65,13 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 @keyframes in { from { opacity: 0; transform: translateY(6px); } }
 
 /* capture points */
-.cp { --c: #888; display: flex; align-items: center; gap: 6px; pointer-events: none; }
-.cp i { width: 10px; height: 10px; transform: rotate(45deg); border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 30%, transparent); transition: border-color .6s, background .6s; }
-.cp span { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #fff; text-shadow: 0 0 4px #000, 0 0 8px #000; opacity: .85; }
-.cp { position: relative; }
-.cp-hp { position: absolute; bottom: -6px; left: 50%; transform: translateX(-50%); width: 34px; height: 3px; background: rgba(0, 0, 0, 0.7); border: 1px solid rgba(255, 255, 255, 0.3); border-radius: 2px; overflow: hidden; pointer-events: none; }
-.cp-hp-fill { height: 100%; background: #22c55e; transition: width 0.3s ease; }
+.cp { --c: #888; display: flex; align-items: center; gap: 6px; pointer-events: none; position: relative; }
+.cp i { width: 10px; height: 10px; transform: rotate(45deg); border: 2px solid var(--c); background: color-mix(in srgb, var(--c) 30%, transparent); transition: border-color .6s, background .6s; flex-shrink: 0; }
+.cp-label { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; }
+.cp span { font-size: 10px; letter-spacing: .1em; text-transform: uppercase; color: #fff; text-shadow: 0 0 4px #000, 0 0 8px #000; opacity: .85; line-height: 1.1; white-space: nowrap; }
+.cp-hp { position: relative; width: 100%; min-width: 36px; max-width: 60px; height: 4px; background: rgba(15, 23, 42, 0.85); border: 1px solid rgba(255, 255, 255, 0.35); border-radius: 2px; overflow: hidden; pointer-events: none; box-shadow: 0 1px 3px rgba(0,0,0,0.6); }
+.cp-hp-ghost { position: absolute; top: 0; left: 0; height: 100%; width: 100%; background: #ffffff; transition: width 0.5s ease-out 0.25s; }
+.cp-hp-fill { position: absolute; top: 0; left: 0; height: 100%; width: 100%; background: #22c55e; transition: width 0.15s ease-out, background 0.3s ease; }
 
 /* buildings: blueprint → construction ring → completion pulse */
 .bm { --p: 0; --c: var(--team0); position: relative; width: calc(34px * var(--s)); height: calc(34px * var(--s)); cursor: pointer; }

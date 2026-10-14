@@ -497,7 +497,7 @@ export class Sim {
         u.target = to;
         u.cap = 0;
         u.loiterCenter = to;
-        u.loiterRadius = d.id === 'drone_mini_shark' ? 3.5 : 4.5;
+        u.loiterRadius = 4.0;
         u.loiterAngle = undefined;
         return;
       }
@@ -588,9 +588,9 @@ export class Sim {
     }
     m *= powerBoost;
 
-    // Special zone bonus: Kremenchuk Oil Refinery gives 2x fuel production
+    // Special zone bonus: Kremenchuk Oil Refinery gives 1.5x fuel production
     if (b.def === 'oil_refinery' && isKremenchukRefinery(b.pos)) {
-      m *= 2.0;
+      m *= 1.5;
     }
 
     return m;
@@ -667,7 +667,7 @@ export class Sim {
         speed *= 1.25;
       }
       if (b.def === 'drone_factory' && isAlabugaDroneZone(b.pos)) {
-        speed *= 2.0;
+        speed *= 1.5;
       }
       q.remaining -= dt * speed;
       if (q.remaining > 0) return true;
@@ -943,34 +943,22 @@ export class Sim {
     if (u.fuel !== undefined && u.fuel <= 0) {
       return; // out of fuel
     }
-    if (d.droneType === 'recon' && u.loiterCenter) {
-      const rKm = u.loiterRadius ?? (d.id === 'drone_mini_shark' ? 3.5 : 4.5);
-      const dToCenter = distKm(u.pos, u.loiterCenter);
-      if (u.path.length && dToCenter > rKm * 1.1) {
-        // Continue flying towards the loiter center
-      } else {
-        if (u.loiterAngle === undefined) {
-          const dx = (u.pos[0] - u.loiterCenter[0]) * kmPerDegLng(u.loiterCenter[1]);
-          const dy = (u.pos[1] - u.loiterCenter[1]) * 111.32;
-          u.loiterAngle = Math.atan2(dy, dx);
-        }
-        const omega = d.speed / rKm;
-        u.loiterAngle = (u.loiterAngle + omega * dt) % (Math.PI * 2);
-        const nextPos = offsetKm(u.loiterCenter, rKm * Math.cos(u.loiterAngle), rKm * Math.sin(u.loiterAngle));
-        const dist = distKm(u.pos, nextPos);
-        u.pos = nextPos;
-        const lookAhead = u.loiterAngle + 0.25;
-        const tangentTarget = offsetKm(u.loiterCenter, rKm * Math.cos(lookAhead), rKm * Math.sin(lookAhead));
-        u.target = tangentTarget;
-        u.path = [{ p: tangentTarget, road: false }];
-        if (u.fuel !== undefined && dist > 0) {
-          u.fuel = Math.max(0, u.fuel - dist * 0.02);
-          if (u.fuel <= 0) {
-            u.hp = 0; // crashed out of fuel
-          }
-        }
-        return;
+    if (d.droneType === 'recon' && u.loiterCenter && !u.path.length) {
+      // Reached destination: establish circular orbit route of radius 4.0 km
+      const rKm = u.loiterRadius ?? 4.0;
+      const dx = (u.pos[0] - u.loiterCenter[0]) * kmPerDegLng(u.loiterCenter[1]);
+      const dy = (u.pos[1] - u.loiterCenter[1]) * 111.32;
+      const curDist = Math.hypot(dx, dy);
+      let curAngle = curDist > 0.05 ? Math.atan2(dy, dx) : 0;
+      const numPts = 24;
+      const orbit: Waypoint[] = [];
+      for (let i = 1; i <= numPts; i++) {
+        const ang = curAngle + (i / numPts) * (Math.PI * 2);
+        const wpPos = offsetKm(u.loiterCenter, rKm * Math.cos(ang), rKm * Math.sin(ang));
+        orbit.push({ p: wpPos, road: false });
       }
+      u.path = orbit;
+      u.target = orbit[0].p;
     }
     const sprintMult = u.sprint && u.def !== 'drone' ? 2.0 : 1.0;
     const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * sprintMult;
@@ -992,11 +980,23 @@ export class Sim {
         u.target = null;
         break;
       }
+      const dx = (nextPos[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
+      const dy = (nextPos[1] - u.pos[1]) * 111.32;
+      if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
+        u.bearing = (Math.atan2(dx, dy) * 180) / Math.PI;
+      }
       if (speed * budget >= dist) {
         totalMovedKm += dist;
         u.pos = nextPos;
         budget -= dist / speed;
-        u.path.shift();
+        const reachedWp = u.path.shift()!;
+        if (d.droneType === 'recon' && u.loiterCenter) {
+          // Endless circular orbit: cycle reached waypoint to end of path
+          u.path.push(reachedWp);
+        }
+        if (u.path.length > 0) {
+          u.target = u.path[0].p;
+        }
       } else {
         const moved = speed * budget;
         totalMovedKm += moved;
@@ -1042,9 +1042,10 @@ export class Sim {
         for (const cp of this.map.capturePoints) {
           const pt = this.world.points.find((p) => p.id === cp.id);
           if (pt && pt.owner !== u.team && this.isPosInCity(u.pos, cp)) {
-            pt.hp = Math.max(0, (pt.hp ?? pt.maxHp ?? 8000) - damage);
+            const cityDamage = Math.round(damage / 3);
+            pt.hp = Math.max(0, (pt.hp ?? pt.maxHp ?? 8000) - cityDamage);
             pt.lastDamagedTime = this.world.time;
-            totalDealt += damage;
+            totalDealt += cityDamage;
           }
         }
         u.xp += totalDealt * this.ruleset.rules.xpPerDamage;
@@ -1179,6 +1180,7 @@ export class Sim {
         const d = distKm(u.pos, pos);
         if (d > R) continue;
         const ud = this.defs.u.get(u.def)!;
+        if (ud.kind === 'air' || ud.droneType === 'strike') continue;
         force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.hp / this.maxHp(u)) * (1 - d / R);
       }
       const hold: [number, number] = [1, 1];

@@ -64,6 +64,7 @@ export interface Unit {
   loiterCenter?: LngLat;
   loiterRadius?: number;
   loiterAngle?: number;
+  bearing?: number; // current orientation in degrees (0 = North, 90 = East, 180 = South, 270 = West)
 }
 
 export interface SmokeCloud {

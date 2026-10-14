@@ -45,6 +45,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
         id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp),
         target: u.team === team ? u.target : null,
         path: u.team === team && u.path.length ? u.path.map((wp) => p4(wp.p)) : undefined,
+        bearing: u.bearing !== undefined ? Math.round(u.bearing) : undefined,
         cooldown: 0, xp: Math.round(u.xp), rank: u.rank,
         stamina: u.team === team && u.stamina !== undefined ? Math.round(u.stamina) : undefined,
         sprint: u.sprint,
