@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  distKm, distToFrontKm, offsetKm, RoadNetwork, TerrainGrid,
+  distKm, distToFrontKm, offsetKm, RoadNetwork, sideOfWithPockets, TerrainGrid,
   type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -9,6 +9,7 @@ import { clear, h } from './dom';
 import { ShotFx } from './fx';
 import { iconHtml } from './icons';
 import { drawNato, echelonFor, natoId, parseNatoId } from './nato';
+import { buildCitySchematicsGeoJSON } from './citySchematic';
 
 /** OpenStreetMap raster basemap, toned down so the front and units stay readable. */
 const STYLE: maplibregl.StyleSpecification = {
@@ -179,14 +180,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['occupied', 'front', 'pressure', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'borders', 'fuel-stations', 'build-restricted', 'pockets', 'city-schematics']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (m.borders) {
         (map.getSource('borders') as GeoJSONSource).setData(m.borders);
       }
-      if (m.fuel) {
-        (map.getSource('fuel-stations') as GeoJSONSource).setData(m.fuel);
-      }
+      // Note: fuel-stations are populated dynamically in renderMap() to filter out enemy-held stations
       map.addLayer({
         id: 'fuel-stations-glow', type: 'circle', source: 'fuel-stations',
         paint: {
@@ -258,6 +257,79 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
         map.addLayer({ id: 'terrain', type: 'raster', source: 'terrain', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.5, 'raster-resampling': 'nearest', 'raster-fade-duration': 0 } });
       }
+
+      if (m.capturePoints) {
+        (map.getSource('city-schematics') as GeoJSONSource).setData(buildCitySchematicsGeoJSON(m.capturePoints));
+      }
+
+      // Procedural schematic city layers (Watabou medieval / tactical city style)
+      map.addLayer({
+        id: 'city-district-fill', type: 'fill', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'district'],
+        paint: {
+          'fill-color': ['get', 'color'],
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.42, 8, 0.55],
+          'fill-outline-color': '#0f172a',
+        },
+      });
+      map.addLayer({
+        id: 'city-block-fill', type: 'fill', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'block'],
+        minzoom: 5.6,
+        paint: {
+          'fill-color': ['get', 'color'],
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 5.6, 0.45, 7.5, 0.85],
+          'fill-outline-color': '#090d16',
+        },
+      });
+      map.addLayer({
+        id: 'city-streets', type: 'line', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'street'],
+        minzoom: 5.4,
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#f8fafc',
+          'line-opacity': 0.7,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5.4, 0.8, 8, 1.4, 11, 2.2],
+        },
+      });
+      map.addLayer({
+        id: 'city-plaza-fill', type: 'fill', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'plaza'],
+        paint: {
+          'fill-color': '#0b0d10',
+          'fill-opacity': 0.85,
+          'fill-outline-color': '#475569',
+        },
+      });
+      map.addLayer({
+        id: 'city-citadel-fill', type: 'fill', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'citadel'],
+        paint: {
+          'fill-color': '#cbd5e1',
+          'fill-opacity': 0.95,
+          'fill-outline-color': '#0f172a',
+        },
+      });
+      map.addLayer({
+        id: 'city-walls', type: 'line', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'wall'],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#090d16',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.8, 8, 2.8, 11, 3.8],
+        },
+      });
+      map.addLayer({
+        id: 'city-bastions', type: 'circle', source: 'city-schematics',
+        filter: ['==', ['get', 'type'], 'bastion'],
+        paint: {
+          'circle-radius': ['interpolate', ['linear'], ['zoom'], 4.5, 1.5, 8, 2.8, 11, 4.0],
+          'circle-color': '#0f172a',
+          'circle-stroke-width': 1.0,
+          'circle-stroke-color': '#94a3b8',
+        },
+      });
       (map.getSource('roads') as GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: (m.roads ?? []).map((l) => {
@@ -271,9 +343,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         filter: ['!=', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#b45309',
-          'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.14, 7.5, 0.26],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.6, 8, 1.0, 11, 1.5],
+          'line-color': '#92400e',
+          'line-opacity': 0.75,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.7, 8, 1.1, 11, 1.6],
         },
       });
       map.addLayer({
@@ -282,8 +354,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
           'line-color': '#d97706',
-          'line-opacity': 0.36,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.1, 8, 1.8, 11, 2.6],
+          'line-opacity': 0.9,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.2, 8, 1.9, 11, 2.8],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
@@ -330,7 +402,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       symbol('formations', ['all'], { maxzoom: GROUP_ZOOM });
 
       for (const cp of init!.map.capturePoints) {
-        const el = h('div', { class: 'cp' }, h('i', {}), h('span', {}, cp.name));
+        const el = h('div', { class: `cp val-${cp.value}` + (cp.value >= 3 ? ' cp-major' : ' cp-minor') }, h('i', {}), h('span', {}, cp.name));
         new maplibregl.Marker({ element: el }).setLngLat(cp.pos).addTo(map);
         pMarkers.set(cp.id, el);
       }
@@ -350,10 +422,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     const setScale = () => mapEl.style.setProperty('--s', String(Math.min(1.4, Math.max(0.42, (map.getZoom() - 3.6) / 4.6))));
+    const updateZoomClasses = () => {
+      const z = map.getZoom();
+      mapEl.classList.toggle('far', z < 6.6);
+      mapEl.classList.toggle('zoom-overview', z < 5.3);
+      mapEl.classList.toggle('zoom-very-far', z < 6.0);
+      mapEl.classList.toggle('zoom-far', z < 6.8);
+    };
     map.on('zoom', setScale);
-    map.on('zoom', () => mapEl.classList.toggle('far', map.getZoom() < 6.6));
-    mapEl.classList.toggle('far', m.zoom < 6.6);
+    map.on('zoom', updateZoomClasses);
     setScale();
+    updateZoomClasses();
 
     let lastHover = 0;
     map.on('mousemove', (e) => {
@@ -1353,9 +1432,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     (map.getSource('rings') as GeoJSONSource).setData({ type: 'FeatureCollection', features: rings });
 
+    // friendly fuel stations only (hide enemy fuel stations)
+    if (init.map.fuel?.features && map.getSource('fuel-stations')) {
+      const s = snap;
+      const friendlyStations = init.map.fuel.features.filter((f: any) => {
+        const coords = f.geometry.coordinates as LngLat;
+        return sideOfWithPockets(s.front, s.pockets, coords) === myTeam;
+      });
+      (map.getSource('fuel-stations') as GeoJSONSource).setData({
+        type: 'FeatureCollection',
+        features: friendlyStations,
+      });
+    }
+
     // buildings → DOM markers with construction animation
     const alive = new Set<number>();
     for (const b of snap.buildings) {
+      if (b.def === 'gas_station' && b.team !== myTeam) continue;
       alive.add(b.id);
       const d = defB.get(b.def)!;
       let m = bMarkers.get(b.id);
