@@ -271,9 +271,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         filter: ['!=', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#f59e0b',
-          'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.35, 7.5, 0.65],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.75, 8, 1.25, 11, 1.8],
+          'line-color': '#b45309',
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.14, 7.5, 0.26],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.6, 8, 1.0, 11, 1.5],
         },
       });
       map.addLayer({
@@ -281,9 +281,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         filter: ['==', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': '#fbbf24',
-          'line-opacity': 0.9,
-          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.35, 8, 2.1, 11, 3.0],
+          'line-color': '#d97706',
+          'line-opacity': 0.36,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.1, 8, 1.8, 11, 2.6],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
