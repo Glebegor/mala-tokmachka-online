@@ -342,14 +342,22 @@ export class Sim {
         }
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
-        if (sideOfWithPockets(w.front, w.pockets, cmd.pos) !== p.team) return fail('not your territory');
-        const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
-        if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
+        const inSpecial = isAlabugaDroneZone(cmd.pos) || isKremenchukRefinery(cmd.pos);
+        if (isAlabugaDroneZone(cmd.pos)) {
+          if (p.team !== 1) return fail('Зона «Алабуга» доступна только стороне РФ');
+        } else if (isKremenchukRefinery(cmd.pos)) {
+          if (p.team !== 0) return fail('Кременчугский НПЗ доступен только стороне Украины');
+        } else {
+          if (sideOfWithPockets(w.front, w.pockets, cmd.pos) !== p.team) return fail('not your territory');
+          const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
+          if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
+        }
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
         if (d.id === 'housing') {
           if (w.buildings.some((b) => b.def === 'housing' && distKm(b.pos, cmd.pos) < 0.08)) return fail('слишком близко к другому дому');
         } else {
-          if (w.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, cmd.pos) < r.minBuildSpacing)) return fail('space occupied');
+          const minSpacing = inSpecial ? 0.5 : r.minBuildSpacing;
+          if (w.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, cmd.pos) < minSpacing)) return fail('space occupied');
         }
         if (!canAfford(p.res, d.cost)) return fail('not enough resources');
         pay(p.res, d.cost);

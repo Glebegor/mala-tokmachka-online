@@ -1,6 +1,7 @@
 import type { LngLat } from './geo';
 import { distKm, kmPerDegLng } from './geo';
 import type { FrontNode, Pocket, Team } from './state';
+import { isAlabugaDroneZone, isKremenchukRefinery } from './specialZones';
 
 const KM = 111.32;
 
@@ -91,8 +92,10 @@ export function pointInPolygon(p: LngLat, ring: (FrontNode | LngLat)[]): boolean
   return inside;
 }
 
-/** Which team holds ground at position p, accounting for isolated military cauldrons ("котлы"). */
+/** Which team holds ground at position p, accounting for isolated military cauldrons ("котлы") and special zones. */
 export function sideOfWithPockets(front: FrontNode[], pockets: Pocket[] | undefined, p: LngLat): Team {
+  if (isAlabugaDroneZone(p)) return 1;
+  if (isKremenchukRefinery(p)) return 0;
   if (pockets && pockets.length > 0) {
     for (const pkt of pockets) {
       if (pointInPolygon(p, pkt.nodes)) {
