@@ -133,25 +133,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       case 'init':
         init = msg;
         cityPolys.clear();
-        if (msg.map.cities?.features) {
-          for (const f of msg.map.cities.features) {
-            const cityId = f.properties?.id;
-            if (!cityId) continue;
-            if (f.geometry?.type === 'Polygon') {
-              const poly = f.geometry.coordinates?.[0] as LngLat[];
-              if (poly) {
+        const cityFeatures = msg.map.cities?.features ?? (msg.map.capturePoints ? buildCitySchematicsGeoJSON(msg.map.capturePoints).features : []);
+        for (const f of cityFeatures) {
+          const cityId = f.properties?.cityId ?? f.properties?.id;
+          if (!cityId) continue;
+          if (f.geometry?.type === 'Polygon') {
+            const poly = f.geometry.coordinates?.[0] as LngLat[];
+            if (poly && poly.length >= 3) {
+              const list = cityPolys.get(cityId) ?? [];
+              list.push(poly);
+              cityPolys.set(cityId, list);
+            }
+          } else if (f.geometry?.type === 'MultiPolygon') {
+            for (const polyCoords of f.geometry.coordinates) {
+              const poly = polyCoords?.[0] as LngLat[];
+              if (poly && poly.length >= 3) {
                 const list = cityPolys.get(cityId) ?? [];
                 list.push(poly);
                 cityPolys.set(cityId, list);
-              }
-            } else if (f.geometry?.type === 'MultiPolygon') {
-              for (const polyCoords of f.geometry.coordinates) {
-                const poly = polyCoords?.[0] as LngLat[];
-                if (poly) {
-                  const list = cityPolys.get(cityId) ?? [];
-                  list.push(poly);
-                  cityPolys.set(cityId, list);
-                }
               }
             }
           }
@@ -945,12 +944,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData(empty());
       return;
     }
+    // Housing is placed freely inside city boundaries - no 35km restriction rings!
+    if (placing.id === 'housing') {
+      (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData(empty());
+      return;
+    }
     const r = init.ruleset.rules.minBuildSpacing; // 35 km
-    const features = snap.buildings.map((b) => ({
-      type: 'Feature',
-      properties: {},
-      geometry: { type: 'Polygon', coordinates: [circle(b.pos, r, 64)] },
-    }));
+    // Housing blocks never project a 35km restriction zone
+    const features = snap.buildings
+      .filter((b) => b.def !== 'housing')
+      .map((b) => ({
+        type: 'Feature',
+        properties: {},
+        geometry: { type: 'Polygon', coordinates: [circle(b.pos, r, 64)] },
+      }));
     (map.getSource('build-restricted') as GeoJSONSource | undefined)?.setData({
       type: 'FeatureCollection',
       features,
@@ -977,17 +984,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const r = init.ruleset.rules;
     const d = distToFrontKm(snap.front, p) * (init.team === 0 ? 1 : -1);
     if (d < 0) return 'not your territory';
-    if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     if (def.id === 'housing') {
       const cityCp = init.map.capturePoints.find((cp) => isPosInCity(p, cp, cityPolys));
-      if (!cityCp) return 'Строительство жилых домов возможно только в границах городов!';
+      if (!cityCp) return 'Строительство доступно только в серых зонах городов!';
       const cityPt = snap.points.find((pt) => pt.id === cityCp.id);
       if (cityPt && cityPt.owner !== init.team) return 'Город должен контролироваться вашей стороной!';
       const cityHouses = snap.buildings.filter((b) => b.def === 'housing' && isPosInCity(b.pos, cityCp, cityPolys));
       if (cityHouses.length >= 20) return 'В этом городе уже построен максимум (20) домов!';
+      if (snap.buildings.some((b) => b.def === 'housing' && distKm(b.pos, p) < 0.08)) return 'Слишком близко к другому дому (мин 80м)';
+    } else {
+      if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
+      if (snap.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, p) < r.minBuildSpacing)) return `too close to another building (min ${r.minBuildSpacing}km)`;
     }
     if (terrain?.at(p) === 'water') return 'cannot build on water';
-    if (snap.buildings.some((b) => distKm(b.pos, p) < r.minBuildSpacing)) return `too close to another building (min ${r.minBuildSpacing}km)`;
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
     return null;
   }
@@ -996,7 +1005,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!placing || !init) return;
     const problem = placementProblem(placing, p);
     const color = problem ? '#ff5a5a' : '#5ae88a';
-    const radius = placing.defense?.radiusKm ?? placing.aura?.radiusKm ?? (placing.vision && placing.vision > 8 ? placing.vision : 1.2);
+    const radius = placing.id === 'housing'
+      ? 0.15
+      : (placing.defense?.radiusKm ?? placing.aura?.radiusKm ?? (placing.vision && placing.vision > 8 ? placing.vision : 1.2));
     (map.getSource('ghost') as GeoJSONSource).setData({
       type: 'FeatureCollection',
       features: [{ type: 'Feature', properties: { color }, geometry: { type: 'Polygon', coordinates: [circle(p, radius)] } }],

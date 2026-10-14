@@ -29,20 +29,18 @@ export function isPosInCity(
   cp: { id: string; pos: LngLat; value?: number },
   cityPolys?: Map<string, LngLat[][]> | Record<string, LngLat[][]>
 ): boolean {
-  const val = Math.max(1, Math.min(5, cp.value ?? 1));
-  const rKm = val === 5 ? 12 : val === 4 ? 8 : val === 3 ? 5 : val === 2 ? 3.5 : 2.5;
-  // Fast degree check before calculating distKm
-  if (Math.abs(pos[1] - cp.pos[1]) > 0.15) return false;
-  const d = distKm(pos, cp.pos);
-  if (d > rKm * 1.5) return false;
   if (cityPolys) {
     const polys = cityPolys instanceof Map ? cityPolys.get(cp.id) : (cityPolys as any)[cp.id];
-    if (polys) {
+    if (polys && polys.length > 0) {
       for (const p of polys) {
         if (pointInPolygon(pos, p)) return true;
       }
+      return false;
     }
   }
+  const val = Math.max(1, Math.min(5, cp.value ?? 1));
+  const rKm = val === 5 ? 12 : val === 4 ? 8 : val === 3 ? 5 : val === 2 ? 3.5 : 2.5;
+  const d = distKm(pos, cp.pos);
   return d <= rKm;
 }
 
@@ -119,7 +117,7 @@ export class Sim {
 
     if (map.cities?.features) {
       for (const f of map.cities.features) {
-        const cityId = f.properties?.cityId;
+        const cityId = f.properties?.cityId ?? f.properties?.id;
         if (!cityId) continue;
         if (f.geometry?.type === 'Polygon') {
           const poly = f.geometry.coordinates?.[0] as LngLat[];
@@ -346,9 +344,13 @@ export class Sim {
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         if (sideOfWithPockets(w.front, w.pockets, cmd.pos) !== p.team) return fail('not your territory');
         const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
-        if (dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
+        if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
-        if (w.buildings.some((b) => distKm(b.pos, cmd.pos) < r.minBuildSpacing)) return fail('space occupied');
+        if (d.id === 'housing') {
+          if (w.buildings.some((b) => b.def === 'housing' && distKm(b.pos, cmd.pos) < 0.08)) return fail('слишком близко к другому дому');
+        } else {
+          if (w.buildings.some((b) => b.def !== 'housing' && distKm(b.pos, cmd.pos) < r.minBuildSpacing)) return fail('space occupied');
+        }
         if (!canAfford(p.res, d.cost)) return fail('not enough resources');
         pay(p.res, d.cost);
         this.spawnBuilding(d.id, p, cmd.pos);
