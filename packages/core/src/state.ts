@@ -64,6 +64,8 @@ export interface Unit {
   loiterCenter?: LngLat;
   loiterRadius?: number;
   loiterAngle?: number;
+  isLoitering?: boolean; // true if drone has arrived at loiter center and is in cyclic orbit
+  bombardTarget?: LngLat | null; // manual target area for artillery barrage
   bearing?: number; // current orientation in degrees (0 = North, 90 = East, 180 = South, 270 = West)
 }
 

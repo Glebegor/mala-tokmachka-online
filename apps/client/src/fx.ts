@@ -88,7 +88,7 @@ export class ShotFx {
       const impactT = Math.max(0, (now - e.start - e.dur) / 500); // 0..1 after arrival
 
       if (e.kind === 'blast') {
-        const radius = (25 + 45 * Math.min(1, t * 1.5)) * k;
+        const radius = (8 + 14 * Math.min(1, t * 1.5)) * k;
         const alpha = Math.max(0, 1 - t);
         this.ring(a.x, a.y, radius, '#ffaa44', alpha);
         this.ring(a.x, a.y, radius * 0.7, '#ffffff', alpha * 0.9);

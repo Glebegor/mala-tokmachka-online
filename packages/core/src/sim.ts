@@ -176,7 +176,7 @@ export class Sim {
     const isDrone = def === 'drone' || d.kind === 'air';
     const isVehicle = !isDrone && (d.mobility !== 'foot' || !!d.maxFuel);
     const isInfantry = d.kind === 'ground' && d.mobility === 'foot' && !d.maxFuel;
-    const maxFuel = isDrone ? (d.droneType === 'recon' ? 100 : undefined) : (d.maxFuel ?? (isVehicle ? 100 : undefined));
+    const maxFuel = isDrone ? (d.maxFuel ?? 100) : (d.maxFuel ?? (isVehicle ? 100 : undefined));
     const cargo = d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [] } : undefined;
     const u: Unit = {
       id: this.world.nextId++,
@@ -449,6 +449,21 @@ export class Sim {
         }
         return ok();
       }
+      case 'bombard': {
+        const set = new Set(cmd.units);
+        for (const u of w.units) {
+          if (!set.has(u.id) || u.owner !== p.id) continue;
+          const d = this.defs.u.get(u.def)!;
+          if (d.symbol === 'artillery' || d.minRange) {
+            u.bombardTarget = cmd.target;
+            if (cmd.target) {
+              u.path = [];
+              u.target = null;
+            }
+          }
+        }
+        return ok();
+      }
     }
   }
 
@@ -473,6 +488,7 @@ export class Sim {
     let own = 0;
     units.forEach((u, i) => {
       const d = this.defs.u.get(u.def)!;
+      u.bombardTarget = undefined; // clear manual bombard target on move
       if (d.droneType === 'strike') {
         const leg: Waypoint = { p: to, road: false };
         if (append && u.path.length) {
@@ -485,6 +501,7 @@ export class Sim {
         u.loiterCenter = undefined;
         u.loiterRadius = undefined;
         u.loiterAngle = undefined;
+        u.isLoitering = false;
         return;
       }
       if (d.droneType === 'recon') {
@@ -494,16 +511,25 @@ export class Sim {
         } else {
           u.path = [leg];
         }
-        u.target = to;
+        u.target = u.path[0].p;
         u.cap = 0;
         u.loiterCenter = to;
         u.loiterRadius = 4.0;
         u.loiterAngle = undefined;
+        u.isLoitering = false; // navigation mode until arrival!
         return;
+      }
+      if (d.symbol === 'artillery' || d.minRange) {
+        // Artillery must NEVER cross or be ordered across the frontline
+        const distFront = distToFrontKm(this.world.front, to) * (u.team === 0 ? 1 : -1);
+        if (distFront < 0.5) {
+          return; // reject ordering artillery across the frontline
+        }
       }
       u.loiterCenter = undefined;
       u.loiterRadius = undefined;
       u.loiterAngle = undefined;
+      u.isLoitering = false;
       const ring = Math.ceil(Math.sqrt(i));
       const dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
       const startPos = append && u.path.length ? u.path[u.path.length - 1].p : u.pos;
@@ -515,15 +541,27 @@ export class Sim {
           road = this.roads.route(startPos, dest, mult);
         }
       }
-      const legWaypoints: Waypoint[] = road.map((p, k) => ({ p, road: k > 0 }));
+      let legWaypoints: Waypoint[] = road.map((p, k) => ({ p, road: k > 0 }));
       legWaypoints.push({ p: dest, road: false });
+
+      if (d.symbol === 'artillery' || d.minRange) {
+        // Truncate route if any waypoint gets too close to frontline
+        const safeWaypoints: Waypoint[] = [];
+        for (const wp of legWaypoints) {
+          const df = distToFrontKm(this.world.front, wp.p) * (u.team === 0 ? 1 : -1);
+          if (df < 0.5) break;
+          safeWaypoints.push(wp);
+        }
+        if (!safeWaypoints.length) return;
+        legWaypoints = safeWaypoints;
+      }
 
       if (append && u.path.length) {
         u.path.push(...legWaypoints);
       } else {
         u.path = legWaypoints;
       }
-      u.target = dest;
+      u.target = u.path[0].p;
       u.cap = cap;
     });
   }
@@ -861,26 +899,77 @@ export class Sim {
       // Fire modes: 'hold' does not fire; 'return' fires only if damaged recently; 'auto' fires freely
       const canFire = u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5);
 
+      const minR = (d.minRange ?? 0) * rank.range;
+      let handledBombard = false;
+      if (canFire && u.bombardTarget && (d.symbol === 'artillery' || d.minRange)) {
+        const distToBombard = distKm(u.pos, u.bombardTarget);
+        if (distToBombard >= minR && distToBombard <= range) {
+          handledBombard = true;
+          if (u.cooldown === 0) {
+            u.cooldown = 2.0; // artillery bombardment salvo cadence
+            const base = d.damage * rank.damage;
+            const scatterAng = Math.random() * Math.PI * 2;
+            const scatterDist = Math.random() * 0.4;
+            const impactPos = offsetKm(u.bombardTarget, scatterDist * Math.cos(scatterAng), scatterDist * Math.sin(scatterAng));
+            this.shots.push({ def: u.def, team: u.team, from: u.pos, to: impactPos });
+
+            // Blast radius 1.0 km
+            const blastRadius = 1.0;
+            let dealtTotal = 0;
+            for (const eu of w.units) {
+              if (eu.team !== u.team && !eu.embarkedIn && eu.hp > 0) {
+                const ed = this.defs.u.get(eu.def)!;
+                if (ed.kind === 'air') continue; // Artillery shells hit ground, cannot damage airborne drones
+                const du = distKm(impactPos, eu.pos);
+                if (du <= blastRadius) {
+                  const cover = this.terrainAt(eu.pos).cover;
+                  const cityDef = this.cityDefenseBonus(eu.team, eu.pos);
+                  const dealt = (base * (1 - du / blastRadius) * (1 - cover) * (1 - cityDef)) / this.holdMult(eu.team, eu.pos);
+                  eu.hp -= dealt;
+                  dealtTotal += dealt;
+                  if (eu.hp <= 0) u.xp += r.xpPerKill;
+                }
+              }
+            }
+            for (const eb of w.buildings) {
+              if (eb.team !== u.team && eb.hp > 0) {
+                const db = distKm(impactPos, eb.pos);
+                if (db <= blastRadius) {
+                  const dealt = (base * 0.8 * (1 - db / blastRadius)) / this.holdMult(eb.team, eb.pos);
+                  eb.hp -= dealt;
+                  eb.lastDamagedTime = this.world.time;
+                  dealtTotal += dealt;
+                }
+              }
+            }
+            u.xp += dealtTotal * r.xpPerDamage;
+            this.rankUp(u);
+          }
+        }
+      }
+
       let tu: Unit | null = null;
       let tb: Building | null = null;
-      if (canFire) {
+      if (canFire && !handledBombard) {
         let best = range;
         for (const e of w.units) {
           if (e.team === u.team || e.hp <= 0 || e.embarkedIn) continue;
+          const ed = this.defs.u.get(e.def)!;
+          if (ed.kind === 'air' && !d.antiAir) continue; // Tanks, infantry, artillery cannot target or shoot down drones!
           const dist = distKm(u.pos, e.pos);
-          if (dist <= best) (best = dist), (tu = e);
+          if (dist >= minR && dist <= best) (best = dist), (tu = e);
         }
         if (!tu) {
           for (const e of w.buildings) {
             if (e.team === u.team || e.hp <= 0) continue;
             const dist = distKm(u.pos, e.pos);
-            if (dist <= best) (best = dist), (tb = e);
+            if (dist >= minR && dist <= best) (best = dist), (tb = e);
           }
         }
       }
 
       if ((tu || tb) && u.cooldown === 0) {
-        u.cooldown = 1; // one salvo per second
+        u.cooldown = d.symbol === 'artillery' ? 2.0 : 1; // one salvo per second (artillery 2.0s)
         const base = d.damage * rank.damage;
         let dealt: number;
         if (tu) {
@@ -905,7 +994,10 @@ export class Sim {
         this.advance(u, d, dt);
       } else if (d.droneType === 'recon' && u.loiterCenter) {
         this.advance(u, d, dt);
-      } else if (d.kind !== 'air' && !tu && !tb && canFire && !u.route) {
+      } else if (d.kind !== 'air' && !tu && !tb && canFire && !u.route && !handledBombard) {
+        if (d.symbol === 'artillery' || d.minRange) {
+          continue; // Artillery never wanders off to chase enemies in idle
+        }
         let chase: LngLat | null = null;
         let near = d.vision * 0.7;
         for (const e of w.units) {
@@ -943,17 +1035,15 @@ export class Sim {
     if (u.fuel !== undefined && u.fuel <= 0) {
       return; // out of fuel
     }
-    if (d.droneType === 'recon' && u.loiterCenter && !u.path.length) {
+    if (d.droneType === 'recon' && u.loiterCenter && !u.isLoitering && !u.path.length) {
       // Reached destination: establish circular orbit route of radius 4.0 km
+      u.isLoitering = true;
       const rKm = u.loiterRadius ?? 4.0;
-      const dx = (u.pos[0] - u.loiterCenter[0]) * kmPerDegLng(u.loiterCenter[1]);
-      const dy = (u.pos[1] - u.loiterCenter[1]) * 111.32;
-      const curDist = Math.hypot(dx, dy);
-      let curAngle = curDist > 0.05 ? Math.atan2(dy, dx) : 0;
-      const numPts = 24;
+      const startAng = (u.bearing !== undefined ? u.bearing : 0) * (Math.PI / 180);
+      const numPts = 32;
       const orbit: Waypoint[] = [];
       for (let i = 1; i <= numPts; i++) {
-        const ang = curAngle + (i / numPts) * (Math.PI * 2);
+        const ang = startAng + (i / numPts) * (Math.PI * 2);
         const wpPos = offsetKm(u.loiterCenter, rKm * Math.cos(ang), rKm * Math.sin(ang));
         orbit.push({ p: wpPos, road: false });
       }
@@ -980,6 +1070,15 @@ export class Sim {
         u.target = null;
         break;
       }
+      if (d.symbol === 'artillery' || d.minRange) {
+        // Artillery must NEVER cross the frontline
+        const distFront = distToFrontKm(this.world.front, nextPos) * (u.team === 0 ? 1 : -1);
+        if (distFront < 0.5) {
+          u.path = [];
+          u.target = null;
+          break;
+        }
+      }
       const dx = (nextPos[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
       const dy = (nextPos[1] - u.pos[1]) * 111.32;
       if (Math.abs(dx) + Math.abs(dy) > 1e-6) {
@@ -990,11 +1089,25 @@ export class Sim {
         u.pos = nextPos;
         budget -= dist / speed;
         const reachedWp = u.path.shift()!;
-        if (d.droneType === 'recon' && u.loiterCenter) {
+        if (d.droneType === 'recon' && u.isLoitering) {
           // Endless circular orbit: cycle reached waypoint to end of path
           u.path.push(reachedWp);
         }
-        if (u.path.length > 0) {
+        if (d.droneType === 'recon' && u.loiterCenter && !u.isLoitering && !u.path.length) {
+          // Reached loiter center: start circular orbit!
+          u.isLoitering = true;
+          const rKm = u.loiterRadius ?? 4.0;
+          const startAng = (u.bearing !== undefined ? u.bearing : 0) * (Math.PI / 180);
+          const numPts = 32;
+          const orbit: Waypoint[] = [];
+          for (let i = 1; i <= numPts; i++) {
+            const ang = startAng + (i / numPts) * (Math.PI * 2);
+            const wpPos = offsetKm(u.loiterCenter, rKm * Math.cos(ang), rKm * Math.sin(ang));
+            orbit.push({ p: wpPos, road: false });
+          }
+          u.path = orbit;
+          u.target = orbit[0].p;
+        } else if (u.path.length > 0) {
           u.target = u.path[0].p;
         }
       } else {
@@ -1005,7 +1118,7 @@ export class Sim {
       }
     }
     if (u.fuel !== undefined && totalMovedKm > 0) {
-      const fuelBurnRate = 0.02 * (u.sprint ? 1.5 : 1.0);
+      const fuelBurnRate = (d.kind === 'air' ? 0.08 : 0.04) * (u.sprint ? 1.5 : 1.0);
       u.fuel = Math.max(0, u.fuel - totalMovedKm * fuelBurnRate);
       if (u.fuel <= 0) {
         if (d.kind === 'air') u.hp = 0;

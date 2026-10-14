@@ -12,6 +12,7 @@ export type Command =
   | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number; resType?: string }
   | { type: 'board'; unit: number; transport: number }
   | { type: 'disembark'; transport: number }
-  | { type: 'refuel'; units: number[] };
+  | { type: 'refuel'; units: number[] }
+  | { type: 'bombard'; units: number[]; target: LngLat | null };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };
