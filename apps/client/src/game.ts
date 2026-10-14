@@ -2,7 +2,7 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
-  type BuildingDef, type ClientMsg, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
+  type BuildingDef, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
 import { clear, h } from './dom';
@@ -10,9 +10,11 @@ import { ShotFx } from './fx';
 import { iconHtml, STATUS, statusIconHtml } from './icons';
 import { FogOverlay } from './fog';
 import { renderUnitHud, type Pickers } from './unitHud';
-import { ALLY_COLOR, drawNato, echelonFor, NATION_COLOR, natoId, parseNatoId, type Relation } from './nato';
+import { ALLY_COLOR, drawNato, drawNatoImage, echelonFor, NATION_COLOR, natoLayers, type Relation } from './nato';
 import { aircraftSprite } from './sprites';
 import { cellsToMultiPolygon } from './contours';
+import { statsView } from './stats';
+import { openGuide } from './guide';
 import { ProductionDock, QueueList, type QueueContext } from './queue';
 
 /**
@@ -47,7 +49,7 @@ const STYLE: maplibregl.StyleSpecification = {
 const TEAM_COLOR = ['#3d8bff', '#ff4d4d'];
 const TEAM_NAME = ['UKRAINE', 'RUSSIA'];
 const GROUP_ZOOM = 8; // below this zoom a group is drawn as one formation marker
-const HINT = 'Click: select · Shift+drag: box · Right click: move (Shift: waypoint, Alt: off-road) · G: group · T: terrain · M: map';
+const HINT = 'Click: select (Shift: add) · Shift+drag: box · Right click: move (Shift: waypoint, Alt: off-road) · P / Alt+click: ping · G: group · T: terrain · M: map';
 
 type Fc = { type: 'FeatureCollection'; features: any[] };
 const empty = (): Fc => ({ type: 'FeatureCollection', features: [] });
@@ -99,6 +101,66 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const basemapBtn = h('button', { class: 'ghost', title: 'Hide or show the real map underneath (M)', onClick: () => toggleBasemap() }, 'Map: ON');
   const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
+  // ---------- map marks (pings) for the team ----------
+  const MARKS: Record<MarkKind, { label: string; icon: string; tone: number }> = {
+    go: { label: 'Going here', icon: '➤', tone: 660 },
+    defend: { label: 'Defend here', icon: '⛨', tone: 520 },
+    danger: { label: 'Danger here', icon: '⚠', tone: 330 },
+    look: { label: 'Look here', icon: '◉', tone: 880 },
+  };
+  /** The mark the next map click places (chosen from the menu). */
+  let marking: MarkKind | null = null;
+  const markMenu = h('div', { class: 'mark-menu', style: { display: 'none' } },
+    ...(Object.keys(MARKS) as MarkKind[]).map((k, i) => h('button', { class: `mk mk-${k}`, title: `${MARKS[k].label} (${i + 1})`, onClick: () => chooseMark(k) }, h('i', {}, MARKS[k].icon), h('span', {}, MARKS[k].label), h('em', {}, String(i + 1)))));
+  const markBtn = h('button', { class: 'ghost', title: 'Mark a spot for your team (P). Alt+click on the map: quick "look here".', onClick: () => toggleMarkMenu() }, 'Ping (P)');
+  function toggleMarkMenu(open = markMenu.style.display === 'none') {
+    markMenu.style.display = open ? 'flex' : 'none';
+    if (!open) marking = null;
+    markBtn.classList.toggle('on', open);
+  }
+  function chooseMark(k: MarkKind) {
+    marking = k;
+    markMenu.querySelectorAll('.mk').forEach((b) => b.classList.toggle('active', b.classList.contains(`mk-${k}`)));
+    hint.textContent = `${MARKS[k].label}: click the map (Esc cancels)`;
+    mapEl.classList.add('picking');
+  }
+  function sendMark(kind: MarkKind, pos: LngLat) {
+    ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'mark', kind, pos } satisfies ClientMsg));
+    marking = null;
+    toggleMarkMenu(false);
+    hint.textContent = HINT;
+    mapEl.classList.remove('picking');
+  }
+  let audio: AudioContext | null = null;
+  function beep(freq: number) {
+    try {
+      audio ??= new AudioContext();
+      const o = audio.createOscillator(), g = audio.createGain();
+      o.frequency.value = freq;
+      g.gain.setValueAtTime(0.08, audio.currentTime);
+      g.gain.exponentialRampToValueAtTime(0.0001, audio.currentTime + 0.35);
+      o.connect(g).connect(audio.destination);
+      o.start();
+      o.stop(audio.currentTime + 0.36);
+    } catch { /* no sound available */ }
+  }
+  /** A teammate's (or your own) mark: pulsing marker with a label for 8 s, a short tone, and a message that flies there. */
+  function showMark(m: { from: string; name: string; pos: LngLat; kind: MarkKind }) {
+    if (!mapReady) return;
+    const def = MARKS[m.kind];
+    const who = m.from === me ? 'You' : m.name;
+    const el = h('div', { class: `map-mark mk-${m.kind}` }, h('b', {}, def.icon), h('span', {}, `${who}: ${def.label}`), h('i', {}), h('i', { class: 'r2' }));
+    const marker = new maplibregl.Marker({ element: el }).setLngLat(m.pos).addTo(map);
+    setTimeout(() => el.classList.add('gone'), 7400);
+    setTimeout(() => marker.remove(), 8000);
+    beep(def.tone);
+    if (m.from !== me) {
+      const t = h('div', { class: `toast mark-toast mk-${m.kind}`, title: 'Click to look' }, `${def.icon} ${who}: ${def.label}`);
+      t.addEventListener('click', () => map.easeTo({ center: m.pos, zoom: Math.max(map.getZoom(), 7.5) }));
+      toasts.append(t);
+      setTimeout(() => t.remove(), 6000);
+    }
+  }
   /** Ceasefire at the start: a banner with the time left until the war begins. */
   const peaceBanner = h('div', { class: 'peace-banner', style: { display: 'none' } });
   const modeBadge = h('span', { class: 'mode-badge', style: { display: 'none' } }, 'SANDBOX');
@@ -157,8 +219,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   app.append(
     h('div', { class: 'game' }, mapEl, dock.el, queueSlot,
-      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
-      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner),
+      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner, markMenu),
   );
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
@@ -214,6 +276,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.attack) f.push(`Hits ${d.attack.targets} targets: ${d.attack.damage} dmg/s, ${d.attack.range} km`);
     if (d.crossing) f.push(`River crossing within ${d.crossing.radiusKm} km`);
     if (d.supply) f.push(`Refills ammunition of your units within ${d.supply.radiusKm} km (${d.supply.rounds} rounds a second each)`);
+    if (d.heals) f.push(`Heals ${d.heals.targets === 'foot' ? 'troops on foot' : 'vehicles'} within ${d.heals.radiusKm} km: ${Math.round(d.heals.perSecond * 100)}% a second, once out of the fight for 10 s`);
     if (d.buildInGrey) f.push('Can be built inside your grey zones, even behind the enemy line');
     if (d.training) f.push(`Courses for ${d.training.minUnits}–${d.training.capacity} units, ${d.training.baseTime + d.training.timePerRank}s and up`);
     if (d.trains?.length) f.push(`Trains ${d.trains.filter((u) => !defU.get(u)?.side || defU.get(u)?.side === (init?.team === 0 ? 'ua' : 'ru')).map((u) => defU.get(u)?.name ?? u).join(', ')}`);
@@ -229,11 +292,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const extra: string[] = [];
     if (u.minRange) extra.push(`Indirect fire ${u.minRange}–${u.range} km, needs a spotter`);
     if (u.cargoCap) extra.push(`${u.fuelOnly ? 'Fuel tank' : 'Cargo'} ${u.cargoCap}${u.passengerCap ? ` · carries ${u.passengerCap} infantry` : ''}`);
-    if (u.maxAmmo) extra.push(`Ammo ${u.maxAmmo} rounds (${u.ammoCost ?? 1} ammo each to refill); cannot fire when empty`);
+    if (u.maxAmmo) extra.push(`Ammo ${u.maxAmmo} rounds, ${u.ammoPerShot ?? 1} per shot (${Math.floor(u.maxAmmo / (u.ammoPerShot ?? 1))} shots); refill costs ${u.ammoCost ?? 1} ammo a round; cannot fire with fewer than ${u.ammoPerShot ?? 1} left`);
+    else if (u.damage > 0 && u.kind === 'ground') extra.push('No ammunition needed');
     if (u.maxFuel) extra.push(`Fuel tank ${u.maxFuel}${u.droneType === 'strike' ? ' (one way)' : ''}`);
     if (u.missile) extra.push(`${u.missile === 'ballistic' ? 'Ballistic' : 'Cruise'} missile: about ${Math.round((u.maxFuel ?? 0) / 0.08).toLocaleString('en-US')} km range, ${Math.round((u.interceptChance ?? 1) * 100)}% of anti-air shots hit it`);
     if (u.droneType) extra.push(u.droneType === 'strike' ? `Explodes on its target (${u.damage} damage, ${u.blastKm ?? 1.8} km blast)` : 'Circles its area, refuels at an airfield');
     if (u.launchable) extra.push("Small: rides on a pickup's launcher");
+    if (u.heals) extra.push(`Heals ${u.heals.targets === 'foot' ? 'troops on foot' : 'vehicles'} within ${u.heals.radiusKm} km: ${Math.round(u.heals.perSecond * 100)}% a second, once out of the fight for 10 s`);
     if (u.droneCap) extra.push(`Launcher for ${u.droneCap} small drones`);
     if (u.side) extra.push(`${u.side === 'ua' ? 'Ukraine' : 'Russia'} only`);
     return [
@@ -308,6 +373,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       case 'error':
         toast(msg.reason, true);
         break;
+      case 'mark':
+        showMark(msg);
+        break;
       case 'powerLines':
         if (mapReady && msg.building === selBuilding) {
           (map.getSource('power-lines') as GeoJSONSource | undefined)?.setData({ type: 'FeatureCollection', features: msg.lines.map((l) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: l } })) } as any);
@@ -316,12 +384,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       case 'end': {
         finished = true;
         const mine = init?.team === msg.winner;
+        // the full statistics of the match (also saved to the profile database)
         app.append(
           h('div', { class: 'overlay' },
-            h('div', { class: 'card' },
-              h('h2', {}, msg.winner === null ? 'DRAW' : mine ? 'VICTORY' : 'DEFEAT'),
-              h('p', { class: 'muted' }, msg.reason),
-              h('button', { class: 'primary', onClick: leave }, 'Back to lobby'),
+            h('div', { class: 'card stats-card' },
+              msg.report ? statsView(msg.report, me) : h('div', {}, h('h2', {}, msg.winner === null ? 'DRAW' : mine ? 'VICTORY' : 'DEFEAT'), h('p', { class: 'muted' }, msg.reason)),
+              h('div', { class: 'row' }, h('button', { class: 'primary', onClick: leave }, 'Back to lobby')),
             ),
           ),
         );
@@ -359,26 +427,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.touchZoomRotate.disableRotation();
 
     // NATO markers are drawn the first time the style asks for them
+    // images being made right now: the style keeps asking for a missing image every frame, so never start one twice
+    const pendingImages = new Set<string>();
     map.on('styleimagemissing', (e) => {
-      if (map.hasImage(e.id)) return;
-      const spec = parseNatoId(e.id);
-      if (spec) return void map.addImage(e.id, drawNato(spec), { pixelRatio: 2 });
+      if (map.hasImage(e.id) || pendingImages.has(e.id)) return;
+      const marker = drawNatoImage(e.id);
+      if (marker) return void map.addImage(e.id, marker, { pixelRatio: 2 });
       // aircraft sprites tinted by relation, and strike smoke
       if (e.id.startsWith('drone|')) {
         const [, def, rel, sel] = e.id.split('|');
+        pendingImages.add(e.id);
         void aircraftSprite(def, relColor((['own', 'ally', 'enemy'].includes(rel) ? rel : 'enemy') as Relation), sel === '1').then((c) => {
-          if (!map.hasImage(e.id)) map.addImage(e.id, c.getContext('2d')!.getImageData(0, 0, c.width, c.height), { pixelRatio: 2 });
+          if (!map.hasImage(e.id)) map.addImage(e.id, c.getContext('2d')!.getImageData(0, 0, c.width, c.height), { pixelRatio: 1 });
+          pendingImages.delete(e.id);
         });
         return;
       }
       if (e.id !== 'smoke') return;
+      pendingImages.add(e.id);
       const img = new Image();
-      img.onload = () => !map.hasImage(e.id) && map.addImage(e.id, img, { pixelRatio: 2 });
+      img.onload = () => (!map.hasImage(e.id) && map.addImage(e.id, img, { pixelRatio: 2 }), pendingImages.delete(e.id));
       img.src = '/drones/smoke.png';
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'drone-units']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -451,17 +524,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'sel-pts', type: 'circle', source: 'sel', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 3.5, 'circle-color': '#0b0d10', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 } });
 
       const iconSize: any = ['interpolate', ['linear'], ['zoom'], 5, 0.4, 8, 0.58, 11, 0.85];
-      const symbol = (id: string, filter: any, extra: Record<string, unknown> = {}) =>
-        map.addLayer({
-          id, type: 'symbol', source: id === 'formations' ? 'formations' : 'units', filter, ...extra,
-          layout: { 'icon-image': ['get', 'icon'], 'icon-size': id === 'formations' ? ['interpolate', ['linear'], ['zoom'], 5, 0.62, 8, 0.8] : iconSize, 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
-        } as any);
+      // a marker = base image + overlays (rank, pips, echelon, cauldron ring) drawn on the same spot by extra layers
+      const symbol = (id: string, filter: any, extra: Record<string, unknown> = {}) => {
+        const size = id === 'formations' ? ['interpolate', ['linear'], ['zoom'], 5, 0.62, 8, 0.8] : iconSize;
+        const layer = (lid: string, prop: string, f: any) =>
+          map.addLayer({
+            id: lid, type: 'symbol', source: id === 'formations' ? 'formations' : 'units', filter: f, ...extra,
+            layout: { 'icon-image': ['get', prop], 'icon-size': size, 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
+          } as any);
+        layer(id, 'icon', filter);
+        for (const ov of ['ovRing', 'ovPips', 'ovRank', 'ovEch']) layer(`${id}-${ov}`, ov, ['all', filter, ['!=', ['coalesce', ['get', ov], ''], '']]);
+      };
       symbol('units-loose', ['all', ['!', ['get', 'grp']], ['!', ['get', 'air']]], { minzoom: GROUP_ZOOM });
       symbol('units-grouped', ['all', ['get', 'grp'], ['!', ['get', 'air']]], { minzoom: GROUP_ZOOM });
       symbol('formations', ['all'], { maxzoom: GROUP_ZOOM });
       // drones fly as sprites, turned to their heading; strike drones shrink as they dive
       map.addLayer({
-        id: 'drones', type: 'symbol', source: 'units', filter: ['get', 'air'],
+        id: 'drones', type: 'symbol', source: 'drone-units',
         layout: {
           'icon-image': ['get', 'icon'], 'icon-rotate': ['get', 'bearing'], 'icon-rotation-alignment': 'map',
           'icon-size': ['interpolate', ['linear'], ['zoom'], 4, ['*', ['get', 'scale'], 0.18], 8, ['*', ['get', 'scale'], 0.28], 11, ['*', ['get', 'scale'], 0.4]],
@@ -489,6 +568,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
     const setScale = () => mapEl.style.setProperty('--s', String(Math.min(1.4, Math.max(0.42, (map.getZoom() - 3.6) / 4.6))));
     map.on('zoom', setScale);
+    map.on('zoomend', () => renderUnits()); // ground markers come back when zooming in
     map.on('zoom', () => mapEl.classList.toggle('far', map.getZoom() < 6.6));
     mapEl.classList.toggle('far', m.zoom < 6.6);
     setScale();
@@ -504,6 +584,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('click', (e) => {
       const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
       if (performance.now() - suppressClick < 250) return; // the click that ends a box selection
+      if (marking) return sendMark(marking, p);
+      if (e.originalEvent.altKey && !placing) return sendMark('look', p); // quick ping
       if (pick.bombard) {
         send({ type: 'bombard', units: pick.bombard.unitIds, target: p });
         toast('Barrage area set');
@@ -537,17 +619,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (!e.originalEvent.shiftKey) cancelPlacing();
         return;
       }
-      const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
-      const hit = map.queryRenderedFeatures([[e.point.x - 6, e.point.y - 6], [e.point.x + 6, e.point.y + 6]], { layers }).find((f) => f.properties?.own);
-      selBuilding = null;
-      if (hit?.properties?.gid) selUnits = new Set(groups.get(Number(hit.properties.gid))?.ids ?? []);
-      else if (hit?.properties?.ids) selUnits = new Set(JSON.parse(hit.properties.ids) as number[]);
-      else if (hit) {
-        const id = Number(hit.properties!.id);
-        if (e.originalEvent.shiftKey) selUnits.has(id) ? selUnits.delete(id) : selUnits.add(id);
-        else selUnits = new Set([id]);
-      } else if (!e.originalEvent.shiftKey) selUnits = new Set();
-      render();
+      selectAt(e.point, e.originalEvent.shiftKey);
     });
     map.on('contextmenu', (e) => {
       if (pick.bombard) {
@@ -574,6 +646,30 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     window.addEventListener('mouseup', onBoxUp);
   }
 
+  /** The guidebook, with this match's units and buildings. */
+  function showGuide() {
+    if (document.querySelector('.overlay.guide') || !init) return;
+    openGuide({ ruleset: init.ruleset, side: init.team === 0 ? 'ua' : 'ru' });
+  }
+
+  /** Click selection: a plain click selects what is under the pointer; Shift adds it to (or takes it out of) the selection. */
+  function selectAt(point: { x: number; y: number }, shift: boolean) {
+    const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
+    const hit = map.queryRenderedFeatures([[point.x - 6, point.y - 6], [point.x + 6, point.y + 6]], { layers }).find((f) => f.properties?.own);
+    selBuilding = null;
+    const many = hit?.properties?.gid ? [...(groups.get(Number(hit.properties.gid))?.ids ?? [])] : hit?.properties?.ids ? (JSON.parse(hit.properties.ids) as number[]) : null;
+    if (many) {
+      if (!shift) selUnits = new Set(many);
+      else if (many.every((id) => selUnits.has(id))) many.forEach((id) => selUnits.delete(id));
+      else many.forEach((id) => selUnits.add(id));
+    } else if (hit) {
+      const id = Number(hit.properties!.id);
+      if (shift) selUnits.has(id) ? selUnits.delete(id) : selUnits.add(id);
+      else selUnits = new Set([id]);
+    } else if (!shift) selUnits = new Set();
+    render();
+  }
+
   let boxStart: { x: number; y: number } | null = null;
   function onBoxMove(e: MouseEvent) {
     if (!boxStart) return;
@@ -587,7 +683,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     boxStart = null;
     const dragged = boxEl.style.display === 'block';
     boxEl.style.display = 'none';
-    if (!dragged || !snap) return; // a plain shift+click is handled by the map click
+    if (!snap) return;
+    if (!dragged) {
+      // the box selection took the mouse-down, so the map never sees this shift+click: select here instead
+      const r = mapEl.getBoundingClientRect();
+      suppressClick = performance.now();
+      return selectAt({ x: e.clientX - r.left, y: e.clientY - r.top }, true);
+    }
     const r = mapEl.getBoundingClientRect();
     const x0 = Math.min(start.x, e.clientX) - r.left, x1 = Math.max(start.x, e.clientX) - r.left;
     const y0 = Math.min(start.y, e.clientY) - r.top, y1 = Math.max(start.y, e.clientY) - r.top;
@@ -603,6 +705,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function onKey(e: KeyboardEvent) {
     if ((e.target as HTMLElement)?.tagName === 'INPUT') return;
+    if (markMenu.style.display !== 'none' && /^[1-4]$/.test(e.key)) return chooseMark((Object.keys(MARKS) as MarkKind[])[Number(e.key) - 1]);
+    if (e.key === 'Escape' && (marking || markMenu.style.display !== 'none')) {
+      toggleMarkMenu(false);
+      hint.textContent = HINT;
+      return void mapEl.classList.remove('picking');
+    }
+    if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) return toggleMarkMenu();
+    if (e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey) return showGuide();
     if (e.key === 'Escape') {
       if (pick.route || pick.bombard || pick.launch || pick.fuel) return void ((pick.route = pick.bombard = pick.launch = pick.fuel = null), render());
       return cancelPlacing();
@@ -784,9 +894,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     basemapBtn.classList.toggle('on', off);
     drawFog();
   }
+  /** The fog is repainted at most once per frame, however many things ask for it. */
+  let fogQueued = false;
   function drawFog() {
-    if (!fog || !mapReady) return;
-    fog.render(snap, init, defU, defB, map.getLayoutProperty('osm', 'visibility') === 'none', (id, fallback) => unitPos.get(id) ?? fallback);
+    if (!fog || !mapReady || fogQueued) return;
+    fogQueued = true;
+    requestAnimationFrame(() => {
+      fogQueued = false;
+      if (closed || !fog) return;
+      fog.render(snap, init, defU, defB, map.getLayoutProperty('osm', 'visibility') === 'none', (id, fallback) => unitPos.get(id) ?? fallback);
+    });
   }
 
   function toggleTerrain() {
@@ -950,7 +1067,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const ico = h('span', { class: 'rico' });
       ico.innerHTML = iconHtml(r.icon, r.color);
       resBar.append(
-        h('div', { class: 'chip', title: r.name },
+        h('div', { class: 'chip', title: ['money', 'people', 'energy'].includes(r.id) ? r.name : `${r.name}: what lies in your HQ and warehouses (building and upgrades are paid from here). The rate is what your sites make; it reaches the HQ by truck.` },
           ico,
           h('b', {}, Math.floor(v)),
           h('small', { class: d < -0.01 ? 'neg' : d > 0.01 ? 'pos' : '' }, `${d >= 0 ? '+' : ''}${d.toFixed(1)}/s`),
@@ -1281,7 +1398,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const symbol = kinds.size === 1 ? [...kinds][0] : kinds.has('armor') && kinds.has('infantry') ? 'mechanized' : [...kinds].sort((a, b) => us.filter((u) => defU.get(u.def)?.symbol === b).length - us.filter((u) => defU.get(u.def)?.symbol === a).length)[0];
       const sel = us.every((u) => selUnits.has(u.id)) && selUnits.size === us.length;
       const rank = Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length);
-      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, icon: natoId({ hostile: false, color: relColor('own'), symbol, mobility: sharedMobility(us), echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
+      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, ...natoLayers({ hostile: false, color: relColor('own'), symbol, mobility: sharedMobility(us), echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
     }
     // zoomed out, everything else is merged into formation markers per ~30 km cell (mine / allied / hostile kept apart)
     const cells = new Map<string, UnitView[]>();
@@ -1299,7 +1416,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const sel = own && us.every((u) => selUnits.has(u.id));
       formations.push({
         type: 'Feature',
-        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, icon: natoId({ hostile: us[0].team !== myTeam, color: relColor(relOf(us[0])), symbol, mobility: sharedMobility(us), echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
+        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, ...natoLayers({ hostile: us[0].team !== myTeam, color: relColor(relOf(us[0])), symbol, mobility: sharedMobility(us), echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
         geometry: { type: 'Point', coordinates: centroid(us) },
       });
     }
@@ -1468,6 +1585,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const air = d?.kind === 'air';
         const pos = posOf(u);
         let icon: string;
+        let layers: Record<string, string> = {};
         let bearing = 0;
         let scale = 1;
         if (air) {
@@ -1476,12 +1594,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           // a strike drone shrinks as it dives on the last 18 km
           if (isStrikeDrone(d) && u.target) scale = Math.min(1, 0.45 + 0.55 * (distKm(pos, u.target) / 18));
         } else {
-          icon = natoId({ hostile: u.team !== myTeam, color: relColor(relOf(u)), symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
+          const l = natoLayers({ hostile: u.team !== myTeam, color: relColor(relOf(u)), symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
+          ({ icon, ...layers } = l);
         }
-        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), air, icon, bearing, scale, z: sel ? 4 : air ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: pos } };
+        return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), air, icon, ...layers, bearing, scale, z: sel ? 4 : air ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: pos } };
     });
-    (map.getSource('units') as GeoJSONSource).setData({ type: 'FeatureCollection', features: lastUnitFeatures } as any);
+    // zoomed out, ground units are shown as formations only: skip feeding (and re-tiling) hundreds of hidden markers
+    const ground = map.getZoom() >= GROUP_ZOOM - 0.3 ? lastUnitFeatures.filter((f) => !f.properties.air) : [];
+    if (ground.length || groundShown) (map.getSource('units') as GeoJSONSource).setData({ type: 'FeatureCollection', features: ground } as any);
+    groundShown = ground.length > 0;
+    (map.getSource('drone-units') as GeoJSONSource).setData({ type: 'FeatureCollection', features: lastUnitFeatures.filter((f) => f.properties.air) } as any);
   }
+  let groundShown = false;
   let lastUnitFeatures: any[] = [];
 
   /** Route lines for the selection: the planned path (along the roads), plus each queued stop. */
@@ -1538,7 +1662,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
     }
     for (const id of unitPos.keys()) if (!alive.has(id)) unitPos.delete(id), droneBearing.delete(id);
-    if (unitsMoved) {
+    // re-sending every unit to the map is not free: about 20 updates a second look just as smooth
+    const now = performance.now();
+    if (unitsMoved && now - lastUnitDraw > 50) {
+      lastUnitDraw = now;
       renderUnits();
       if (selUnits.size) renderSelLines();
       drawFog();
@@ -1559,6 +1686,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
   }
   let frontDrawn = false;
+  let lastUnitDraw = 0;
   let lastGrey = '-';
   /** Contested liberated ground: runs [iy, team, ix, n, …] from the server, and a lookup of its cells. */
   let libRuns: number[] = [];

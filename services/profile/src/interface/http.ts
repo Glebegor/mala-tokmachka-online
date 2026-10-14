@@ -13,6 +13,7 @@ export function profileRoutes(profiles: ProfileService, secret: string) {
       return ok(await profiles.get(me.id, me.name));
     })
     .get('/leaderboard', async (r) => (who(r.headers), ok(await profiles.leaderboard())))
+    .get('/matches/:id', async (r) => (who(r.headers), ok(await profiles.match(r.params.id))))
     .get('/players/:id', async (r) => (who(r.headers), ok(await profiles.get(r.params.id))))
     .post('/matches', async (r) => {
       // only the game service may report results

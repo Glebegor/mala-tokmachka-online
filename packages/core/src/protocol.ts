@@ -1,9 +1,13 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { BuildingView, FrontNode, Player, Shot, Team, UnitView, CapturePoint } from './state';
+import type { BuildingView, FrontNode, Player, PlayerStats, Shot, Team, TimelinePoint, UnitView, CapturePoint } from './state';
 
 /** `ready`: the client has drawn the map; the start countdown waits for it. */
-export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' } | { t: 'ready' } | { t: 'powerLines'; building: number };
+/** Map marks a player shows their team: where they are going, what to hold, where there is trouble, what to look at. */
+export type MarkKind = 'go' | 'defend' | 'danger' | 'look';
+export const MARK_KINDS: readonly MarkKind[] = ['go', 'defend', 'danger', 'look'];
+
+export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' } | { t: 'ready' } | { t: 'powerLines'; building: number } | { t: 'mark'; pos: [number, number]; kind: MarkKind };
 
 export interface InitMsg {
   t: 'init';
@@ -52,12 +56,27 @@ export interface SnapMsg {
 export type ServerMsg =
   | InitMsg
   | SnapMsg
-  | { t: 'end'; winner: Team | null; reason: string }
+  | { t: 'end'; winner: Team | null; reason: string; report?: MatchReport }
   | { t: 'error'; reason: string }
   | { t: 'toast'; text: string }
   | { t: 'pong' }
+  /** A teammate (or you) marked a spot on the map. */
+  | { t: 'mark'; from: string; name: string; pos: [number, number]; kind: MarkKind }
   /** Power lines (along roads) from a power plant to the buildings it feeds, or to a consumer from its plant. */
   | { t: 'powerLines'; building: number; lines: [number, number][][] };
+
+/** Everything about a finished match: sent to the players at the end and kept in the profile database. */
+export interface MatchReport {
+  matchId: string;
+  mapId: string;
+  seconds: number;
+  winner: Team | null;
+  reason: string;
+  /** When it ended (ms since epoch); set by the profile service when stored. */
+  at?: number;
+  players: { id: string; name: string; team: Team; bot: boolean; stats: PlayerStats }[];
+  timeline: TimelinePoint[];
+}
 
 export interface RoomSlot {
   id: string;

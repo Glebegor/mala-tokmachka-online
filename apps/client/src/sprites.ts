@@ -3,7 +3,8 @@
  * Drones with artwork use their black silhouette from /drones/<def>.png; the rest (small launchable drones, missiles)
  * are drawn here. Every silhouette is then tinted by relation: own blue, allies green, enemy red.
  */
-const SIZE = 256;
+const SIZE = 256; // drawing size; the map gets them at half that (OUT) to keep the icon texture small
+const OUT = 128;
 
 /** Defs with a silhouette PNG; anything else is drawn procedurally. */
 const ARTWORK = new Set(['drone_fire_point', 'drone_liutyi', 'drone_mini_shark', 'drone_orion', 'drone_pd2', 'drone_shahed']);
@@ -85,7 +86,7 @@ export async function aircraftSprite(def: string, color: string, selected: boole
   const name = ALIAS[def] ?? def;
   const base = document.createElement('canvas');
   base.width = base.height = SIZE;
-  const b = base.getContext('2d')!;
+  const b = base.getContext('2d', { willReadFrequently: true })!;
   const img = ARTWORK.has(name) ? await load(`/drones/${name}.png`) : null;
   if (img) b.drawImage(img, 0, 0, SIZE, SIZE);
   else drawSilhouette(b, name);
@@ -95,12 +96,12 @@ export async function aircraftSprite(def: string, color: string, selected: boole
   b.fillRect(0, 0, SIZE, SIZE);
 
   const out = document.createElement('canvas');
-  out.width = out.height = SIZE;
-  const g = out.getContext('2d')!;
+  out.width = out.height = OUT;
+  const g = out.getContext('2d', { willReadFrequently: true })!;
   // a dark rim keeps light colours readable on the map; the selection glow goes outside it
   g.shadowColor = selected ? '#ffe45c' : 'rgba(0,0,0,0.85)';
-  g.shadowBlur = selected ? 22 : 6;
-  g.drawImage(base, 0, 0);
-  if (selected) g.drawImage(base, 0, 0);
+  g.shadowBlur = selected ? 11 : 3;
+  g.drawImage(base, 0, 0, OUT, OUT);
+  if (selected) g.drawImage(base, 0, 0, OUT, OUT);
   return out;
 }

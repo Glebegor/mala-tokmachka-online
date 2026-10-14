@@ -35,6 +35,8 @@ export interface BuildingDef {
   storageCap?: number;
   /** Fortifications and other field works (built near the front, between the HQ and the line). */
   fieldWork?: boolean;
+  /** Field hospital and the like: heals friendly units of a kind within the radius (share of max HP per second). */
+  heals?: HealDef;
   /** Ammo point: friendly units within the radius refill up to `rounds` rounds a second from its ammo store. */
   supply?: { radiusKm: number; rounds: number };
   /** May also be built inside your side's grey zones (contested ground), even behind the enemy line. */
@@ -51,6 +53,13 @@ export interface BuildingDef {
   training?: { minUnits: number; capacity: number; baseTime: number; timePerRank: number };
   /** Must be built within this many km of barrier water (river bank). */
   needsWaterWithinKm?: number;
+}
+
+/** Healing: 'foot' = troops on foot (medics, hospitals), 'vehicle' = wheeled and tracked machines (mechanics). */
+export interface HealDef {
+  radiusKm: number;
+  perSecond: number;
+  targets: 'foot' | 'vehicle';
 }
 
 export interface UnitDef {
@@ -96,10 +105,14 @@ export interface UnitDef {
   minRange?: number;
   /** How easily it is spotted (<1 stealthy, >1 loud). Default 1 on foot, 1.35 for vehicles. */
   stealth?: number;
-  /** Rounds carried; a unit with none left cannot fire (missing = needs no ammunition). */
+  /** Rounds carried when full; 0 (or missing) = carries no weapon ammunition. */
   maxAmmo?: number;
+  /** Rounds one shot (a burst, a shell, a missile) uses; a unit with fewer left cannot fire. Default 1. */
+  ammoPerShot?: number;
   /** Ammo (resource) one round costs when refilled at a depot. Default 1. */
   ammoCost?: number;
+  /** Medic or mechanic: heals friendly units of a kind within the radius (share of max HP per second). */
+  heals?: HealDef;
   /** Can repair cities and buildings. */
   repairs?: boolean;
   cost: ResourceAmounts;

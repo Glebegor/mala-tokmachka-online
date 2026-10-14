@@ -1,4 +1,4 @@
-import type { RoomInfo, RoomSettings } from '@sw/core';
+import type { RoomInfo, RoomSettings, MatchReport } from '@sw/core';
 
 export interface Session {
   token: string;
@@ -58,6 +58,7 @@ export const api = {
   register: (name: string, password: string) => call<Session>('/api/auth/register', { name, password }),
   maps: () => call<{ id: string; name: string }[]>('/api/lobby/maps'),
   profile: () => call<ProfileData>('/api/profile/me'),
+  match: (id: string) => call<MatchReport>(`/api/profile/matches/${encodeURIComponent(id)}`),
   leaderboard: () => call<{ id: string; name: string; matches: number; wins: number; kills: number }[]>('/api/profile/leaderboard'),
   rooms: () => call<RoomInfo[]>('/api/lobby/rooms'),
   createRoom: (name: string, team: 0 | 1) => call<RoomInfo>('/api/lobby/rooms', { name, team }),

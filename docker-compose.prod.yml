@@ -1,0 +1,23 @@
+# Production overrides: `npm run docker-prod:run` (see tools/prod-run.mjs).
+# Secrets come from .env.prod (generated on first run); the client listens on every interface so the game is reachable
+# on the LAN and over Tailscale (http://<tailscale-ip>:${SW_PORT}).
+x-prod: &prod
+  restart: unless-stopped
+  environment:
+    NODE_ENV: production
+    SW_SECRET: ${SW_SECRET:?run npm run docker-prod:run}
+    SW_INTERNAL_KEY: ${SW_INTERNAL_KEY:?run npm run docker-prod:run}
+    AUTH_URL: http://auth:4001
+    LOBBY_URL: http://lobby:4002
+    GAME_URL: http://game:4003
+    PROFILE_URL: http://profile:4004
+
+services:
+  auth: *prod
+  lobby: *prod
+  game: *prod
+  profile: *prod
+  gateway: *prod
+  client:
+    restart: unless-stopped
+    ports: !override ["0.0.0.0:${SW_PORT:-5173}:80"]

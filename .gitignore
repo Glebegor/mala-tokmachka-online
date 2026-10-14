@@ -8,3 +8,4 @@ data/*.json
 .env
 *.log
 .DS_Store
+.env.prod

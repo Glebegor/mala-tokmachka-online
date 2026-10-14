@@ -1,4 +1,5 @@
-import type { PlayerStats, Team } from '@sw/core';
+import type { MatchReport } from '@sw/core';
+export type { MatchReport };
 
 export interface MatchSummary {
   matchId: string;
@@ -28,19 +29,13 @@ export interface Profile {
   recent: MatchSummary[];
 }
 
-/** What the game service reports when a match ends. */
-export interface MatchReport {
-  matchId: string;
-  mapId: string;
-  seconds: number;
-  winner: Team | null;
-  players: { id: string; name: string; team: Team; stats: PlayerStats }[];
-}
-
 export interface ProfileRepository {
   get(id: string): Promise<Profile | undefined>;
   all(): Promise<Profile[]>;
   save(profile: Profile): Promise<void>;
+  /** The full record of a finished match (every player, the timeline). */
+  saveMatch(report: MatchReport): Promise<void>;
+  getMatch(id: string): Promise<MatchReport | undefined>;
 }
 
 export const emptyProfile = (id: string, name: string): Profile => ({

@@ -31,7 +31,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     t: 'snap',
     time: Math.round(w.time * 10) / 10,
     countdown,
-    res: me ? { ...me.res } : {},
+    // treasury plus the goods in the player's HQ and warehouses (what they can spend)
+    res: me ? { ...me.res, ...sim.goods(me) } : {},
     energyNet: sim.energyNet.get(playerId) ?? 0,
     rates: { ...(sim.income.get(playerId) ?? {}) },
     buildings: w.buildings

@@ -1,4 +1,4 @@
-import { snapshotFor, type BotDifficulty, type PlayerStats, Sim, type ClientMsg, type InitMsg, type Ruleset, type ServerMsg, type SlotInit, type Team } from '@sw/core';
+import { MARK_KINDS, snapshotFor, type MatchReport, type BotDifficulty, type PlayerStats, Sim, type ClientMsg, type InitMsg, type Ruleset, type ServerMsg, type SlotInit, type Team } from '@sw/core';
 import { ScriptHost } from '../infrastructure/scriptHost';
 import { Bot } from './bot';
 
@@ -9,7 +9,7 @@ export interface Connection {
 
 /** Port: where finished matches are reported (the profile service). */
 export interface MatchReporter {
-  report(result: { matchId: string; mapId: string; seconds: number; winner: Team | null; players: { id: string; name: string; team: Team; stats: PlayerStats }[] }): Promise<void>;
+  report(result: MatchReport): Promise<void>;
 }
 
 const COUNTDOWN_MS = 3000;
@@ -51,7 +51,9 @@ export class Match {
         giveResource: (pid, res, n) => {
           const p = sim.player(pid);
           const def = ruleset.resources.find((r) => r.id === res);
-          if (p && def) p.res[res] = Math.min(def.cap, Math.max(0, (p.res[res] ?? 0) + n));
+          if (!p || !def) return;
+          if (sim.isGood(res)) sim.credit(p, { [res]: n }); // goods go into the HQ
+          else p.res[res] = Math.min(def.cap, Math.max(0, (p.res[res] ?? 0) + n));
         },
         teamPlayers: (team) => sim.world.players.filter((p) => p.team === team).map((p) => p.id),
         toast: (text) => this.broadcast({ t: 'toast', text }),
@@ -134,6 +136,7 @@ export class Match {
 
     if (msg.t === 'ping') return this.conns.get(playerId)?.send({ t: 'pong' });
     if (msg.t === 'ready') return void this.ready.add(playerId);
+    if (msg.t === 'mark') return this.mark(playerId, msg);
     if (msg.t === 'powerLines') {
       const team = this.sim.player(playerId)?.team;
       if (team === undefined || typeof msg.building !== 'number') return;
@@ -145,6 +148,21 @@ export class Match {
       const res = this.sim.apply(playerId, msg.cmd);
       if (!res.ok) this.conns.get(playerId)?.send({ t: 'error', reason: res.reason });
     }
+  }
+
+  /** Map marks go to everyone on the sender's side (at most one every 0.6 s per player). */
+  private lastMark = new Map<string, number>();
+  private mark(playerId: string, msg: Extract<ClientMsg, { t: 'mark' }>) {
+    const p = this.sim.player(playerId);
+    const [lng, lat] = Array.isArray(msg.pos) ? msg.pos : [NaN, NaN];
+    if (!p || !MARK_KINDS.includes(msg.kind) || !Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    const b = this.sim.map.bounds;
+    if (lng < b[0] - 2 || lng > b[2] + 2 || lat < b[1] - 2 || lat > b[3] + 2) return;
+    const now = Date.now();
+    if (now - (this.lastMark.get(playerId) ?? 0) < 600) return;
+    this.lastMark.set(playerId, now);
+    const out: ServerMsg = { t: 'mark', from: playerId, name: p.name, pos: [Math.round(lng * 1e4) / 1e4, Math.round(lat * 1e4) / 1e4], kind: msg.kind };
+    for (const [pid, c] of this.conns) if (this.sim.player(pid)?.team === p.team) c.send(out);
   }
 
   private broadcast(msg: ServerMsg) {
@@ -185,19 +203,23 @@ export class Match {
         if (p) conn.send(this.snap(pid, p.team, shots));
       }
     }
-    if (sim.world.winner !== null || (sim.ruleset.rules.matchSeconds > 0 && sim.world.time >= sim.ruleset.rules.matchSeconds)) {
+    // the simulation decides when it is over (a win, or the time limit after the ceasefire, which may be a draw)
+    if (sim.world.winReason !== null) {
       if (!this.ended) {
         this.ended = true;
-        this.broadcast({ t: 'end', winner: sim.world.winner, reason: sim.world.winReason ?? 'match over' });
-        this.reporter
-          ?.report({
-            matchId: this.id,
-            mapId: sim.world.mapId,
-            seconds: sim.world.time,
-            winner: sim.world.winner,
-            players: this.slots.filter((s) => !s.bot).map((s) => ({ id: s.id, name: s.name, team: s.team, stats: sim.world.stats[s.id] })),
-          })
-          .catch((e) => console.warn(`[game] could not report match ${this.id}: ${e}`));
+        sim.sampleTimeline();
+        const blank = { kills: 0, losses: 0, buildingsBuilt: 0, buildingsDestroyed: 0, unitsTrained: 0, damage: 0 };
+        const report: MatchReport = {
+          matchId: this.id,
+          mapId: sim.world.mapId,
+          seconds: Math.round(sim.world.time),
+          winner: sim.world.winner,
+          reason: sim.world.winReason ?? 'match over',
+          players: this.slots.map((s) => ({ id: s.id, name: s.name, team: s.team, bot: s.bot, stats: { ...blank, ...sim.world.stats[s.id], damage: Math.round(sim.world.stats[s.id]?.damage ?? 0) } })),
+          timeline: sim.world.timeline,
+        };
+        this.broadcast({ t: 'end', winner: report.winner, reason: report.reason, report });
+        this.reporter?.report(report).catch((e) => console.warn(`[game] could not report match ${this.id}: ${e}`));
         setTimeout(() => this.close(), 60_000);
       }
     }
