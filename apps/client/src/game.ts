@@ -267,16 +267,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }),
       });
       map.addLayer({
-        id: 'roads', type: 'line', source: 'roads',
+        id: 'roads-minor', type: 'line', source: 'roads',
+        filter: ['!=', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': ['case', ['==', ['get', 'major'], 1], '#fbbf24', '#f59e0b'],
-          'line-opacity': ['case', ['==', ['get', 'major'], 1], 0.85, ['interpolate', ['linear'], ['zoom'], 5, 0.18, 8, 0.45]],
-          'line-width': ['interpolate', ['linear'], ['zoom'],
-            5, ['case', ['==', ['get', 'major'], 1], 0.85, 0.4],
-            8, ['case', ['==', ['get', 'major'], 1], 1.25, 0.65],
-            11, ['case', ['==', ['get', 'major'], 1], 1.9, 1.0]
-          ],
+          'line-color': '#f59e0b',
+          'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.35, 7.5, 0.65],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.75, 8, 1.25, 11, 1.8],
+        },
+      });
+      map.addLayer({
+        id: 'roads-major', type: 'line', source: 'roads',
+        filter: ['==', ['get', 'major'], 1],
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#fbbf24',
+          'line-opacity': 0.9,
+          'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 1.35, 8, 2.1, 11, 3.0],
         },
       });
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#ff3b3b', 'fill-opacity': 0.13 } });
