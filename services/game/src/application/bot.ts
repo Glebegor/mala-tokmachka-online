@@ -39,6 +39,21 @@ export class Bot {
       const d = sim.defs.b.get(def);
       if (!d) continue;
       if (!Object.entries(d.cost).every(([r, v]) => (p.res[r] ?? 0) >= v)) continue;
+      if (def === 'housing') {
+        const friendlyCities = sim.map.capturePoints.filter((cp) => sideOf(w.front, cp.pos) === p.team);
+        if (!friendlyCities.length) continue;
+        for (let attempt = 0; attempt < 5; attempt++) {
+          const targetCity = friendlyCities[Math.floor(Math.random() * friendlyCities.length)];
+          const rCity = 0.4 + Math.random() * 2.0;
+          const ang = Math.random() * Math.PI * 2;
+          const pos = offsetKm(targetCity.pos, Math.cos(ang) * rCity, Math.sin(ang) * rCity);
+          if (sim.apply(p.id, { type: 'build', def, pos }).ok) {
+            this.step = (this.step + k + 1) % BUILD_ORDER.length;
+            return;
+          }
+        }
+        continue;
+      }
       for (let attempt = 0; attempt < 10; attempt++) {
         const ang = Math.random() * Math.PI * 2;
         const r = 2 + Math.random() * 12;
