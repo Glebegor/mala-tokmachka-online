@@ -138,10 +138,15 @@ export type UnitView = Omit<Unit, 'path' | 'cap' | 'enter' | 'infil'> & {
 };
 
 export interface TrainItem {
+  id: number;
   building: number;
   unit: string;
   owner: string;
   remaining: number;
+  total: number;
+  /** What was paid, refunded if the order is cancelled: treasury share and goods taken from the building's store. */
+  paid: ResourceAmounts;
+  site: ResourceAmounts;
 }
 
 export interface FrontNode {

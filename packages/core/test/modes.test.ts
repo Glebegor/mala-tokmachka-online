@@ -199,3 +199,29 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.equal(sim.apply('a', { type: 'launch', transport: pickup.id }).ok, false, 'nothing left to launch');
   console.log('pickup drones ok');
 }
+
+// --- training queue: orders carry their total time; cancelling refunds the treasury and the building's store ---
+{
+  const sim = fresh();
+  const hq = hqOf(sim, 'a');
+  const a = sim.player('a')!;
+  const money0 = a.res.money, metal0 = hq.storage!.metal;
+  assert.ok(sim.apply('a', { type: 'train', building: hq.id, unit: 'tank' }).ok);
+  assert.ok(sim.apply('a', { type: 'train', building: hq.id, unit: 'tank' }).ok);
+  assert.ok(sim.apply('a2', { type: 'train', building: hq.id, unit: 'infantry' }).ok);
+  const tank = base.units.find((u) => u.id === 'tank')!;
+  assert.equal(a.res.money, money0 - 2 * tank.cost.money);
+  assert.equal(hq.storage!.metal, metal0 - 2 * tank.cost.metal);
+  const [first, second, theirs] = sim.world.queue;
+  assert.equal(first.total, tank.trainTime);
+  run(sim, 5);
+  assert.ok(first.remaining < first.total && second.remaining === second.total, 'only the head trains');
+  assert.equal(sim.apply('a', { type: 'cancelTrain', item: theirs.id }).ok, false, "a teammate's order is theirs to cancel");
+  const before = a.res.money;
+  assert.ok(sim.apply('a', { type: 'cancelTrain', item: second.id }).ok);
+  assert.ok(sim.apply('a', { type: 'cancelTrain', item: first.id }).ok, 'an order in progress can be cancelled too');
+  assert.equal(a.res.money, before + 2 * tank.cost.money, 'money refunded');
+  assert.equal(hq.storage!.metal, metal0, 'metal back in the store');
+  assert.deepEqual(sim.world.queue.map((q) => q.id), [theirs.id]);
+  console.log('training queue ok');
+}

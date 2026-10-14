@@ -12,6 +12,7 @@ import { FogOverlay } from './fog';
 import { renderUnitHud, type Pickers } from './unitHud';
 import { drawNato, echelonFor, natoId, parseNatoId, REL_COLOR, type Relation } from './nato';
 import { aircraftSprite } from './sprites';
+import { ProductionDock, QueueList, type QueueContext } from './queue';
 
 /**
  * Basemap: OpenStreetMap rendered almost monochrome and dark, with real relief shading on top, so that the game layers
@@ -118,8 +119,40 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map?.remove();
     onExit(finished);
   };
+  // ---------- training queue: per-building list in the side panel, and a production strip over the map ----------
+  const cancelled = new Set<number>();
+  const queueCtx: QueueContext = {
+    me,
+    get defU() { return defU; },
+    playerName: (id) => init?.players.find((p) => p.id === id)?.name ?? 'a teammate',
+    icon: (d) => unitIcon(d, 0),
+    cancel: (item) => (cancelled.add(item), send({ type: 'cancelTrain', item })),
+  };
+  const dock = new ProductionDock(queueCtx, (id) => {
+    const b = snap?.buildings.find((x) => x.id === id);
+    if (!b) return;
+    selBuilding = id;
+    selUnits.clear();
+    if (mapReady) map.easeTo({ center: b.pos, zoom: Math.max(map.getZoom(), 7.5) });
+    render();
+  });
+  let sideQueue: { list: QueueList; building: number } | null = null;
+  /** Orders seen in the last snapshot, to announce units as they are ready. */
+  let lastQueue = new Map<number, SnapMsg['queue'][number]>();
+  function updateQueues(s: SnapMsg) {
+    dock.update(s.queue);
+    if (sideQueue?.list.el.isConnected) sideQueue.list.update(s.queue.filter((q) => q.building === sideQueue!.building));
+    const now = new Set(s.queue.map((q) => q.id));
+    for (const [id, q] of lastQueue) {
+      if (now.has(id) || cancelled.has(id) || q.owner !== me || q.remaining > 3) continue;
+      const b = s.buildings.find((x) => x.id === q.building);
+      if (b) toast(`${defU.get(q.unit)?.name ?? q.unit} ready at ${defB.get(b.def)?.name ?? 'base'}`);
+    }
+    lastQueue = new Map(s.queue.map((q) => [q.id, q]));
+  }
+
   app.append(
-    h('div', { class: 'game' }, mapEl,
+    h('div', { class: 'game' }, mapEl, dock.el,
       h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner),
   );
@@ -995,20 +1028,27 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (b.progress < 1) side.append(h('div', { class: 'stat' }, `Under construction ${Math.round(b.progress * 100)}%`));
         if (b.progress >= 1 && !locked) {
           const mySide = init.team === 0 ? 'ua' : 'ru';
+          const queued = snap.queue.filter((x) => x.building === b.id);
+          if (d.trains?.length) {
+            const list = new QueueList(queueCtx, 5);
+            list.update(queued);
+            sideQueue = { list, building: b.id };
+            side.append(list.el);
+          }
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
             if (u.side && u.side !== mySide) continue;
             // money and people from the treasury, materials from this building's own store
             const have: Record<string, number> = { ...(b.storage ?? {}), money: snap.res.money ?? 0, people: snap.res.people ?? 0 };
             const short = Object.entries(u.cost).find(([k, v]) => (have[k] ?? 0) < v);
+            const n = queued.filter((x) => x.unit === uid).length;
             const btn = h('button', { class: 'bld' + (short ? ' short' : ''), onClick: () => send({ type: 'train', building: b.id, unit: uid }) },
-              unitIcon(u, 0), h('span', { class: 'meta' }, h('b', {}, `Train ${u.name} · ${u.trainTime}s`), costHtml(u.cost, have),
+              unitIcon(u, 0), n ? h('span', { class: 'qcount', title: `${n} in the queue` }, `×${n}`) : null,
+              h('span', { class: 'meta' }, h('b', {}, `Train ${u.name} · ${Math.round(u.trainTime * init.ruleset.rules.trainTimeMult * 10) / 10}s`), costHtml(u.cost, have),
                 short && short[0] !== 'money' && short[0] !== 'people' ? h('small', { class: 'warn' }, `Not enough ${short[0]} on site: deliver it by truck`) : null));
             describe(btn, u.name, u.description, unitFacts(u), 'left');
             side.append(btn);
           }
-          const q = snap.queue.filter((x) => x.building === b.id);
-          if (q.length) side.append(h('div', { class: 'stat' }, 'Queue: ' + q.map((x) => `${defU.get(x.unit)?.name} (${x.remaining}s)`).join(', ')));
         }
         if (b.def === 'power_plant' || b.progress >= 1) ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'powerLines', building: b.id } satisfies ClientMsg));
         if (b.def !== 'hq' && b.owner === me) side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
@@ -1111,6 +1151,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     showCountdown(s.countdown);
     showStart();
     showPeace();
+    updateQueues(s);
     sharing = !s.closed.includes(me);
     shareBtn.textContent = sharing ? 'Buildings: shared' : 'Buildings: private';
     shareBtn.classList.toggle('on', !sharing);
@@ -1232,7 +1273,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       let m = bMarkers.get(b.id);
       if (!m) {
         const el = h('div', { class: `bm t${b.team}` });
-        el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div>`;
+        el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
         el.querySelector('.glyph')!.textContent = d.icon;
         el.addEventListener('click', (ev) => {
           if (placing || b.team !== myTeam) return;
@@ -1277,6 +1318,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       m.el.dataset.n = b.inside?.length ? String(b.inside.length) : '';
       m.el.dataset.lv = b.level > 1 ? 'I'.repeat(b.level) : '';
       m.el.classList.toggle('busy', !!b.course);
+      // training: a thin progress bar under the marker and the number of orders
+      const q = snap.queue.filter((x) => x.building === b.id);
+      m.el.classList.toggle('training', q.length > 0);
+      m.el.dataset.q = q.length > 1 ? String(q.length) : '';
+      if (q.length) m.el.style.setProperty('--q', String(Math.max(0, Math.min(1, 1 - q[0].remaining / Math.max(0.01, q[0].total)))));
       if (done && !m.done) {
         m.done = true;
         m.el.classList.add('complete');

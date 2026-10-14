@@ -37,7 +37,8 @@ export interface SnapMsg {
   pockets: { id: number; team: Team; nodes: { lng: number; lat: number }[] }[];
   points: CapturePoint[];
   scores: [number, number];
-  queue: { building: number; unit: string; remaining: number }[];
+  /** Training orders at your side's buildings, in order; the first one per building is in progress. */
+  queue: { id: number; building: number; unit: string; owner: string; remaining: number; total: number }[];
   /** Players who keep their buildings to themselves (teammates cannot use them). */
   closed: string[];
 }

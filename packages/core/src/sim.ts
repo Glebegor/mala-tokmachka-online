@@ -461,7 +461,22 @@ export class Sim {
         pay(p.res, treasury);
         pay(b.storage, site);
         for (const [k, v] of Object.entries(site)) p.res[k] = Math.max(0, (p.res[k] ?? 0) - v);
-        w.queue.push({ building: b.id, unit: ud.id, owner: p.id, remaining: ud.trainTime * r.trainTimeMult });
+        const time = ud.trainTime * r.trainTimeMult;
+        w.queue.push({ id: w.nextId++, building: b.id, unit: ud.id, owner: p.id, remaining: time, total: time, paid: treasury, site });
+        return ok();
+      }
+      case 'cancelTrain': {
+        const i = w.queue.findIndex((q) => q.id === cmd.item && q.owner === p.id);
+        if (i < 0) return fail('no such order');
+        const [q] = w.queue.splice(i, 1);
+        // money and people back to the treasury, goods back into the building's store
+        const caps = new Map(this.ruleset.resources.map((x) => [x.id, x.cap]));
+        for (const [k, v] of Object.entries({ ...q.paid, ...q.site })) p.res[k] = Math.min(caps.get(k) ?? 1e9, (p.res[k] ?? 0) + v);
+        const b = w.buildings.find((x) => x.id === q.building);
+        if (b) {
+          b.storage ??= {};
+          for (const [k, v] of Object.entries(q.site)) b.storage[k] = Math.min(this.storageCap(b), (b.storage[k] ?? 0) + v);
+        }
         return ok();
       }
       case 'move': {
