@@ -3,6 +3,8 @@ import type { LngLat } from './geo';
 export type Command =
   | { type: 'build'; def: string; pos: LngLat }
   | { type: 'train'; building: number; unit: string }
+  /** Cancel one of your own training orders (full refund). */
+  | { type: 'cancelTrain'; item: number }
   /** `queue` appends to the current orders; `mode: 'direct'` skips roads and stays combat-ready when the way is open. */
   | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean; queue?: boolean; mode?: 'fast' | 'direct' }
   | { type: 'stop'; units: number[] }

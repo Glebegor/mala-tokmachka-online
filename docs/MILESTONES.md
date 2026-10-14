@@ -131,6 +131,10 @@ Everything from the akira branch now runs on hlib's core:
 - **Markers**: own units blue, allies green, the enemy red (aircraft sprites too). Vehicles carry the APP-6 mobility
   indicator (two wheels, or a track); in column it turns yellow with a ». The supply bar reads properly on enemy markers.
 - The attack arrows were removed.
+- **Training queue view**: each factory lists its orders with unit icons, a live progress bar for the one in training,
+  when each will be ready and a × to cancel your own orders (full refund, goods back into the store). A production strip
+  over the map shows everything training for you (click a chip to open the building); building markers get a progress bar
+  and an order count; train buttons show how many are queued; a message announces each finished unit.
 
 ## M8 — Depth (next)
 - Breaking a cauldron from outside (re-joining a pocket to the main front).
