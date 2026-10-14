@@ -132,8 +132,8 @@ input[type='checkbox'] { width: auto; accent-color: var(--accent); }
 .terrain-chip span { color: var(--muted); }
 .terrain-chip .pos { color: var(--ok); } .terrain-chip .neg { color: #ff6b6b; } .terrain-chip .road { color: var(--accent); }
 button.ghost.on { color: var(--accent); }
-.nato-ico { width: 34px; height: 34px; flex: none; }
-.bld .nato-ico { width: 30px; height: 30px; margin: -4px 0; }
+.nato-ico { width: 34px; height: 34px; flex: none; object-fit: contain; }
+.bld .nato-ico { width: 30px; height: 30px; margin: -4px 0; object-fit: contain; }
 .side .row { flex-wrap: wrap; }
 .palette .bld:hover, .side .bld:hover { border-color: var(--muted); }
 

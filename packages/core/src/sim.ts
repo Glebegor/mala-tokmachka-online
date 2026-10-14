@@ -1,6 +1,6 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
-import { clamp, distKm, kmPerDegLng, moveToward, type LngLat } from './geo';
+import { clamp, distKm, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
 import { buildFront, distToFrontKm, normalAt, pocketCentroid, pocketRadiusKm, pointInPolygon, resample, resolveFrontLoops, sideOf, sideOfWithPockets } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
@@ -230,6 +230,7 @@ export class Sim {
         const bd = this.defs.b.get(b.def)!;
         const ud = this.defs.u.get(cmd.unit);
         if (!ud || !bd.trains?.includes(ud.id)) return fail('cannot train that here');
+        if (ud.side && ud.side !== (p.team === 0 ? 'ua' : 'ru')) return fail('cannot train enemy unit');
         if (w.queue.filter((q) => q.building === b.id).length >= 5) return fail('queue full');
 
         // Split cost: money & people are paid from player.res; physical goods (metal, fuel, ore) from b.storage
@@ -402,9 +403,27 @@ export class Sim {
     }
     let own = 0;
     units.forEach((u, i) => {
+      const d = this.defs.u.get(u.def)!;
+      if (d.droneType === 'strike') {
+        u.path = [{ p: to, road: false }];
+        u.target = to;
+        u.cap = 0;
+        u.loiterCenter = undefined;
+        u.loiterAngle = undefined;
+        return;
+      }
+      if (d.droneType === 'recon') {
+        u.path = [{ p: to, road: false }];
+        u.target = to;
+        u.cap = 0;
+        u.loiterCenter = to;
+        u.loiterAngle = 0;
+        return;
+      }
+      u.loiterCenter = undefined;
+      u.loiterAngle = undefined;
       const ring = Math.ceil(Math.sqrt(i));
       const dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
-      const d = this.defs.u.get(u.def)!;
       let road: LngLat[] = [];
       if (d.kind !== 'air' && this.roads) {
         // stragglers far from the group plan their own way (bounded so one order stays cheap)
@@ -444,6 +463,10 @@ export class Sim {
     this.frontline(dt);
     this.territory(dt);
     this.checkVictory();
+
+    if (w.smokes?.length) {
+      w.smokes = w.smokes.filter((s) => s.expiresAt > w.time);
+    }
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
     if (r.matchSeconds > 0 && w.time >= r.matchSeconds && w.winner === null) {
@@ -842,7 +865,55 @@ export class Sim {
       const fuelBurnRate = 0.02 * (u.sprint ? 1.5 : 1.0);
       u.fuel = Math.max(0, u.fuel - totalMovedKm * fuelBurnRate);
     }
-    if (!u.path.length) (u.target = null), (u.cap = 0);
+    if (!u.path.length) {
+      if (d.droneType === 'strike') {
+        const blastRadius = d.id === 'drone_fire_point' ? 1.2 : 1.8;
+        const damage = d.damage || 320;
+        let totalDealt = 0;
+        for (const eu of this.world.units) {
+          if (eu.team !== u.team && !eu.embarkedIn) {
+            const dist = distKm(u.pos, eu.pos);
+            if (dist <= blastRadius) {
+              const dealt = damage * (1 - dist / blastRadius);
+              eu.hp -= dealt;
+              totalDealt += dealt;
+            }
+          }
+        }
+        for (const eb of this.world.buildings) {
+          if (eb.team !== u.team) {
+            const dist = distKm(u.pos, eb.pos);
+            if (dist <= blastRadius) {
+              const dealt = (damage * (1 - dist / blastRadius)) / this.holdMult(eb.team, eb.pos);
+              eb.hp -= dealt;
+              totalDealt += dealt;
+            }
+          }
+        }
+        u.xp += totalDealt * this.ruleset.rules.xpPerDamage;
+        this.shots.push({ def: u.def, team: u.team, from: u.pos, to: u.pos });
+        if (!this.world.smokes) this.world.smokes = [];
+        this.world.smokes.push({
+          id: this.world.nextId++,
+          pos: [u.pos[0], u.pos[1]],
+          createdAt: this.world.time,
+          expiresAt: this.world.time + 600,
+        });
+        u.hp = 0;
+        u.target = null;
+        u.cap = 0;
+        return;
+      }
+      if (d.droneType === 'recon' && u.loiterCenter) {
+        const rKm = d.id === 'drone_mini_shark' ? 2.2 : 3.0;
+        u.loiterAngle = ((u.loiterAngle ?? 0) + (Math.PI / 4)) % (Math.PI * 2);
+        const nextP = offsetKm(u.loiterCenter, rKm * Math.cos(u.loiterAngle), rKm * Math.sin(u.loiterAngle));
+        u.path = [{ p: nextP, road: false }];
+        u.target = nextP;
+        return;
+      }
+      (u.target = null), (u.cap = 0);
+    }
   }
 
   /** The "abstract war": economy and local force balance push every front node along its normal. */

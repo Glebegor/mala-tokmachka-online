@@ -1,6 +1,6 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { Building, FrontNode, Player, Pocket, Shot, Team, UnitView, CapturePoint } from './state';
+import type { Building, FrontNode, Player, Pocket, Shot, Team, UnitView, CapturePoint, SmokeCloud } from './state';
 
 export type ClientMsg = { t: 'cmd'; cmd: Command } | { t: 'ping' };
 
@@ -30,6 +30,7 @@ export interface SnapMsg {
   points: CapturePoint[];
   scores: [number, number];
   queue: { building: number; unit: string; remaining: number }[];
+  smokes?: SmokeCloud[];
 }
 
 export type ServerMsg =

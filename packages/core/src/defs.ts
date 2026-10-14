@@ -57,6 +57,8 @@ export interface UnitDef {
   passengerCap?: number;
   fuelOnly?: boolean;
   maxFuel?: number;
+  droneType?: 'strike' | 'recon';
+  side?: 'ua' | 'ru';
 }
 
 export interface TerrainDef {

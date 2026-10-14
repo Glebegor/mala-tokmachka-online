@@ -1,6 +1,6 @@
 import { type BotDifficulty, distKm, moveToward, nearestNode, offsetKm, sideOf, type LngLat, type Player, type Sim } from '@sw/core';
 
-const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'oil_refinery', 'gas_station', 'trench', 'signal_station', 'housing', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
+const BUILD_ORDER = ['power_plant', 'housing', 'mine', 'metalworks', 'oil_refinery', 'drone_factory', 'gas_station', 'trench', 'signal_station', 'housing', 'bunker', 'rail_station', 'trench', 'power_plant', 'bunker', 'mine', 'metalworks'];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
@@ -55,30 +55,43 @@ export class Bot {
 
   private train(sim: Sim, p: Player) {
     const w = sim.world;
+    const mySide = p.team === 0 ? 'ua' : 'ru';
     for (const b of w.buildings) {
       if (b.owner !== p.id || b.progress < 1) continue;
       const d = sim.defs.b.get(b.def)!;
       if (!d.trains?.length) continue;
       if (w.queue.filter((q) => q.building === b.id).length >= 2) continue;
-      const drones = w.units.filter((u) => u.owner === p.id && u.def === 'drone').length;
-      const pool = ['infantry', 'infantry', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
-      const pick = pool[Math.floor(Math.random() * pool.length)];
+      const validUnits = d.trains.filter((uid) => {
+        const ud = sim.defs.u.get(uid);
+        return ud && (!ud.side || ud.side === mySide);
+      });
+      if (!validUnits.length) continue;
+      const pick = validUnits[Math.floor(Math.random() * validUnits.length)];
       if (pick) sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
     }
   }
 
   private command(sim: Sim, p: Player) {
     const w = sim.world;
-    const army = w.units.filter((u) => u.owner === p.id && u.def !== 'drone');
+    const army = w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)?.kind !== 'air');
     const enemyPoints = sim.map.capturePoints.filter((cp) => sideOf(w.front, cp.pos) !== p.team);
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchor: LngLat = hq?.pos ?? sim.map.center;
 
-    // drones scout over the enemy side
-    for (const u of w.units.filter((x) => x.owner === p.id && x.def === 'drone')) {
+    // air units / drones scout or attack
+    for (const u of w.units.filter((x) => x.owner === p.id && sim.defs.u.get(x.def)?.kind === 'air')) {
       if (u.target) continue;
-      const cp = enemyPoints[Math.floor(Math.random() * enemyPoints.length)];
-      if (cp) sim.apply(p.id, { type: 'move', units: [u.id], to: offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20) });
+      const ud = sim.defs.u.get(u.def);
+      if (ud?.droneType === 'strike') {
+        const targets = w.buildings.filter((eb) => eb.team !== p.team);
+        if (targets.length) {
+          const t = targets[Math.floor(Math.random() * targets.length)];
+          sim.apply(p.id, { type: 'move', units: [u.id], to: t.pos });
+        }
+      } else {
+        const cp = enemyPoints[Math.floor(Math.random() * enemyPoints.length)];
+        if (cp) sim.apply(p.id, { type: 'move', units: [u.id], to: offsetKm(cp.pos, (Math.random() - 0.5) * 15, (Math.random() - 0.5) * 15) });
+      }
     }
 
     // spend spare money on promotions once the economy is running
