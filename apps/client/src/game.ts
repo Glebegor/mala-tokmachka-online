@@ -152,7 +152,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
   };
   ws.onclose = () => {
-    if (!closed) hint.textContent = 'Disconnected from server.';
+    if (!closed) {
+      hint.textContent = '';
+      app.append(
+        h('div', { class: 'overlay' },
+          h('div', { class: 'card', style: { textAlign: 'center' } },
+            h('h2', {}, 'DISCONNECTED'),
+            h('p', { class: 'muted' }, 'Матч завершён или сервер был обновлён.'),
+            h('button', { class: 'primary', onClick: leave }, 'Вернуться в лобби'),
+          ),
+        ),
+      );
+    }
   };
 
   // ---------- map ----------
