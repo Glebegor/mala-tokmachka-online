@@ -258,6 +258,7 @@ export class RoadNetwork {
         bestNode = cur;
       }
       for (const e of this.adj[cur]) {
+        if (!usable(this.nodes[e.to])) continue;
         const c = gc + e.km / o.roadSpeed;
         if (c < this.cost(e.to)) {
           this.setCost(e.to, c, cur);

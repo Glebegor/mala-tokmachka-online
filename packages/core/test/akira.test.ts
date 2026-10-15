@@ -224,5 +224,10 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   myPost.garrison.push(u1.id, u2.id);
   run(sim, 2);
   assert.ok(myPost.advancing, 'post is advancing on force superiority');
+
+  // no posts in water region (Kherson / Kakhovka reservoir)
+  const waterPosts = sim.world.posts.filter((p) => p.pos[0] < 35.3 && p.pos[1] < 47.75);
+  assert.equal(waterPosts.length, 0, 'no posts spawned along the Dnipro water line / Kherson water region');
+
   console.log('frontline garrisons & line holding ok');
 }

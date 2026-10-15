@@ -1941,7 +1941,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
         : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`;
       const innerCls = `post-inner ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`;
-      const innerHtml = `<span class="post-icon">${empty ? '⛊' : '🛡️'}</span><span class="post-badge">${empty ? '!' : `${p.garrison.length}/${p.cap}`}</span>${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
+      const innerHtml = empty
+        ? `<span class="post-empty-tag">!</span>`
+        : `<svg class="post-shield-ico" viewBox="0 0 16 16"><path d="M8 1.5 13.5 3.5v4.2c0 3.2-2.3 5.6-5.5 6.8C4.8 13.3 2.5 10.9 2.5 7.7V3.5z" fill="currentColor"/></svg>${p.garrison.length > 1 ? `<span class="post-count">${p.garrison.length}</span>` : ''}${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
       if (!m) {
         const el = h('div', {
           class: 'maplibregl-marker post-marker',

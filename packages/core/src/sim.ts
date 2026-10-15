@@ -179,7 +179,12 @@ export class Sim {
         const [nx, ny] = normalAt(w.front, i);
         const pos0: LngLat = offsetKm([node.lng, node.lat], -nx * 0.45, -ny * 0.45);
         const pos1: LngLat = offsetKm([node.lng, node.lat], nx * 0.45, ny * 0.45);
-        if (isDry([node.lng, node.lat]) && isDry(pos0) && isDry(pos1)) {
+        const isWaterLine = (node.lng < 35.3 && node.lat < 47.75) ||
+                            this.barrierNear([node.lng, node.lat], 2.5) ||
+                            this.barrierNear(pos0, 2.0) ||
+                            this.barrierNear(pos1, 2.0) ||
+                            !this.lineClear(pos0, pos1, []);
+        if (!isWaterLine && isDry([node.lng, node.lat]) && isDry(pos0) && isDry(pos1)) {
           const post0: FrontPost = { id: w.nextId++, team: 0, pos: pos0, nodeIdx: i, garrison: [], cap: 4 };
           const post1: FrontPost = { id: w.nextId++, team: 1, pos: pos1, nodeIdx: i, garrison: [], cap: 4 };
           const u0 = this.spawnUnit('infantry', frontPlayer0, pos0);
@@ -1165,13 +1170,19 @@ export class Sim {
   }
 
   /** One stretch without boats: straight if open, by road if that is quicker (or the only way). */
-  private planLeg(from: LngLat, to: LngLat, speed: number, cross: { pos: LngLat; r: number; line?: [LngLat, LngLat] }[], direct: boolean): { wps: Waypoint[]; sec: number } | null {
+  private planLeg(team: Team, from: LngLat, to: LngLat, speed: number, cross: { pos: LngLat; r: number; line?: [LngLat, LngLat] }[], direct: boolean): { wps: Waypoint[]; sec: number } | null {
     const off = speed * 0.85; // rough cross-country average, terrain is applied for real while moving
-    const clear = (a: LngLat, b: LngLat) => this.lineClear(a, b, cross);
+    const isFriendlyDest = this.side(to) === team;
+    const clear = (a: LngLat, b: LngLat) => this.lineClear(a, b, cross) && (!isFriendlyDest || this.side(b) === team || distKm(b, to) <= 1.0);
     const open = clear(from, to);
     const straight = open ? distKm(from, to) / off : Infinity;
     if (open && (direct || straight < 60)) return { wps: [{ p: to, road: false }], sec: straight }; // short hops are not worth mounting up for
-    const road = this.roads?.routeTimed(from, to, { roadSpeed: speed * this.ruleset.rules.roadSpeedMult, offSpeed: off, clear, usable: (n) => !this.terrain?.isBarrier(n) }) ?? null;
+    const road = this.roads?.routeTimed(from, to, {
+      roadSpeed: speed * this.ruleset.rules.roadSpeedMult,
+      offSpeed: off,
+      clear,
+      usable: (n) => !this.terrain?.isBarrier(n) && (!isFriendlyDest || this.side(n) === team || distKm(n, to) <= 1.0),
+    }) ?? null;
     if (road && road.seconds < straight) {
       const wps: Waypoint[] = road.points.map((p, k) => ({ p, road: k > 0 }));
       wps.push({ p: to, road: false });
@@ -1183,14 +1194,14 @@ export class Sim {
   /** Quickest way for a ground unit: direct, by road (bridges), or via a friendly boat crossing. */
   private plan(team: Team, from: LngLat, to: LngLat, speed: number, direct: boolean): Waypoint[] | null {
     const cross = this.crossings(team);
-    let best = this.planLeg(from, to, speed, cross, direct);
+    let best = this.planLeg(team, from, to, speed, cross, direct);
     const span = distKm(from, to);
     for (const c of cross) {
       // only crossings roughly on the way are worth trying
       if (distKm(from, c.pos) + distKm(c.pos, to) > span * 1.8 + 60) continue;
-      const a = this.planLeg(from, c.pos, speed, cross, direct);
+      const a = this.planLeg(team, from, c.pos, speed, cross, direct);
       if (!a) continue;
-      const b = this.planLeg(c.pos, to, speed, cross, direct);
+      const b = this.planLeg(team, c.pos, to, speed, cross, direct);
       if (!b) continue;
       if (!best || a.sec + b.sec < best.sec) best = { wps: [...a.wps, ...b.wps], sec: a.sec + b.sec };
     }
@@ -2933,7 +2944,8 @@ export class Sim {
           const b = teamPosts[i + 1];
           if ((a.advancing || b.advancing) && distKm(a.pos, b.pos) > 36.0) {
             const midPos: LngLat = [(a.pos[0] + b.pos[0]) / 2, (a.pos[1] + b.pos[1]) / 2];
-            if (isDry(midPos)) {
+            const isWater = (midPos[0] < 35.3 && midPos[1] < 47.75) || this.barrierNear(midPos, 2.0);
+            if (!isWater && isDry(midPos)) {
               w.posts.push({
                 id: w.nextId++,
                 team,
@@ -2963,7 +2975,7 @@ export class Sim {
       abstract[p.team] += (4 + Math.sqrt(p.res.people ?? 0) + Math.sqrt(this.goods(p).metal ?? 0)) * r.abstractPower;
     }
     // the abstract term is spread per 100 km of front so that map size does not change its weight
-    const perNode: [number, number] = [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];
+    const perNode: [number, number] = r.frontPosts ? [0, 0] : [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];
 
     const speedAt = (node: FrontNode, base: [number, number]): number => {
       const pos: LngLat = [node.lng, node.lat];
@@ -2982,7 +2994,7 @@ export class Sim {
             const ammoFactor = ud.maxAmmo && (u.ammo ?? 0) <= 0 ? 0.25 : 1.0;
             holdDef[u.team] += pwr * ammoFactor;
           }
-        } else {
+        } else if (!r.frontPosts) {
           push[u.team] += pwr;
         }
       });
@@ -2993,7 +3005,9 @@ export class Sim {
         for (const g of b.inside) holdDef[g.team] += this.defs.u.get(g.def)!.damage * 2 * (1 - d / R);
       }
       // troops sitting unopposed behind the line loosen it
-      for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) push[z.team] += r.greyZonePush;
+      if (!r.frontPosts) {
+        for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) push[z.team] += r.greyZonePush;
+      }
       const effPush: [number, number] = [Math.max(0, push[0] - holdDef[1]), Math.max(0, push[1] - holdDef[0])];
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
