@@ -13,11 +13,14 @@ const sim = new Sim(rs, 'ukraine', [
   { id: 'botRU', name: 'Bot RU', team: 1, bot: true },
 ]);
 
-// 1. Clean slate verification
+// 1. Initial world verification: buildings start clean, frontline infantry garrisons deployed
 assert.equal(sim.world.buildings.length, 0, 'map starts with 0 buildings');
-assert.equal(sim.world.units.length, 0, 'map starts with 0 units');
 assert.equal(sim.world.posts.length, 0, 'map starts with 0 frontline garrison posts');
-console.log('✓ Clean slate: 0 buildings, 0 units, 0 posts');
+assert.ok(sim.world.units.length > 100, `frontline infantry deployed along the front line (actual=${sim.world.units.length})`);
+assert.ok(sim.world.units.every((u) => u.owner.startsWith('__front_')), 'all initial units are autonomous frontline garrisons');
+assert.ok(sim.world.units.every((u) => u.hp === 5000), 'all frontline squads have 100 soldiers (5000 HP)');
+assert.ok(sim.world.units.every((u) => u.stance === 'hold'), 'all frontline squads have stance: hold (stand in place)');
+console.log(`✓ Frontline garrisons: ${sim.world.units.length} squads deployed along the front line (100 soldiers each, hold stance)`);
 
 // 2. Resources: Money (10k start) and Ore (cap 5000)
 assert.equal(rs.resources.length, 2, '2 resources defined: money and ore');
@@ -516,11 +519,13 @@ console.log('✓ Bot AI: Housing districts built in friendly cities verified');
 const infDef = rs.units.find((u) => u.id === 'infantry')!;
 assert.ok(infDef, 'Infantry unit is defined in units.json');
 assert.equal(infDef.cost.money, 250, 'Infantry costs 250');
-assert.equal(infDef.speed, 0.01389, 'Infantry moves at 50 km/h (0.01389 km/s)');
+assert.equal(infDef.speed, 0.02778, 'Infantry moves at 100 km/h (0.02778 km/s)');
 assert.equal(infDef.roadSpeedMult, 1.25, 'Infantry receives +25% road speed multiplier');
 assert.equal(infDef.cannotCrossFront, true, 'Infantry has cannotCrossFront = true');
 assert.equal(infDef.squadSize, 20, 'Infantry has 20 soldiers per squad');
 assert.equal(infDef.hp, 1000, 'Infantry has 1000 HP (50 per soldier)');
+assert.ok(!infDef.description?.includes('км/ч'), 'Infantry description does not mention speed');
+assert.ok(!infDef.description?.includes('Бонус скорости'), 'Infantry description does not mention road bonus');
 assert.ok(mbDef.trains?.includes('infantry'), 'Military base trains infantry');
 
 // Let military bases finish building and have bots train infantry
@@ -567,7 +572,16 @@ const moveForeign = sim.apply('player1', { type: 'move', units: [playerInfantry.
 assert.ok(!moveForeign.ok, 'Infantry move into foreign territory must be rejected');
 assert.ok(moveForeign.reason.includes('foreign'), `Error mentions foreign territory: ${moveForeign.reason}`);
 
-console.log('✓ Infantry: 250 cost, 50 km/h, 20 fighters, +25% road speed, front/foreign boundary movement restrictions verified');
+// Frontline infantry squads: 100 soldiers, cannot be ordered by player, stand in place
+const flSquad = sim.world.units.find((u) => u.owner === '__front_0')!;
+assert.ok(flSquad, 'Frontline garrison squad exists');
+assert.equal(flSquad.hp, 5000, 'Frontline garrison squad has 5000 HP (100 soldiers)');
+assert.equal(flSquad.stance, 'hold', 'Frontline garrison squad stands in place (stance: hold)');
+const playerOrderToFrontline = sim.apply('player1', { type: 'move', units: [flSquad.id], to: friendlyPos });
+assert.ok(!playerOrderToFrontline.ok, 'Player cannot command frontline squads');
+
+console.log('✓ Infantry: 250 cost, 100 km/h, 20 fighters, clean description, front/foreign boundary movement restrictions verified');
+console.log('✓ Frontline Garrisons: 100 fighters (5000 HP), autonomous, uncommandable by players, stand in place verified');
 
 // 17. Housing Scale (+30% larger) and Dispersion (>= 85m spacing)
 const testHouses = generateCityHouses([30.5, 50.4], 9999);

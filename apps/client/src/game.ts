@@ -466,12 +466,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function unitFacts(u: UnitDef): string[] {
     const air = u.airDamage ?? init?.ruleset.rules.airDamageDefault ?? 0.25;
     const extra: string[] = [];
-    if (u.squadSize) extra.push(`Отряд: ${u.squadSize} бойцов`);
-    if (u.cannotCrossFront) extra.push('Перемещение только по своей территории (без пересечения фронта и границ)');
+    if (u.squadSize && u.id !== 'infantry') extra.push(`Отряд: ${u.squadSize} бойцов`);
+    if (u.cannotCrossFront && u.id !== 'infantry') extra.push('Перемещение только по своей территории (без пересечения фронта и границ)');
     if (u.minRange) extra.push(`Indirect fire ${u.minRange}–${u.range} km, needs a spotter`);
     if (u.cargoCap) extra.push(`${u.fuelOnly ? 'Fuel tank' : 'Cargo'} ${u.cargoCap}${u.passengerCap ? ` · carries ${u.passengerCap} infantry` : ''}`);
     if (u.maxAmmo) extra.push(`Ammo ${u.maxAmmo} rounds, ${u.ammoPerShot ?? 1} per shot (${Math.floor(u.maxAmmo / (u.ammoPerShot ?? 1))} shots); refill costs ${u.ammoCost ?? 1} ammo a round; cannot fire with fewer than ${u.ammoPerShot ?? 1} left`);
-    else if (u.damage > 0 && u.kind === 'ground') extra.push('No ammunition needed');
+    else if (u.damage > 0 && u.kind === 'ground' && u.id !== 'infantry') extra.push('No ammunition needed');
     if (u.maxFuel) extra.push(`Fuel tank ${u.maxFuel}${u.droneType === 'strike' ? ' (one way)' : ''}`);
     if (u.missile) extra.push(`${u.missile === 'ballistic' ? 'Ballistic' : 'Cruise'} missile: about ${Math.round((u.maxFuel ?? 0) / 0.08).toLocaleString('en-US')} km range, ${Math.round((u.interceptChance ?? 1) * 100)}% of anti-air shots hit it`);
     if (u.droneType) extra.push(u.droneType === 'strike' ? `Explodes on its target (${u.damage} damage, ${u.blastKm ?? 1.8} km blast)` : 'Circles its area, refuels at an airfield');
@@ -479,16 +479,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (u.heals) extra.push(`Heals ${u.heals.targets === 'foot' ? 'troops on foot' : 'vehicles'} within ${u.heals.radiusKm} km: ${Math.round(u.heals.perSecond * 100)}% a second, once out of the fight for 10 s`);
     if (u.droneCap) extra.push(`Launcher for ${u.droneCap} small drones`);
     if (u.side) extra.push(`${u.side === 'ua' ? 'Ukraine' : 'Russia'} only`);
-    const roadMult = u.roadSpeedMult ?? init?.ruleset.rules.roadSpeedMult ?? 1;
-    const bonusPct = Math.round((roadMult - 1) * 100);
-    const speedKmH = Math.round(u.speed * 3600);
-    return [
+    const f: string[] = [
       ...extra,
       `${u.hp} HP · ${u.damage} dmg/s · range ${u.range} km`,
-      `Скорость: ${speedKmH} км/ч (${(u.speed * 60).toFixed(1)} км/мин)${u.kind === 'air' ? ' (по воздуху)' : ` · ${u.mobility ?? 'пешком'}, +${bonusPct}% по дорогам`}`,
-      `Sees ${u.vision} km · ${air ? `${Math.round(air * 100)}% damage vs aircraft` : 'cannot hit aircraft'}`,
-      `Training ${u.trainTime}s`,
     ];
+    if (u.id !== 'infantry' && u.id !== 'frontline_infantry') {
+      const roadMult = u.roadSpeedMult ?? init?.ruleset.rules.roadSpeedMult ?? 1;
+      const bonusPct = Math.round((roadMult - 1) * 100);
+      const speedKmH = Math.round(u.speed * 3600);
+      f.push(`Скорость: ${speedKmH} км/ч (${(u.speed * 60).toFixed(1)} км/мин)${u.kind === 'air' ? ' (по воздуху)' : ` · ${u.mobility ?? 'пешком'}, +${bonusPct}% по дорогам`}`);
+    }
+    f.push(`Обзор: ${u.vision} км · ${air ? `${Math.round(air * 100)}% по авиации` : 'без урона по авиации'}`);
+    if (u.trainTime) f.push(`Подготовка: ${u.trainTime}с`);
+    return f;
   }
   /** Supply-chain partners that must be built far apart (mirrors the server rule). */
   const chained = (a: BuildingDef, b: BuildingDef) => !!a.spacedFrom?.includes(b.id) || !!b.spacedFrom?.includes(a.id);
@@ -960,10 +963,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   /** Move the selection (Shift queues another waypoint, Alt goes straight across country, ready to fight). */
   function moveOrder(to: LngLat, ev: { shiftKey: boolean; altKey: boolean }, facing?: number) {
-    if (!selUnits.size) return;
+    if (!snap || !selUnits.size) return;
+    const s = snap;
+    const movable = [...selUnits].filter((id) => {
+      const u = s.units.find((x) => x.id === id);
+      return u && u.owner === me && !defU.get(u.def)?.stationary && !u.owner.startsWith('__front_');
+    });
+    if (!movable.length) return;
     // a facing only means something for a line, column or wedge: with a loose spread it lines them up
     const shape = facing !== undefined && orders.formation === 'spread' ? 'line' : orders.formation;
-    send({ type: 'move', units: [...selUnits], to, cohesion: formation && selUnits.size > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast', attack: orders.attack, formation: shape, facing });
+    send({ type: 'move', units: movable, to, cohesion: formation && movable.length > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast', attack: orders.attack, formation: shape, facing });
   }
 
   /** Degrees from north, clockwise, from a to b. */
@@ -1003,7 +1012,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   /** Click selection: a plain click selects what is under the pointer; Shift adds it to (or takes it out of) the selection. */
   function selectAt(point: { x: number; y: number }, shift: boolean) {
     const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
-    const hit = map.queryRenderedFeatures([[point.x - 6, point.y - 6], [point.x + 6, point.y + 6]], { layers }).find((f) => f.properties?.own);
+    const features = map.queryRenderedFeatures([[point.x - 6, point.y - 6], [point.x + 6, point.y + 6]], { layers });
+    const hit = features.find((f) => f.properties?.own) ?? features[0];
     const trenchHit = !hit && map.getLayer('trench-line') ? map.queryRenderedFeatures([[point.x - 8, point.y - 8], [point.x + 8, point.y + 8]], { layers: ['trench-line', 'trench-case'] })[0] : null;
     if (trenchHit?.properties?.id) {
       selBuilding = Number(trenchHit.properties.id);
@@ -1990,24 +2000,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const mine = snap.units.filter((u) => selUnits.has(u.id));
       const rk = ranks();
       const group = [...groups.values()].find((g) => g.ids.size === mine.length && mine.every((u) => g.ids.has(u.id)));
-      side.append(h('h3', {}, group ? `Group ${group.id} · ${mine.length} units` : `${mine.length} unit${mine.length === 1 ? '' : 's'} selected`));
+      side.append(h('h3', {}, group ? `Группа ${group.id} · ${mine.length} отряд.` : `${mine.length} ${mine.length === 1 ? 'отряд выбран' : 'отрядов выбрано'}`));
 
       if (mine.length === 1) {
         const u = mine[0];
         const d = defU.get(u.def)!;
-        const next = rk[u.rank + 1];
-        const courseNote = next && d.kind !== 'air' ? (u.rank === 0 ? 'Can take a course at a Training Centre' : (u.combat ?? 0) > 0 ? `${u.combat} kill${u.combat === 1 ? '' : 's'} since its last course: can take the next one` : 'Needs a kill before its next course') : '';
+        const isOwn = u.owner === me;
+        const sub = d.squadSize ? `Численность: ${d.squadSize} бойцов` : (rk[u.rank]?.name ?? '');
         side.append(
-          h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, rk[u.rank]?.name ?? ''))),
-          h('div', { class: 'stat' }, `HP ${u.hp}/${Math.round(maxHp(u))}${u.morale !== undefined ? ` · morale ${u.morale}` : ''}`),
-          h('div', { class: 'stat' + (d.maxAmmo && (u.ammo ?? 0) < (d.ammoPerShot ?? 1) ? ' warn' : '') }, d.maxAmmo ? `Ammo ${u.ammo ?? 0}/${d.maxAmmo} · ${Math.floor((u.ammo ?? 0) / (d.ammoPerShot ?? 1))} shots left` : 'No ammunition (unarmed)'),
-          h('div', { class: 'stat' }, next ? `XP ${u.xp}/${next.xp} → ${next.name}` : `XP ${u.xp} · top rank`),
-          h('div', { class: 'stat muted' }, courseNote),
-          h('div', { class: 'stat muted' }, `damage ×${rk[u.rank]?.damage ?? 1} · range ×${rk[u.rank]?.range ?? 1}`),
-          h('div', { class: 'muted' }, d.description ?? ''),
-          ...unitFacts(d).map((f) => h('div', { class: 'fact' }, f)),
+          h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, sub))),
+          h('div', { class: 'stat' }, `Здоровье: ${u.hp} / ${Math.round(maxHp(u))}${u.morale !== undefined ? ` · Мораль: ${u.morale}` : ''}`),
         );
-        if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Heading to the training centre'));
+        if (d.damage > 0) side.append(h('div', { class: 'stat' }, `Урон: ${d.damage}/с · Дальность: ${d.range} км · Обзор: ${d.vision} км`));
+        if (d.maxAmmo) side.append(h('div', { class: 'stat' + ((u.ammo ?? 0) < (d.ammoPerShot ?? 1) ? ' warn' : '') }, `Боезапас: ${u.ammo ?? 0}/${d.maxAmmo}`));
+        if (d.description) side.append(h('div', { class: 'muted', style: { marginTop: '8px', lineHeight: '1.4' } }, d.description));
+        if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Движется в учебный центр'));
+        if (!isOwn) {
+          side.append(h('div', { class: 'stat', style: { color: '#8ec5fc', marginTop: '10px' } }, '🛡️ Гарнизон фронта (не подчиняется приказам)'));
+        }
         effects = u.status.map(([id, v]) => ({ id, v, n: 1 }));
       } else {
         const by = new Map<string, UnitView[]>();
@@ -2025,21 +2035,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         for (const u of mine) for (const [id, v] of u.status) agg.set(id, { id, v, n: (agg.get(id)?.n ?? 0) + 1 });
         effects = [...agg.values()];
       }
-      if (mine.some((u) => rk[u.rank + 1] && defU.get(u.def)?.kind !== 'air')) {
-        side.append(h('div', { class: 'muted' }, `Ranks are earned in combat (${init.ruleset.rules.xpPerKill} XP per kill) or in a Training Centre: right click one with these units selected.`));
-      }
 
-      const formationBox = h('input', { type: 'checkbox', checked: formation || undefined });
-      formationBox.addEventListener('change', () => (formation = formationBox.checked));
-      if (mine.length > 1) side.append(h('label', { class: 'field check' }, formationBox, h('span', {}, 'Move in formation (slowest sets the pace)')));
-      side.append(
-        h('div', { class: 'row' },
-          h('button', { onClick: () => makeGroup() }, 'Group (G)'),
-          group ? h('button', { onClick: () => ungroup() }, 'Ungroup (U)') : null,
-          h('button', { class: 'ghost', onClick: () => send({ type: 'stop', units: [...selUnits] }) }, 'Stop (S)'),
-        ),
-        h('div', { class: 'muted' }, 'Right click: fastest route (roads in transport mode, bridges over rivers). Shift+right click: add a waypoint. Alt+right click: straight across country. Right drag: form up facing the way you drag.'),
-      );
+      const anyOwn = mine.some((u) => u.owner === me && !defU.get(u.def)?.stationary && !u.owner.startsWith('__front_'));
+      if (anyOwn) {
+        const formationBox = h('input', { type: 'checkbox', checked: formation || undefined });
+        formationBox.addEventListener('change', () => (formation = formationBox.checked));
+        if (mine.length > 1) side.append(h('label', { class: 'field check' }, formationBox, h('span', {}, 'Двигаться в строю')));
+        side.append(
+          h('div', { class: 'row', style: { marginTop: '12px' } },
+            h('button', { onClick: () => makeGroup() }, 'Группа (G)'),
+            group ? h('button', { onClick: () => ungroup() }, 'Разгруппировать (U)') : null,
+            h('button', { class: 'ghost', onClick: () => send({ type: 'stop', units: [...selUnits] }) }, 'Стоп (S)'),
+          ),
+        );
+      }
       renderEffects(effects);
     }
     if (!selUnits.size || selBuilding !== null) renderEffects(null);

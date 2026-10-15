@@ -139,6 +139,8 @@ export interface UnitDef {
   roadSpeedMult?: number;
   /** Ground unit cannot cross front line into enemy territory. */
   cannotCrossFront?: boolean;
+  /** Unit is stationary (e.g. frontline trench garrison) and cannot be moved. */
+  stationary?: boolean;
   cost: ResourceAmounts;
   trainTime: number;
   hp: number;

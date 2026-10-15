@@ -187,7 +187,89 @@ export class Sim {
     this.world = w;
     this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = this.side(cp.pos)));
     this.occ.tick = -1; // the territory index is rebuilt from the live front on first use
+    this.spawnFrontlineGarrisons(w);
     return w;
+  }
+
+  /** Spawns 100-man autonomous infantry squads every 4 km along the front line to hold positions. */
+  private spawnFrontlineGarrisons(w: World) {
+    if (!w.front || w.front.length < 2) return;
+    const front = w.front;
+    const cum: number[] = [0];
+    for (let i = 1; i < front.length; i++) {
+      cum.push(cum[i - 1] + distKm([front[i - 1].lng, front[i - 1].lat], [front[i].lng, front[i].lat]));
+    }
+    const totalDist = cum[cum.length - 1];
+    if (totalDist < 4) return;
+
+    const stepKm = 4.0;
+    let seg = 0;
+
+    for (let s = 2.0; s < totalDist; s += stepKm) {
+      while (seg < front.length - 2 && cum[seg + 1] < s) seg++;
+      const a = front[seg];
+      const b = front[seg + 1];
+      const segLen = cum[seg + 1] - cum[seg];
+      const t = segLen > 0 ? (s - cum[seg]) / segLen : 0;
+      const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
+
+      const [nx, ny] = normalAt(front, seg);
+
+      // Distance from front line: 0.9 km behind the front into friendly territory
+      // (1.8 km distance between opposing lines prevents premature mutual fire with 1.5 km weapons)
+      const offset = 0.9;
+
+      // Ukraine (team 0)
+      const uaPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
+      if (
+        this.isPlayableGround(uaPos) &&
+        this.terrainAt(uaPos).id !== 'water' &&
+        !this.foreign(uaPos) &&
+        this.side(uaPos) === 0
+      ) {
+        this.spawnFrontlineUnit(w, 0, uaPos);
+      }
+
+      // Russia (team 1)
+      const ruPos: LngLat = offsetKm(pt, nx * offset, ny * offset);
+      if (
+        this.isPlayableGround(ruPos) &&
+        this.terrainAt(ruPos).id !== 'water' &&
+        !this.foreign(ruPos) &&
+        this.side(ruPos) === 1
+      ) {
+        this.spawnFrontlineUnit(w, 1, ruPos);
+      }
+    }
+  }
+
+  private spawnFrontlineUnit(w: World, team: Team, pos: LngLat): Unit {
+    const d = this.defs.u.get('frontline_infantry') ?? this.defs.u.get('infantry')!;
+    const u: Unit = {
+      id: w.nextId++,
+      def: d.id,
+      owner: '__front_' + team,
+      team,
+      pos,
+      hp: d.hp, // 5000 HP (100 soldiers)
+      target: null,
+      cooldown: 0,
+      xp: 0,
+      rank: 0,
+      transport: false,
+      encircled: false,
+      infil: 0,
+      status: [],
+      enter: 0,
+      path: [],
+      cap: 0,
+      fireMode: 'auto',
+      stance: 'hold',
+      post: [pos[0], pos[1]],
+      stamina: undefined,
+    };
+    w.units.push(u);
+    return u;
   }
 
   private spawnBuilding(def: string, p: Player, pos: LngLat, done = false): Building {
@@ -799,7 +881,9 @@ export class Sim {
         if (!isFinitePos(cmd.to) || !Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
         const all = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
-        const mine = all.filter((u) => u.parkedAt === undefined);
+        if (set.size > 0 && !all.length) return fail('you cannot order these units');
+        const mine = all.filter((u) => u.parkedAt === undefined && !this.defs.u.get(u.def)?.stationary && !u.owner.startsWith('__front_'));
+        if (all.length && !mine.length) return fail('these units cannot be ordered to move');
         const hasGround = mine.some((u) => this.defs.u.get(u.def)!.kind !== 'air');
         const targetPost = w.posts?.find((post) => post.team === p.team && distKm(post.pos, cmd.to) <= 3.5)
           ?? (w.posts?.find((post) => post.team !== p.team && distKm(post.pos, cmd.to) <= 3.5)
