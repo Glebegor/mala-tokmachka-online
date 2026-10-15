@@ -424,7 +424,7 @@ export class Sim {
   storageFor(d: BuildingDef): string[] {
     const validGoods = new Set(this.ruleset.resources.filter((r) => this.isGood(r.id)).map((r) => r.id));
     if (!validGoods.size) return [];
-    const fixed: Record<string, string[]> = { hq: ['metal', 'fuel', 'ore', 'ammo'], rail_station: ['metal', 'fuel', 'ore', 'ammo'], gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], launch_site: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
+    const fixed: Record<string, string[]> = { hq: ['metal', 'fuel', 'ore', 'ammo', 'steel'], rail_station: ['metal', 'fuel', 'ore', 'ammo', 'steel'], gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], launch_site: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo', 'steel'], ammo_depot: ['ammo'] };
     if (fixed[d.id]) return fixed[d.id].filter((k) => validGoods.has(k));
     const global = new Set(['money', 'people', 'energy']);
     const out = new Set<string>();
@@ -1875,7 +1875,7 @@ export class Sim {
     for (const b of done) {
       const d = this.defs.b.get(b.def)!;
       if (!d.produces) continue;
-      const team = mates[b.team];
+      const team = mates[b.team] ?? [];
       const n = team.length || 1;
       const m = mults.get(b.id)! * (powered[b.team] ? 1 : r.energyDeficitMult);
       b.storage ??= {};
@@ -2769,6 +2769,7 @@ export class Sim {
       // Vehicles near friendly frontline garrisons resupply ammo automatically
       if (u.hp > 0 && !u.embarkedIn && ((u.cargo?.res?.ammo ?? 0) > 0 || (u.def === 'humvee' && (u.ammo ?? 0) > 0))) {
         this.near(this.unitGrid, u.pos, 0.8, (g) => {
+          if (distKm(u.pos, g.pos) > 0.8) return;
           if (g.team === u.team && g.hp > 0 && (g.def === 'frontline_infantry' || g.owner.startsWith('__front_')) && (g.ammo ?? 0) < 100) {
             const needed = 100 - (g.ammo ?? 0);
             if (u.cargo?.res?.ammo && u.cargo.res.ammo > 0) {
@@ -2812,7 +2813,11 @@ export class Sim {
                 const dmg = 5 + Math.floor(Math.random() * 15);
                 eg.hp = Math.max(100, eg.hp - dmg);
                 eg.lastHit = this.world.time;
-                u.ammo = Math.max(0, (u.ammo ?? 0) - 1);
+                u.skirmishCount = (u.skirmishCount ?? 0) + 1;
+                if (u.skirmishCount >= 6) {
+                  u.skirmishCount = 0;
+                  u.ammo = Math.max(0, (u.ammo ?? 0) - 1);
+                }
               }
             }
           }
@@ -3477,22 +3482,50 @@ export class Sim {
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
 
+      // Find local frontline garrisons for each team holding this sector (within 4.5 km of pos)
+      let local0: Unit | null = null;
+      let dist0 = 4.5;
+      let local1: Unit | null = null;
+      let dist1 = 4.5;
+
+      this.near(this.unitGrid, pos, 4.5, (u) => {
+        const d = distKm(u.pos, pos);
+        if (d > 4.5 || u.embarkedIn || u.hp <= 0) return;
+        const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+        if (!isFront) return;
+        if (u.team === 0 && d < dist0) {
+          dist0 = d;
+          local0 = u;
+        } else if (u.team === 1 && d < dist1) {
+          dist1 = d;
+          local1 = u;
+        }
+      });
+
       // Dynamic front line movement (out-of-ammo pressure and manpower disparity)
       let dynamicPush = 0;
-      if (hasUnits0 && hasUnits1) {
-        if (ammo0 > 0 && ammo1 <= 0) {
-          dynamicPush += 0.0006;
-        } else if (ammo1 > 0 && ammo0 <= 0) {
-          dynamicPush -= 0.0006;
+      if (local0 && local1) {
+        const uAmmo0 = (local0 as Unit).ammo ?? 0;
+        const uAmmo1 = (local1 as Unit).ammo ?? 0;
+        const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? 100) - 100) / 20);
+        const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
+
+        if (uAmmo0 > 0 && uAmmo1 <= 0) {
+          dynamicPush += 0.0035;
+        } else if (uAmmo1 > 0 && uAmmo0 <= 0) {
+          dynamicPush -= 0.0035;
+        } else {
+          // If both have ammo (or both have no ammo), strength disparity pushes line
+          if (str0 > str1 && uAmmo0 > 0) {
+            dynamicPush += clamp((str0 - str1) * 0.0018, 0, 0.004);
+          } else if (str1 > str0 && uAmmo1 > 0) {
+            dynamicPush -= clamp((str1 - str0) * 0.0018, 0, 0.004);
+          }
         }
-        const menDiff = men0 - men1;
-        if (Math.abs(menDiff) >= 5) {
-          dynamicPush += clamp(menDiff / 100, -1, 1) * 0.0004;
-        }
-      } else if (hasUnits0 && !hasUnits1) {
-        dynamicPush += 0.0008;
-      } else if (hasUnits1 && !hasUnits0) {
-        dynamicPush -= 0.0008;
+      } else if (local0 && !local1) {
+        if (((local0 as Unit).ammo ?? 0) > 0) dynamicPush += 0.0035;
+      } else if (local1 && !local0) {
+        if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0035;
       }
 
       return clamp(dynamicPush + (effPush[0] * hold[0] - effPush[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
@@ -3531,7 +3564,7 @@ export class Sim {
           for (const u of w.units) {
             if (u.hp <= 0) continue;
             if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
-              if (distKm(u.pos, nodePos) <= 3.5 && nearestNode(n, u.pos) === i) {
+              if (nearestNode(n, u.pos) === i && distKm(u.pos, nodePos) <= 5.5) {
                 const nextPos: LngLat = [u.pos[0] + dlng, u.pos[1] + dlat];
                 if (!this.terrain?.isBarrier(nextPos)) {
                   u.pos = nextPos;

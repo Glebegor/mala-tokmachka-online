@@ -14,5 +14,13 @@
     "color": "#c58a5a",
     "start": 0,
     "cap": 5000
+  },
+  {
+    "id": "steel",
+    "icon": "ingot",
+    "name": "Сталь",
+    "color": "#94a3b8",
+    "start": 0,
+    "cap": 5000
   }
 ]

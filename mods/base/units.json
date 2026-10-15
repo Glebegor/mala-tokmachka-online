@@ -22,7 +22,7 @@
   {
     "id": "humvee",
     "name": "Хамви",
-    "description": "Бронированный внедорожник. Вмещает 5 человек и 500 боеприпасов (БК).",
+    "description": "Бронированный внедорожник. Вмещает 1 отделение пехоты (5 человек) и 500 боеприпасов (БК).",
     "kind": "ground",
     "cost": {
       "money": 150
@@ -32,7 +32,7 @@
     "speed": 0.03333,
     "roadSpeedMult": 1.25,
     "cannotCrossFront": true,
-    "passengerCap": 5,
+    "passengerCap": 1,
     "cargoCap": 500,
     "maxAmmo": 500,
     "range": 0,
@@ -65,7 +65,7 @@
   {
     "id": "truck",
     "name": "Грузовик",
-    "description": "Транспортный грузовик. Вмещает до 3 000 любого ресурса (включая БК). Спавнится пустым.",
+    "description": "Транспортный грузовик. Вмещает 5 отделений пехоты (25 человек) и до 3 000 любого ресурса (включая БК). Спавнится пустым.",
     "kind": "ground",
     "cost": {
       "money": 125
@@ -75,6 +75,7 @@
     "speed": 0.025,
     "roadSpeedMult": 1.25,
     "cannotCrossFront": true,
+    "passengerCap": 5,
     "cargoCap": 3000,
     "range": 0,
     "damage": 0,

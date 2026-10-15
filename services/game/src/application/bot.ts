@@ -339,6 +339,21 @@ export class Bot {
         }
       }
     }
+
+    // Build steel mill (up to 1 per bot)
+    const steelDef = sim.defs.b.get('steel_mill');
+    if (steelDef && sim.canPay(p, steelDef.cost)) {
+      const mySteelMills = mine.filter((b) => b.def === 'steel_mill');
+      if (mySteelMills.length < 1) {
+        const anchor = mine.find((b) => b.def === 'military_base') ?? hq;
+        if (anchor) {
+          const spot = offsetKm(anchor.pos, 5 + Math.random() * 5, 5 + Math.random() * 5);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+            sim.apply(p.id, { type: 'build', def: 'steel_mill', pos: spot });
+          }
+        }
+      }
+    }
   }
 
 
@@ -406,7 +421,7 @@ export class Bot {
     const nearest = (from: Building, list: Building[]) => list.sort((a, b) => distKm(a.pos, from.pos) - distKm(b.pos, from.pos))[0];
     const route = (u: Unit, from?: Building, to?: Building, res?: string) => from && to && sim.apply(p.id, { type: 'setRoute', unit: u.id, fromBuilding: from.id, toBuilding: to.id, resType: res, minLoad: 1 });
     const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul);
-    const mines = own('mine'), works = own('metalworks'), bases = own('hq'), refineries = own('oil_refinery');
+    const mines = own('mine'), works = own('metalworks'), steelMills = own('steel_mill'), bases = own('hq'), refineries = own('oil_refinery');
     const ammo = own('ammo_factory'), depots = own('ammo_depot');
     trucks.forEach((u, i) => {
       if (works[0] && ammo[0] && (ammo[0].storage?.metal ?? 0) < 100 && i % 3 === 0) {
@@ -414,8 +429,12 @@ export class Bot {
       } else if (ammo[0] && depots.length && (i % 2 === 1 || depots.some((d) => (d.storage?.ammo ?? 0) < 3000))) {
         const needyDepot = [...depots].sort((a, b) => (a.storage?.ammo ?? 0) - (b.storage?.ammo ?? 0))[0];
         route(u, ammo[0], needyDepot, 'ammo');
+      } else if (i % 2 === 0 && mines[0] && steelMills[0]) {
+        route(u, mines[0], nearest(mines[0], steelMills), 'ore');
       } else if (i % 2 === 0 && mines[0] && works[0]) {
         route(u, mines[0], nearest(mines[0], works), 'ore');
+      } else if (steelMills[0] && bases[0]) {
+        route(u, steelMills[0], nearest(steelMills[0], bases), 'steel');
       } else if (works[0] && bases[0]) {
         route(u, works[0], nearest(works[0], bases), 'metal');
       }
@@ -475,13 +494,14 @@ export class Bot {
     // Bot ground army: reinforce frontline garrisons evenly near the military base (not running to far edges)
     const friendlyGarrisons = w.units.filter((u) => u.team === p.team && u.hp > 0 && (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')));
     if (friendlyGarrisons.length) {
-      const myMilitaryBases = w.buildings.filter((b) => b.owner === p.id && b.def === 'military_base' && b.progress >= 1);
-      const anchorBase = myMilitaryBases[0]?.pos ?? hq?.pos ?? sim.map.center;
+      const myMilitaryBases = w.buildings.filter((b) => b.owner === p.id && b.def === 'military_base');
+      const fallbackBase = w.buildings.filter((b) => b.team === p.team && b.def === 'military_base')[0];
+      const anchorBase = myMilitaryBases[0]?.pos ?? fallbackBase?.pos ?? idle[0]?.pos ?? hq?.pos ?? sim.map.center;
 
-      // Find frontline garrisons near military base (within ~120 km), or closest 6 if none within 120 km
-      let nearby = friendlyGarrisons.filter((g) => distKm(g.pos, anchorBase) <= 120);
+      // Find frontline garrisons near military base (within ~140 km), or closest 8 if none within 140 km
+      let nearby = friendlyGarrisons.filter((g) => distKm(g.pos, anchorBase) <= 140);
       if (!nearby.length) {
-        nearby = [...friendlyGarrisons].sort((a, b) => distKm(a.pos, anchorBase) - distKm(b.pos, anchorBase)).slice(0, 6);
+        nearby = [...friendlyGarrisons].sort((a, b) => distKm(a.pos, anchorBase) - distKm(b.pos, anchorBase)).slice(0, 8);
       }
       if (nearby.length) {
         const incoming = new Map<number, number>();

@@ -192,6 +192,8 @@ export interface Unit {
   squadSize?: number;
   /** Time until next random frontline skirmish shot. */
   skirmishTimer?: number;
+  /** Shots fired in frontline skirmish before consuming 1 ammo (consumes 1 ammo per 6 shots). */
+  skirmishCount?: number;
   /** Target frontline garrison unit to reinforce and merge into upon arrival. */
   reinforceTarget?: number;
 }
