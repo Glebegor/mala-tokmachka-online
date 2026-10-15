@@ -202,7 +202,7 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   const attacker = sim.spawnUnit('infantry', b, offsetKm(posA, 0.5, 0));
   attacker.fireMode = 'hold';
   const hpBefore = defender.hp;
-  sim.hitUnit(attacker, defender, 100);
+  (sim as any).hitUnit(attacker, defender, 100);
   const dmgEntrenched = hpBefore - defender.hp;
   assert.ok(Math.abs(dmgEntrenched - 35) <= 2, `entrenched direct damage reduced by 65% (took ${dmgEntrenched})`);
 

@@ -2880,35 +2880,49 @@ export class Sim {
         if (d > R || u.embarkedIn || u.hp <= 0) return;
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') return; // only ground troops hold or take ground
-        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
+        // Quadratic distance falloff: tactical units directly on the frontline (0-4 km) have dominant push,
+        // while units in distant rear bases don't artificially destabilize the front line.
+        const fall = Math.max(0, 1 - d / R);
+        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (fall * fall) * this.crowdDealt(u);
       });
       // a manned bunker anchors the line: its garrison counts double
       for (const b of this.garrisons()) {
         const d = distKm(b.pos, pos);
         if (d > R) continue;
-        for (const g of b.inside) force[g.team] += this.defs.u.get(g.def)!.damage * 2 * (1 - d / R);
+        const fall = Math.max(0, 1 - d / R);
+        for (const g of b.inside) force[g.team] += this.defs.u.get(g.def)!.damage * 2 * (fall * fall);
       }
       // troops sitting unopposed behind the line loosen it
       for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) force[z.team] += r.greyZonePush;
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
-      let spd = clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
+      // When both teams have opposing forces near the node, cap push speed to keep the frontline stable and manageable
+      const opposed = force[0] > 0 && force[1] > 0;
+      const maxSpd = opposed ? Math.min(r.frontMaxSpeed, 0.035) : r.frontMaxSpeed;
+      let spd = clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -maxSpd, maxSpd) * (1 - resist);
 
       // Defending 2x2 km combat sectors anchor the frontline:
-      // An entrenched sector with defenders physically prevents the frontline from rolling over them
-      // unless attackers achieve overwhelming superiority (>= 2.5:1).
-      const sec = this.sectorAt(pos);
-      if (sec && sec.defenders > 0) {
-        if (spd > 0 && sec.team === 1) {
-          const ratio = sec.attackers / Math.max(1, sec.defenders);
-          if (ratio < 2.5) {
-            spd *= Math.max(0, 1 - (sec.entrenchment * 0.95));
+      // Check the 3x3 sector grid surrounding the front node (~3.5-4 km defensive radius).
+      // Entrenched defenders physically pin the frontline from advancing past them
+      // unless attackers achieve overwhelming local superiority (>= 2.5:1).
+      if (spd !== 0) {
+        const defendingTeam: Team = spd > 0 ? 1 : 0;
+        const baseIx = Math.floor(pos[0] / SECTOR_CELL.lng);
+        const baseIy = Math.floor(pos[1] / SECTOR_CELL.lat);
+        let maxAnchor = 0;
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            const sec = this.sectorByKey.get(Sim.cellKey(baseIx + dx, baseIy + dy));
+            if (!sec || sec.team !== defendingTeam || sec.defenders <= 0) continue;
+            const ratio = sec.attackers / Math.max(1, sec.defenders);
+            if (ratio < 2.5) {
+              const defenseHold = Math.max(0.35, sec.entrenchment);
+              maxAnchor = Math.max(maxAnchor, defenseHold * 0.95);
+            }
           }
-        } else if (spd < 0 && sec.team === 0) {
-          const ratio = sec.attackers / Math.max(1, sec.defenders);
-          if (ratio < 2.5) {
-            spd *= Math.max(0, 1 - (sec.entrenchment * 0.95));
-          }
+        }
+        if (maxAnchor > 0) {
+          spd *= Math.max(0.05, 1 - maxAnchor);
         }
       }
       return spd;
