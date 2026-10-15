@@ -5,7 +5,7 @@ import { buildFront, distToFrontKm, findPinch, nearestNode, normalOf, OccupiedIn
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
-import { LIBERATED_CELL, type Building, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
+import { LIBERATED_CELL, SECTOR_CELL, type Building, type CombatSector, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -1213,6 +1213,7 @@ export class Sim {
     if (r.sandbox && w.tick % r.tickRate === 0) this.restock();
     this.training(dt);
     this.units(dt);
+    this.sectors(dt);
     this.repairs(dt);
     if (w.tick % r.tickRate === 0) this.healing();
     if (w.tick % r.tickRate === 3) this.morale();
@@ -1425,6 +1426,115 @@ export class Sim {
     return (this.libRuns = out);
   }
 
+  /** Tactical 2x2 km combat sectors by spatial key. */
+  private sectorByKey = new Map<number, CombatSector>();
+
+  sectorAt(p: LngLat): CombatSector | undefined {
+    const ix = Math.floor(p[0] / SECTOR_CELL.lng);
+    const iy = Math.floor(p[1] / SECTOR_CELL.lat);
+    return this.sectorByKey.get(Sim.cellKey(ix, iy));
+  }
+
+  /**
+   * 2x2 km Tactical combat sectors:
+   * Holds territory, tracks entrenchment, and provides ~2.8x survivability (65% damage reduction)
+   * for defending infantry holding their sector against direct ground fire.
+   * Defended sectors anchor the frontline. Blasts from drones and artillery bypass entrenchment
+   * and degrade it.
+   */
+  private sectors(dt: number) {
+    const w = this.world;
+    const occ = new Map<number, { defs: number; atts: number }>();
+    for (const u of w.units) {
+      if (u.hp <= 0 || u.embarkedIn || u.parkedAt !== undefined) continue;
+      const ud = this.defs.u.get(u.def);
+      if (!ud || ud.kind === 'air') continue;
+      const ix = Math.floor(u.pos[0] / SECTOR_CELL.lng);
+      const iy = Math.floor(u.pos[1] / SECTOR_CELL.lat);
+      const key = Sim.cellKey(ix, iy);
+      let s = this.sectorByKey.get(key);
+      if (!s) {
+        const center: LngLat = [(ix + 0.5) * SECTOR_CELL.lng, (iy + 0.5) * SECTOR_CELL.lat];
+        s = {
+          ix,
+          iy,
+          team: this.side(center),
+          entrenchment: 0,
+          contested: false,
+          defenders: 0,
+          attackers: 0,
+        };
+        this.sectorByKey.set(key, s);
+      }
+      let o = occ.get(key);
+      if (!o) {
+        o = { defs: 0, atts: 0 };
+        occ.set(key, o);
+      }
+      if (u.team === s.team) o.defs++;
+      else o.atts++;
+    }
+
+    for (const [key, s] of this.sectorByKey.entries()) {
+      const o = occ.get(key);
+      s.defenders = o ? o.defs : 0;
+      s.attackers = o ? o.atts : 0;
+      s.contested = s.defenders > 0 && s.attackers > 0;
+
+      if (s.defenders > 0) {
+        if (s.attackers === 0) {
+          // Defenders occupying calmly: builds entrenchment to 1.0 (takes ~20s)
+          s.entrenchment = Math.min(1.0, s.entrenchment + dt * 0.05);
+        } else {
+          // Contested: holds ground; if attackers outnumber 2:1, entrenchment erodes under assault
+          if (s.attackers > s.defenders * 2) {
+            s.entrenchment = Math.max(0, s.entrenchment - dt * 0.03);
+          } else {
+            s.entrenchment = Math.min(1.0, s.entrenchment + dt * 0.01);
+          }
+        }
+      } else if (s.attackers > 0) {
+        // Sector cleared of defenders! Attackers establish control
+        s.entrenchment = Math.max(0, s.entrenchment - dt * 0.1);
+        if (s.entrenchment <= 0) {
+          // Flip sector to attacker side
+          s.team = (1 - s.team) as Team;
+          s.defenders = s.attackers;
+          s.attackers = 0;
+          s.contested = false;
+          s.entrenchment = 0.15;
+        }
+      } else {
+        // Empty sector: decay entrenchment
+        s.entrenchment = Math.max(0, s.entrenchment - dt * 0.02);
+        if (s.entrenchment <= 0) {
+          const center: LngLat = [(s.ix + 0.5) * SECTOR_CELL.lng, (s.iy + 0.5) * SECTOR_CELL.lat];
+          if (Math.abs(distToFrontKm(w.front, center)) > 20) {
+            this.sectorByKey.delete(key);
+          }
+        }
+      }
+    }
+  }
+
+  activeSectors(team?: Team): CombatSector[] {
+    const list: CombatSector[] = [];
+    for (const s of this.sectorByKey.values()) {
+      if (s.entrenchment > 0.05 || s.defenders > 0 || s.attackers > 0) {
+        list.push({
+          ix: s.ix,
+          iy: s.iy,
+          team: s.team,
+          entrenchment: Math.round(s.entrenchment * 100) / 100,
+          contested: s.contested,
+          defenders: s.defenders,
+          attackers: s.attackers,
+        });
+      }
+    }
+    return list;
+  }
+
   /** Work out the buffs and debuffs every unit is under right now (shown on markers and in the unit panel). */
   private refreshStatus() {
     const r = this.ruleset.rules;
@@ -1448,6 +1558,8 @@ export class Sim {
         if (city > 0) s.push(['citydefense', city]);
         if (u.transport) s.push(['transport', r.transportDamageMult]);
         if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
+        const sec = this.sectorAt(u.pos);
+        if (sec && sec.team === u.team && sec.entrenchment > 0.05) s.push(['entrenched', sec.entrenchment]);
       }
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
@@ -1788,15 +1900,30 @@ export class Sim {
     return u.aim > 0;
   }
 
-  /** Damage a ground unit actually takes from a hit, after terrain, fortifications, nearby cities and column order. */
-  private hitUnit(attacker: Unit, target: Unit, raw: number): number {
+  /** Damage a ground unit actually takes from a hit, after terrain, fortifications, nearby cities, sector entrenchment and column order. */
+  private hitUnit(attacker: Unit, target: Unit, raw: number, isBlast = false): number {
     const r = this.ruleset.rules;
     const td = this.defs.u.get(target.def)!;
     const air = td.kind === 'air';
     const cover = air ? 0 : this.terrainAt(target.pos).cover;
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
     const shaken = ((target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1) * (air ? 1 : this.crowdTaken(target));
-    const dealt = (raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
+
+    // Sector entrenchment defense:
+    // Defending ground units holding their friendly 2x2 km sector get up to 65% reduction against direct ground fire
+    // (survivability increased ~2.8x).
+    // Blasts (from strike drones, missiles, artillery) bypass direct-fire entrenchment!
+    let sectorMult = 1.0;
+    if (!air && !isBlast) {
+      const s = this.sectorAt(target.pos);
+      if (s && s.team === target.team && s.entrenchment > 0) {
+        const isFoot = (td.mobility ?? 'foot') === 'foot';
+        const maxRed = isFoot ? 0.65 : 0.40;
+        sectorMult = 1 - (s.entrenchment * maxRed);
+      }
+    }
+
+    const dealt = (raw * shaken * sectorMult * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
     target.lastHit = this.world.time;
     // being hit shakes a unit (more the harder the blow)
@@ -1820,11 +1947,15 @@ export class Sim {
 
   /** A blast (strike drone, shell) hurting everything of the other side within `radius` km, strongest at the centre. */
   private blast(attacker: Unit, at: LngLat, radius: number, damage: number, hitsCities: boolean): number {
+    const s = this.sectorAt(at);
+    if (s && s.entrenchment > 0) {
+      s.entrenchment = Math.max(0, s.entrenchment - Math.min(0.35, damage / 400));
+    }
     let total = 0;
     for (const e of this.world.units) {
       if (e.team === attacker.team || e.embarkedIn || e.parkedAt !== undefined || e.hp <= 0 || this.defs.u.get(e.def)!.kind === 'air') continue;
       const d = distKm(at, e.pos);
-      if (d <= radius) total += this.hitUnit(attacker, e, damage * (1 - d / radius));
+      if (d <= radius) total += this.hitUnit(attacker, e, damage * (1 - d / radius), true);
     }
     for (const b of this.world.buildings) {
       if (b.team === attacker.team || b.hp <= 0) continue;
@@ -2761,7 +2892,26 @@ export class Sim {
       for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) force[z.team] += r.greyZonePush;
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
-      return clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
+      let spd = clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
+
+      // Defending 2x2 km combat sectors anchor the frontline:
+      // An entrenched sector with defenders physically prevents the frontline from rolling over them
+      // unless attackers achieve overwhelming superiority (>= 2.5:1).
+      const sec = this.sectorAt(pos);
+      if (sec && sec.defenders > 0) {
+        if (spd > 0 && sec.team === 1) {
+          const ratio = sec.attackers / Math.max(1, sec.defenders);
+          if (ratio < 2.5) {
+            spd *= Math.max(0, 1 - (sec.entrenchment * 0.95));
+          }
+        } else if (spd < 0 && sec.team === 0) {
+          const ratio = sec.attackers / Math.max(1, sec.defenders);
+          if (ratio < 2.5) {
+            spd *= Math.max(0, 1 - (sec.entrenchment * 0.95));
+          }
+        }
+      }
+      return spd;
     };
 
     // neighbours share speed so the line bends instead of spiking

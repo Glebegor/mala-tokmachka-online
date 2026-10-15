@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  DEBUFFS, LIBERATED_CELL, SECTOR_CELL, distKm, distToFrontKm, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -495,7 +495,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing', 'sectors']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -544,6 +544,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } }, 'front-zone');
       map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } }, 'front-zone');
       map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } }, 'front-zone');
+      // tactical 2x2 km combat sectors: defense grid, entrenchment tint, and contested warnings
+      map.addLayer({
+        id: 'sectors-fill', type: 'fill', source: 'sectors',
+        paint: {
+          'fill-color': ['case', ['get', 'contested'], '#f59e0b', ['match', ['get', 'team'], 0, '#3b82f6', '#ef4444']],
+          'fill-opacity': ['case', ['get', 'contested'], 0.18, ['*', ['get', 'entrenchment'], 0.12]],
+        },
+      }, 'front-zone');
+      map.addLayer({
+        id: 'sectors-line', type: 'line', source: 'sectors', minzoom: 6.5,
+        paint: {
+          'line-color': ['case', ['get', 'contested'], '#f59e0b', '#64748b'],
+          'line-width': ['case', ['get', 'contested'], 1.6, 0.75],
+          'line-opacity': ['case', ['get', 'contested'], 0.75, 0.28],
+          'line-dasharray': [2, 2],
+        },
+      }, 'front-zone');
       // trench lines: a zig-zag in the side's colour on a dark casing (faded while being dug)
       // bridges: a wide light deck on a dark casing
       const isBridge: any = ['==', ['get', 'kind'], 'bridge'];
@@ -1738,6 +1755,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: staleIds.has(b.id) ? 0.45 : b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
     }
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
+    const sectorFeatures: any[] = [];
+    if (snap.sectors?.length) {
+      const { lng: cw, lat: ch } = SECTOR_CELL;
+      for (const sec of snap.sectors) {
+        const x0 = sec.ix * cw, y0 = sec.iy * ch;
+        const x1 = x0 + cw, y1 = y0 + ch;
+        sectorFeatures.push({
+          type: 'Feature',
+          properties: {
+            team: sec.team,
+            entrenchment: sec.entrenchment,
+            contested: sec.contested,
+            defenders: sec.defenders,
+            attackers: sec.attackers,
+          },
+          geometry: {
+            type: 'Polygon',
+            coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]],
+          },
+        });
+      }
+    }
+    (map.getSource('sectors') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: sectorFeatures } as any);
     const rings: any[] = [];
     // the selected building's rally point: a dashed line to a flag
     const rallyB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding && x.rally) : null;

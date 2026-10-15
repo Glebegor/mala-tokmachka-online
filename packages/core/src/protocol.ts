@@ -1,6 +1,6 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { BuildingView, FrontNode, Player, PlayerStats, Shot, Team, TimelinePoint, UnitView, CapturePoint } from './state';
+import type { BuildingView, CombatSector, FrontNode, Player, PlayerStats, Shot, Team, TimelinePoint, UnitView, CapturePoint } from './state';
 
 /** `ready`: the client has drawn the map; the start countdown waits for it. */
 /** Map marks a player shows their team: where they are going, what to hold, where there is trouble, what to look at. */
@@ -48,6 +48,7 @@ export interface SnapMsg {
   pockets: { id: number; team: Team; nodes: { lng: number; lat: number }[] }[];
   points: CapturePoint[];
   scores: [number, number];
+  sectors?: CombatSector[];
   /** Training orders at your side's buildings, in order; the first one per building is in progress. */
   queue: { id: number; building: number; unit: string; owner: string; remaining: number; total: number }[];
   /** Players who keep their buildings to themselves (teammates cannot use them). */

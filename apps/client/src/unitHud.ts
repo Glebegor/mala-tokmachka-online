@@ -1,4 +1,4 @@
-import { distKm, isReconDrone, isStrikeDrone, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
+import { distKm, isReconDrone, isStrikeDrone, SECTOR_CELL, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
 import { clear, h } from './dom';
 
 /** Picking state shared with the map: route = two clicks on buildings, barrage and launch = one click on the map. */
@@ -116,6 +116,20 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     const etas = list.map((u) => etaSeconds(u, c.defU.get(u.def)!, c.roadMult, c.pos(u)) ?? 0);
     const eta = Math.max(...etas);
     if (eta > 0) lines.push(`Arrives in ~${formatEta(eta)}`);
+  }
+  if (d0.kind !== 'air') {
+    const sec = c.snap.sectors?.find((s) => {
+      const ix = Math.floor(first.pos[0] / SECTOR_CELL.lng);
+      const iy = Math.floor(first.pos[1] / SECTOR_CELL.lat);
+      return s.ix === ix && s.iy === iy;
+    });
+    if (sec) {
+      if (sec.team === c.myTeam && sec.entrenchment > 0.05) {
+        lines.push(`🛡️ Sector defense: ${Math.round(sec.entrenchment * 65)}% cover (${sec.defenders} def / ${sec.attackers} att)`);
+      } else if (sec.contested) {
+        lines.push(`⚔️ Assaulting sector (${sec.attackers} att vs ${sec.defenders} def)`);
+      }
+    }
   }
   el.append(
     h('div', { class: 'hud-sec' },

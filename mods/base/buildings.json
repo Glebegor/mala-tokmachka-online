@@ -537,8 +537,7 @@
     "vision": 5,
     "storageCap": 5000,
     "launches": [
-      "strike",
-      "recon"
+      "strike"
     ]
   },
   {

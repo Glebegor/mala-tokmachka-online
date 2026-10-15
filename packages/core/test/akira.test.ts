@@ -176,3 +176,48 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   assert.equal(sim.apply('a', { type: 'build', def: 'mine', pos: [27.5, 53.9] }).ok, false, 'no building in Belarus');
   console.log(`support ok (crew at ${crew.pos.map((x) => x.toFixed(2))})`);
 }
+
+// --- 2x2 km combat sectors: entrenchment build-up, direct damage reduction, drone blast bypass, contested state ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const b = sim.player('b')!;
+  const hqA = hqOf(sim, 'a');
+  const posA = offsetKm(hqA.pos, 5, 0);
+
+  // 1. Sector entrenchment build-up
+  const defender = sim.spawnUnit('infantry', a, posA);
+  defender.fireMode = 'hold';
+  run(sim, 0.5); // initialize sector
+  const sec0 = sim.sectorAt(posA);
+  assert.ok(sec0, 'sector exists');
+  assert.equal(sec0.team, 0, 'sector belongs to friendly team');
+
+  run(sim, 20); // 20 s -> entrenchment builds to 1.0
+  const sec1 = sim.sectorAt(posA)!;
+  assert.ok(sec1.entrenchment >= 0.95, `entrenchment reached ~1.0 (was ${sec1.entrenchment})`);
+  assert.ok(defender.status.some(([s]) => s === 'entrenched'), 'defender gains entrenched status');
+
+  // 2. Direct fire damage reduction (infantry gets ~65% reduction at full entrenchment)
+  const attacker = sim.spawnUnit('infantry', b, offsetKm(posA, 0.5, 0));
+  attacker.fireMode = 'hold';
+  const hpBefore = defender.hp;
+  sim.hitUnit(attacker, defender, 100);
+  const dmgEntrenched = hpBefore - defender.hp;
+  assert.ok(Math.abs(dmgEntrenched - 35) <= 2, `entrenched direct damage reduced by 65% (took ${dmgEntrenched})`);
+
+  // 3. Drone / artillery blast bypasses entrenchment and degrades it
+  const hpBeforeBlast = defender.hp;
+  (sim as any).blast(attacker, defender.pos, 1.5, 50, false);
+  const dmgBlast = hpBeforeBlast - defender.hp;
+  assert.ok(dmgBlast >= 45, `blast bypasses direct-fire entrenchment cover (took ${dmgBlast})`);
+  assert.ok(sec1.entrenchment < 0.9, `blast degraded sector entrenchment (now ${sec1.entrenchment})`);
+
+  // 4. Sector contested state under enemy presence
+  const invader = sim.spawnUnit('tank', b, posA);
+  run(sim, 0.5);
+  const secContested = sim.sectorAt(posA)!;
+  assert.equal(secContested.contested, true, 'sector with enemy presence is contested');
+
+  console.log('combat sectors ok: entrenchment, 65% direct damage reduction, blast bypass and contested status');
+}
