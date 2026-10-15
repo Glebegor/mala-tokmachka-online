@@ -35,7 +35,7 @@ export function inPolygon(p: LngLat, ring: LngLat[]): boolean {
 }
 
 /** Rings for the non-playable neighbours, stitched from the map's border lines. */
-function forbiddenRings(map: MapDef): LngLat[][] {
+export function forbiddenRings(map: MapDef): LngLat[][] {
   const byName: Record<string, LngLat[]> = {};
   for (const f of map.borders?.features ?? []) if (f.properties?.type === 'border' && f.geometry?.coordinates) byName[f.properties.name] = f.geometry.coordinates;
   const rings: LngLat[][] = [];
@@ -612,6 +612,8 @@ export class Sim {
         } else if (d.id === 'military_base') {
           const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
           if (!hasHq) return fail('must place military HQ first');
+          if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
+          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
           const clash = w.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, cmd.pos) < 20);
           if (clash) return fail('keep at least 20 km from other military bases');
         } else {

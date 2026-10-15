@@ -60,6 +60,46 @@ function findBotHqPos(sim: Sim, team: Team): LngLat {
   return spawns && spawns[0] ? spawns[0] : (team === 0 ? [26.0, 49.5] : [41.0, 48.0]);
 }
 
+/** Finds a location for a military base across team territory, prioritizing 20-80 km from the front line */
+function findBotMilitaryBasePos(sim: Sim, team: Team): LngLat | null {
+  const roads = sim.roads?.nodes ?? [];
+  const front = sim.world.front;
+  const isDry = (pt: LngLat) => sim.isPlayableGround(pt) && sim.terrainAt(pt).id !== 'water';
+  const existingBases = sim.world.buildings.filter((b) => b.def === 'military_base');
+  const farFromBases = (pt: LngLat) => !existingBases.some((b) => distKm(b.pos, pt) < 20);
+
+  const priorityCandidates: LngLat[] = [];
+  const allCandidates: LngLat[] = [];
+  const step = Math.max(1, Math.floor(roads.length / 2500));
+
+  for (let i = 0; i < roads.length; i += step) {
+    const pt = roads[i];
+    if (!isDry(pt) || sim.side(pt) !== team || !farFromBases(pt)) continue;
+    const d = distToFrontKm(front, pt);
+    const dist = team === 0 ? d : -d;
+    if (dist < 5) continue; // avoid active front edge
+
+    allCandidates.push(pt);
+    // Priority zone: 20-80 km from the front line
+    if (dist >= 20 && dist <= 80) {
+      priorityCandidates.push(pt);
+    }
+  }
+
+  const list = priorityCandidates.length ? priorityCandidates : allCandidates;
+  if (!list.length) return null;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const pick = list[Math.floor(Math.random() * list.length)];
+    const ang = Math.random() * Math.PI * 2;
+    const r = 0.05 + Math.random() * 0.15;
+    const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
+    if (isDry(nudged) && sim.side(nudged) === team && farFromBases(nudged)) return nudged;
+    if (farFromBases(pick)) return pick;
+  }
+  return list[0];
+}
+
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
   private step = 0;
@@ -95,43 +135,13 @@ export class Bot {
       sim.apply(p.id, { type: 'build', def: 'hq', pos: hqPos });
       return;
     }
-    const fn = w.front[nearestNode(w.front, hq.pos)];
-    const frontPos: LngLat = [fn.lng, fn.lat];
 
-    for (let k = 0; k < BUILD_ORDER.length; k++) {
-      const def = BUILD_ORDER[(this.step + k) % BUILD_ORDER.length];
-      const d = sim.defs.b.get(def);
-      if (!d) continue;
-      if (!sim.canPay(p, d.cost)) continue;
-      // a few field works of each kind are plenty; the money is better spent on the economy
-      if (d.fieldWork && mine.filter((b) => b.def === def).length >= 6) continue;
-      for (let attempt = 0; attempt < 14; attempt++) {
-        const ang = Math.random() * Math.PI * 2;
-        let base = hq.pos;
-        let r = 2 + Math.random() * 12;
-        if (def === 'military_base') {
-          // military base: placed toward the front or around HQ, keeping >= 20 km from other bases
-          base = moveToward(hq.pos, frontPos, 30 + Math.random() * 80);
-          r = 5 + Math.random() * 25;
-        } else if (def === 'housing') {
-          // housing goes inside a city we hold, as near home as possible
-          const cities = sim.map.capturePoints.filter((cp, i) => w.points[i].owner === p.team).sort((a, b) => distKm(a.pos, hq.pos) - distKm(b.pos, hq.pos));
-          const cp = cities[attempt % Math.max(1, Math.min(4, cities.length))];
-          if (!cp) break;
-          base = cp.pos;
-          r = Math.random() * 2.5;
-        } else if (d.fieldWork) {
-          // field works go up between the HQ and the front
-          base = moveToward(hq.pos, frontPos, Math.max(0, distKm(hq.pos, frontPos) - 6 - Math.random() * 10));
-        } else {
-          // industry needs its own patch: spread out well away from other sites
-          r = sim.ruleset.rules.minBuildSpacing + 1 + Math.random() * 45;
-        }
-        const pos = offsetKm(base, Math.cos(ang) * r, Math.sin(ang) * r);
-        if (sim.apply(p.id, { type: 'build', def, pos }).ok) {
-          this.step = (this.step + k + 1) % BUILD_ORDER.length;
-          return;
-        }
+    // Build military bases across team territory, prioritizing 20-80 km from front
+    const mbDef = sim.defs.b.get('military_base');
+    if (mbDef && sim.canPay(p, mbDef.cost)) {
+      const pos = findBotMilitaryBasePos(sim, p.team);
+      if (pos) {
+        sim.apply(p.id, { type: 'build', def: 'military_base', pos });
       }
     }
   }

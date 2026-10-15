@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, forbiddenRings, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -363,6 +363,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return inOccupied(snap!.front, init!.map.occupiedClosure, p) ? 1 : 0;
   }
 
+  let forbidden: LngLat[][] = [];
+  function foreignAt(p: LngLat): boolean {
+    return forbidden.some((r) => inPolygon(p, r));
+  }
+
   /** Show a description card beside `el` while the pointer is over it. */
   function describe(el: HTMLElement, title: string, text: string | undefined, facts: string[], side: 'right' | 'left') {
     el.addEventListener('mouseenter', () => {
@@ -398,6 +403,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           const rings: LngLat[][] = f.geometry?.type === 'Polygon' ? [f.geometry.coordinates[0]] : f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates.map((x: any) => x[0]) : [];
           if (id) for (const r of rings) if (r?.length >= 3) cityPolys.set(id, [...(cityPolys.get(id) ?? []), r]);
         }
+        forbidden = forbiddenRings(msg.map);
         document.getElementById('mod-theme')!.textContent = msg.ruleset.themes.map((t) => t.css).join('\n');
         terrainBtn.style.display = terrain ? '' : 'none';
         modeBadge.style.display = msg.ruleset.rules.sandbox ? '' : 'none';
@@ -1150,6 +1156,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     if (def.id === 'military_base') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
+      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (!myHq) return 'Сначала необходимо построить Военный штаб';
       const clash = snap.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, p) < 20);
