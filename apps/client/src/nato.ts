@@ -31,6 +31,8 @@ export interface NatoSpec {
   /** Number of buffs / debuffs shown as pips on the left of the frame. */
   buffs?: number;
   debuffs?: number;
+  /** Conditional strength multiplier (shown as badge e.g. "2" when > 1). */
+  strength?: number;
 }
 
 export function natoId(s: NatoSpec): string {
@@ -55,6 +57,7 @@ export interface NatoLayers {
   ovPips: string;
   ovEch: string;
   ovRing: string;
+  ovStr: string;
 }
 export function natoLayers(s: NatoSpec): NatoLayers {
   const h = s.hostile ? 'h' : 'f';
@@ -65,12 +68,13 @@ export function natoLayers(s: NatoSpec): NatoLayers {
     ovPips: b + d > 0 ? `no|pips|${h}|${b}|${d}` : '',
     ovEch: s.echelon ? `no|ech|${h}|${s.echelon}` : '',
     ovRing: s.encircled ? `no|ring|${h}` : '',
+    ovStr: (s.strength ?? 1) > 1 ? `no|str|${h}|${s.strength}` : '',
   };
 }
 /** Paint a base or overlay image from its id (see `natoLayers`); null if the id is not a marker image. */
 export function drawNatoImage(id: string): ImageData | null {
   const f = id.split('|');
-  const none: NatoParts = { base: false, echelon: false, ring: false, pips: false, rank: false };
+  const none: NatoParts = { base: false, echelon: false, ring: false, pips: false, rank: false, strength: false };
   const blank: NatoSpec = { hostile: f[1] === 'h', color: '#000000', symbol: '', echelon: '', rank: 0, selected: false, own: false, transport: false };
   if (f[0] === 'nb') {
     return drawNato({ ...blank, color: f[2], symbol: f[3], selected: f[4] === '1', own: f[5] === '1', transport: f[6] === '1', mobility: f[7] ?? '' }, { ...none, base: true });
@@ -81,6 +85,7 @@ export function drawNatoImage(id: string): ImageData | null {
   if (f[1] === 'pips') return drawNato({ ...blank, hostile, buffs: Number(f[3]), debuffs: Number(f[4]) }, { ...none, pips: true });
   if (f[1] === 'ech') return drawNato({ ...blank, hostile, echelon: f[3] }, { ...none, echelon: true });
   if (f[1] === 'ring') return drawNato({ ...blank, hostile, encircled: true }, { ...none, ring: true });
+  if (f[1] === 'str') return drawNato({ ...blank, hostile, strength: Number(f[3]) }, { ...none, strength: true });
   return null;
 }
 
@@ -107,8 +112,9 @@ export interface NatoParts {
   ring: boolean;
   pips: boolean;
   rank: boolean;
+  strength: boolean;
 }
-const ALL: NatoParts = { base: true, echelon: true, ring: true, pips: true, rank: true };
+const ALL: NatoParts = { base: true, echelon: true, ring: true, pips: true, rank: true, strength: true };
 
 export function drawNato(spec: NatoSpec, parts: NatoParts = ALL): ImageData {
   const c = document.createElement('canvas');
@@ -391,6 +397,30 @@ export function drawNato(spec: NatoSpec, parts: NatoParts = ALL): ImageData {
           g.stroke();
         }
       }
+    }
+  }
+  if (parts.strength) {
+    // strength badge: small pill/box with the unit/formation strength multiplier (e.g. "2")
+    if (spec.strength && spec.strength > 1) {
+      const bx = spec.hostile ? cx + hw * 0.65 + 3 : cx + hw - 1;
+      const by = spec.hostile ? cy - hh * 0.65 - 3 : cy - hh - 3;
+      const strText = String(spec.strength);
+      g.font = '700 9px ui-monospace, Menlo, monospace';
+      g.textAlign = 'center';
+      g.textBaseline = 'middle';
+      const textWidth = g.measureText(strText).width;
+      const rw = Math.max(12, textWidth + 5);
+      const rh = 11;
+      g.fillStyle = INK;
+      g.strokeStyle = '#ffd84a';
+      g.lineWidth = 1.2;
+      g.beginPath();
+      g.roundRect(bx - rw / 2, by - rh / 2, rw, rh, 3);
+      g.fill();
+      g.stroke();
+
+      g.fillStyle = '#ffffff';
+      g.fillText(strText, bx, by + 0.5);
     }
   }
   return g.getImageData(0, 0, SIZE * 2, SIZE * 2);

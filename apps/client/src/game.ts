@@ -787,7 +787,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             layout: { 'icon-image': ['get', prop], 'icon-size': size, 'icon-allow-overlap': true, 'icon-ignore-placement': true, 'symbol-sort-key': ['get', 'z'] },
           } as any);
         layer(id, 'icon', filter);
-        for (const ov of ['ovRing', 'ovPips', 'ovRank', 'ovEch']) layer(`${id}-${ov}`, ov, ['all', filter, ['!=', ['coalesce', ['get', ov], ''], '']]);
+        for (const ov of ['ovRing', 'ovPips', 'ovRank', 'ovEch', 'ovStr']) layer(`${id}-${ov}`, ov, ['all', filter, ['!=', ['coalesce', ['get', ov], ''], '']]);
       };
       symbol('units-loose', ['all', ['!', ['get', 'grp']], ['!', ['get', 'air']]], { minzoom: GROUP_ZOOM });
       symbol('units-grouped', ['all', ['get', 'grp'], ['!', ['get', 'air']]], { minzoom: GROUP_ZOOM });
@@ -924,7 +924,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!selUnits.size) return;
       // a right press on the map is finished on release (a drag there sets which way the formation faces)
       if (faceDrag || performance.now() - faceDone < 400) return;
-      moveOrder([e.lngLat.lng, e.lngLat.lat], e.originalEvent);
+      dispatchRightClick([e.lngLat.lng, e.lngLat.lat], e.point, e.originalEvent);
     });
     // right press, drag the way the front should face, release: the group forms up there facing that way
     mapEl.addEventListener('mousedown', (e) => {
@@ -944,10 +944,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     window.addEventListener('mouseup', (e) => {
       if (e.button !== 2 || !faceDrag) return;
       const { to, facing } = faceDrag;
+      const r = mapEl.getBoundingClientRect();
+      const pt = { x: e.clientX - r.left, y: e.clientY - r.top };
       faceDrag = null;
       faceDone = performance.now();
       drawFacing();
-      moveOrder(to, e, facing);
+      dispatchRightClick(to, pt, e, facing);
     });
     window.addEventListener('keydown', onKey);
 
@@ -961,8 +963,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     window.addEventListener('mouseup', onBoxUp);
   }
 
-  /** Move the selection (Shift queues another waypoint, Alt goes straight across country, ready to fight). */
-  function moveOrder(to: LngLat, ev: { shiftKey: boolean; altKey: boolean }, facing?: number) {
+  /** Right-click dispatcher: reinforces frontline garrison when clicked on one, otherwise moves selection. */
+  function dispatchRightClick(to: LngLat, screenPt: { x: number; y: number }, ev: { shiftKey: boolean; altKey: boolean }, facing?: number) {
     if (!snap || !selUnits.size) return;
     const s = snap;
     const movable = [...selUnits].filter((id) => {
@@ -970,9 +972,40 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       return u && u.owner === me && !defU.get(u.def)?.stationary && !u.owner.startsWith('__front_');
     });
     if (!movable.length) return;
-    // a facing only means something for a line, column or wedge: with a loose spread it lines them up
+
+    // If it's a simple right click (not dragging a formation facing arrow):
+    const myTeam = init?.team;
+    if (facing === undefined && myTeam !== undefined) {
+      const layers = ['units-loose', 'units-grouped', 'formations'].filter((l) => map.getLayer(l));
+      const features = map.queryRenderedFeatures([[screenPt.x - 16, screenPt.y - 16], [screenPt.x + 16, screenPt.y + 16]], { layers });
+      let tgtFront: UnitView | undefined;
+      for (const f of features) {
+        const hid = Number(f.properties?.id);
+        if (hid) {
+          const u = s.units.find((x) => x.id === hid && x.team === myTeam);
+          if (u && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry')) {
+            tgtFront = u;
+            break;
+          }
+        }
+      }
+      if (!tgtFront) {
+        tgtFront = s.units.find((u) => u.team === myTeam && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry') && distKm(posOf(u), to) <= 1.8);
+      }
+      if (tgtFront) {
+        send({ type: 'reinforce', units: movable, targetUnit: tgtFront.id });
+        toast('Отряд направлен на укрепление позиции');
+        return;
+      }
+    }
+
     const shape = facing !== undefined && orders.formation === 'spread' ? 'line' : orders.formation;
     send({ type: 'move', units: movable, to, cohesion: formation && movable.length > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast', attack: orders.attack, formation: shape, facing });
+  }
+
+  /** Move the selection (Shift queues another waypoint, Alt goes straight across country, ready to fight). */
+  function moveOrder(to: LngLat, ev: { shiftKey: boolean; altKey: boolean }, facing?: number) {
+    dispatchRightClick(to, map ? map.project(to) : { x: 0, y: 0 }, ev, facing);
   }
 
   /** Degrees from north, clockwise, from a to b. */
@@ -2006,20 +2039,42 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const u = mine[0];
         const d = defU.get(u.def)!;
         const isOwn = u.owner === me;
-        const sub = d.squadSize ? `Численность: ${d.squadSize} бойцов` : (rk[u.rank]?.name ?? '');
-        side.append(
-          h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, sub))),
-          h('div', { class: 'stat' }, `Здоровье: ${u.hp} / ${Math.round(maxHp(u))}${u.morale !== undefined ? ` · Мораль: ${u.morale}` : ''}`),
-        );
-        if (d.damage > 0) side.append(h('div', { class: 'stat' }, `Урон: ${d.damage}/с · Дальность: ${d.range} км · Обзор: ${d.vision} км`));
-        if (d.maxAmmo) side.append(h('div', { class: 'stat' + ((u.ammo ?? 0) < (d.ammoPerShot ?? 1) ? ' warn' : '') }, `Боезапас: ${u.ammo ?? 0}/${d.maxAmmo}`));
-        if (d.description) side.append(h('div', { class: 'muted', style: { marginTop: '8px', lineHeight: '1.4' } }, d.description));
-        if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Движется в учебный центр'));
-        if (!isOwn) {
-          side.append(h('div', { class: 'stat', style: { color: '#8ec5fc', marginTop: '10px' } }, '🛡️ Гарнизон фронта (не подчиняется приказам)'));
+        const isFrontGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+        const squadCount = u.squadSize ?? d.squadSize ?? (isFrontGarrison ? 100 : 20);
+
+        if (isFrontGarrison) {
+          side.append(
+            h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, 'Пехотный рубеж'), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
+            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${u.ammo ?? 100}%`),
+            h('div', { class: 'stat', style: { color: '#8ec5fc', marginTop: '6px' } }, '🛡️ Гарнизон фронта (удерживает рубеж)'),
+            h('div', { class: 'muted', style: { marginTop: '8px', fontSize: '12px' } }, 'ПКМ своим отрядом пехоты по этой позиции для отправки на укрепление.'),
+          );
+        } else if (u.def === 'infantry') {
+          side.append(
+            h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
+            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${u.ammo ?? 100}%`),
+            h('div', { class: 'muted', style: { marginTop: '8px', fontSize: '12px' } }, 'ПКМ по отряду на фронте — отправить на укрепление позиции.'),
+          );
+          if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Движется в учебный центр'));
+        } else {
+          const sub = d.squadSize ? `Численность: ${squadCount} бойцов` : (rk[u.rank]?.name ?? '');
+          side.append(
+            h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, sub))),
+            h('div', { class: 'stat' }, `Здоровье: ${u.hp} / ${Math.round(maxHp(u))}${u.morale !== undefined ? ` · Мораль: ${u.morale}` : ''}`),
+          );
+          if (d.damage > 0) side.append(h('div', { class: 'stat' }, `Урон: ${d.damage}/с · Дальность: ${d.range} км · Обзор: ${d.vision} км`));
+          if (d.maxAmmo) side.append(h('div', { class: 'stat' + ((u.ammo ?? 0) < (d.ammoPerShot ?? 1) ? ' warn' : '') }, `Боезапас: ${u.ammo ?? 0}/${d.maxAmmo}`));
+          if (d.description) side.append(h('div', { class: 'muted', style: { marginTop: '8px', lineHeight: '1.4' } }, d.description));
+          if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Движется в учебный центр'));
+          if (!isOwn) {
+            side.append(h('div', { class: 'stat', style: { color: '#8ec5fc', marginTop: '10px' } }, '🛡️ Гарнизон фронта (не подчиняется приказам)'));
+          }
         }
         effects = u.status.map(([id, v]) => ({ id, v, n: 1 }));
       } else {
+        const totalStr = mine.reduce((sum, u) => sum + (u.strength ?? 1), 0);
+        const totalMen = mine.reduce((sum, u) => sum + (u.squadSize ?? defU.get(u.def)?.squadSize ?? 20), 0);
+        side.append(h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', marginBottom: '8px' } }, `Общая сила: ${totalStr} · Всего бойцов: ${totalMen}`));
         const by = new Map<string, UnitView[]>();
         mine.forEach((u) => by.set(u.def, [...(by.get(u.def) ?? []), u]));
         for (const [k, us] of by) {
@@ -2201,7 +2256,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const symbol = kinds.size === 1 ? [...kinds][0] : kinds.has('armor') && kinds.has('infantry') ? 'mechanized' : [...kinds].sort((a, b) => us.filter((u) => defU.get(u.def)?.symbol === b).length - us.filter((u) => defU.get(u.def)?.symbol === a).length)[0];
       const sel = us.every((u) => selUnits.has(u.id)) && selUnits.size === us.length;
       const rank = Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length);
-      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, ...natoLayers({ hostile: false, color: relColor('own'), symbol, mobility: sharedMobility(us), echelon: echelonFor(us.length), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length }) }, geometry: { type: 'Point', coordinates: c } });
+      const totalStrength = us.reduce((sum, u) => sum + (u.strength ?? 1), 0);
+      formations.push({ type: 'Feature', properties: { gid: g.id, own: true, z: sel ? 3 : 2, ...natoLayers({ hostile: false, color: relColor('own'), symbol, mobility: sharedMobility(us), echelon: echelonFor(totalStrength), rank, selected: sel, own: true, transport: us.filter((u) => u.transport).length * 2 > us.length, strength: totalStrength > 1 ? totalStrength : undefined }) }, geometry: { type: 'Point', coordinates: c } });
     }
     // zoomed out, everything else is merged into formation markers per ~30 km cell (mine / allied / hostile kept apart)
     const cells = new Map<string, UnitView[]>();
@@ -2217,9 +2273,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       us.forEach((u) => count.set(defU.get(u.def)?.symbol ?? 'infantry', (count.get(defU.get(u.def)?.symbol ?? 'infantry') ?? 0) + 1));
       const symbol = count.has('armor') && count.has('infantry') ? 'mechanized' : [...count].sort((a, b) => b[1] - a[1])[0][0];
       const sel = own && us.every((u) => selUnits.has(u.id));
+      const totalStrength = us.reduce((sum, u) => sum + (u.strength ?? 1), 0);
       formations.push({
         type: 'Feature',
-        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, ...natoLayers({ hostile: us[0].team !== myTeam, color: relColor(relOf(us[0])), symbol, mobility: sharedMobility(us), echelon: us.length > 1 ? echelonFor(us.length) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length }) },
+        properties: { own, ids: own ? JSON.stringify(us.map((u) => u.id)) : '', z: sel ? 3 : own ? 2 : 1, ...natoLayers({ hostile: us[0].team !== myTeam, color: relColor(relOf(us[0])), symbol, mobility: sharedMobility(us), echelon: totalStrength > 1 ? echelonFor(totalStrength) : '', rank: Math.round(us.reduce((a, u) => a + u.rank, 0) / us.length), selected: sel, own, transport: us.filter((u) => u.transport).length * 2 > us.length, strength: totalStrength > 1 ? totalStrength : undefined }) },
         geometry: { type: 'Point', coordinates: centroid(us) },
       });
     }
@@ -2551,7 +2608,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           // a strike drone shrinks as it dives on the last 18 km
           if (isStrikeDrone(d) && u.target) scale = Math.min(1, 0.45 + 0.55 * (distKm(pos, u.target) / 18));
         } else {
-          const l = natoLayers({ hostile: u.team !== myTeam, color: relColor(relOf(u)), symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length });
+          const l = natoLayers({ hostile: u.team !== myTeam, color: relColor(relOf(u)), symbol: d?.symbol ?? 'infantry', mobility: mobilityOf(d), echelon: '', rank: u.rank, selected: sel, own, transport: u.transport, encircled: u.encircled, buffs: u.status.filter((x) => !DEBUFFS.has(x[0])).length, debuffs: u.status.filter((x) => DEBUFFS.has(x[0])).length, strength: u.strength });
           ({ icon, ...layers } = l);
         }
         return { type: 'Feature', properties: { id: u.id, own, grp: grouped.has(u.id), air, icon, ...layers, bearing, scale, z: sel ? 4 : air ? 3 : own ? 2 : 1 }, geometry: { type: 'Point', coordinates: pos } };

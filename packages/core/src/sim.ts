@@ -213,6 +213,10 @@ export class Sim {
       const t = segLen > 0 ? (s - cum[seg]) / segLen : 0;
       const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
 
+      // Exclude Dnipro river / reservoir front line (from Black Sea up to Stepnohirsk at ~35.35°E)
+      const isDnipro = pt[0] < 35.35 && pt[1] < 47.7;
+      if (isDnipro) continue;
+
       const [nx, ny] = normalAt(front, seg);
 
       // Distance from front line: 0.9 km behind the front into friendly territory
@@ -252,6 +256,11 @@ export class Sim {
       team,
       pos,
       hp: d.hp, // 5000 HP (100 soldiers)
+      strength: 1,
+      squadSize: d.squadSize ?? 100,
+      morale: 100,
+      ammo: 100,
+      skirmishTimer: 1 + Math.random() * 8,
       target: null,
       cooldown: 0,
       xp: 0,
@@ -298,6 +307,8 @@ export class Sim {
       id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0,
       transport: false, encircled: false, infil: 0, status: [], enter: 0, path: [], cap: 0,
       fireMode: 'auto',
+      strength: 1,
+      squadSize: d.squadSize,
       morale: d.kind === 'air' ? undefined : 100,
       // players' troops stay where they are put; bots go after what they see
       stance: p.bot ? 'aggressive' : 'hold',
@@ -307,7 +318,7 @@ export class Sim {
       stamina: d.kind === 'ground' && (d.mobility ?? 'foot') === 'foot' && !d.maxFuel ? 100 : undefined,
       fuel: d.maxFuel,
       maxFuel: d.maxFuel,
-      ammo: d.maxAmmo || undefined,
+      ammo: d.maxAmmo || (d.kind === 'ground' ? 100 : undefined),
       cargo: d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [], drones: d.droneCap ? [] : undefined } : undefined,
       // recon drones circle where they are until told otherwise
       loiterCenter: recon ? [pos[0], pos[1]] : undefined,
@@ -927,6 +938,26 @@ export class Sim {
         const moved = this.orderMove(mine, targetPos, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation, facing);
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
       }
+      case 'reinforce': {
+        const tgt = w.units.find((u) => u.id === cmd.targetUnit && u.team === p.team && u.hp > 0);
+        if (!tgt) return fail('target garrison not found or destroyed');
+        const set = new Set(cmd.units);
+        const mine = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !this.defs.u.get(u.def)?.stationary && !u.owner.startsWith('__front_'));
+        if (!mine.length) return fail('no eligible units to reinforce');
+        for (const u of mine) {
+          u.reinforceTarget = tgt.id;
+          if (u.frontPost) {
+            const prev = w.posts.find((x) => x.id === u.frontPost);
+            if (prev) prev.garrison = prev.garrison.filter((x) => x !== u.id);
+          }
+          u.frontPost = undefined;
+          u.targetPost = undefined;
+          u.stance = 'hold';
+          u.chase = undefined;
+          this.orderMove([u], tgt.pos, false, false, false, 'spread');
+        }
+        return ok();
+      }
       case 'rally': {
         const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
         if (!b || !this.defs.b.get(b.def)!.trains?.length) return fail('not a production building');
@@ -977,7 +1008,7 @@ export class Sim {
         const set = new Set(cmd.units);
         for (const u of w.units) {
           if (!set.has(u.id) || u.owner !== p.id) continue;
-          (u.target = null), (u.path = []), (u.cap = 0), (u.transport = false), (u.enter = 0), (u.haul = undefined), (u.bombardTarget = null), (u.fuelTo = undefined);
+          (u.target = null), (u.path = []), (u.cap = 0), (u.transport = false), (u.enter = 0), (u.haul = undefined), (u.bombardTarget = null), (u.fuelTo = undefined), (u.reinforceTarget = undefined);
           // a recon drone told to stop circles where it is
           if (isReconDrone(this.defs.u.get(u.def))) (u.loiterCenter = [u.pos[0], u.pos[1]]), (u.loiterRadius = 4), (u.isLoitering = true);
         }
@@ -2677,6 +2708,60 @@ export class Sim {
           }
         } else if (!chase && u.stance === 'defend' && distKm(u.pos, post) > 0.3) this.stepOffRoad(u, d, post, d.speed * dt);
       }
+      if (u.reinforceTarget) {
+        const tgt = w.units.find((x) => x.id === u.reinforceTarget && x.hp > 0);
+        if (!tgt) {
+          u.reinforceTarget = undefined;
+        } else if (distKm(u.pos, tgt.pos) <= 0.8) {
+          tgt.strength = (tgt.strength ?? 1) + (u.strength ?? 1);
+          const addedSquad = u.squadSize ?? (this.defs.u.get(u.def)?.squadSize ?? 20);
+          tgt.squadSize = (tgt.squadSize ?? (this.defs.u.get(tgt.def)?.squadSize ?? 100)) + addedSquad;
+          const maxTargetHp = (this.defs.u.get(tgt.def)?.hp ?? 5000) * (tgt.strength ?? 1);
+          tgt.hp = Math.min(maxTargetHp, tgt.hp + u.hp);
+          tgt.morale = Math.min(100, (tgt.morale ?? 100) + 20);
+          tgt.ammo = Math.min(100, (tgt.ammo ?? 100) + 30);
+          u.hp = 0;
+          u.reinforceTarget = undefined;
+          this.hooks.emit('unitMerged', { sourceId: u.id, targetId: tgt.id, strength: tgt.strength, squadSize: tgt.squadSize });
+        }
+      }
+
+      // Random periodic skirmish fire between opposing frontline garrisons across the line
+      const isFrontlineUnit = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+      if (isFrontlineUnit && !peace && u.hp > 0) {
+        if (u.skirmishTimer === undefined) {
+          u.skirmishTimer = 1 + Math.random() * 8;
+        } else {
+          u.skirmishTimer -= dt;
+          if (u.skirmishTimer <= 0) {
+            u.skirmishTimer = 3 + Math.random() * 9;
+            let enemyGarrison: Unit | null = null;
+            let bestDist = 2.8;
+            this.near(this.unitGrid, u.pos, 2.8, (e) => {
+              if (e.team !== u.team && e.hp > 0 && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))) {
+                const dist = distKm(u.pos, e.pos);
+                if (dist < bestDist) {
+                  bestDist = dist;
+                  enemyGarrison = e;
+                }
+              }
+            });
+            if (enemyGarrison) {
+              const eg: Unit = enemyGarrison;
+              this.shots.push({ def: u.def, team: u.team, from: u.pos, to: eg.pos });
+              const dmg = 5 + Math.floor(Math.random() * 15);
+              eg.hp = Math.max(100, eg.hp - dmg);
+              eg.lastHit = this.world.time;
+              if (u.ammo !== undefined && u.ammo > 10) u.ammo -= 1;
+            }
+          }
+        }
+        if (w.tick % (r.tickRate * 10) === u.id % (r.tickRate * 10)) {
+          if ((u.ammo ?? 100) < 100) u.ammo = Math.min(100, (u.ammo ?? 0) + 3);
+          if ((u.morale ?? 100) < 100) u.morale = Math.min(100, (u.morale ?? 0) + 2);
+        }
+      }
+
       if (d.kind !== 'air') u.still = u.pos[0] === was0 && u.pos[1] === was1 ? (u.still ?? 0) + dt : 0;
       if (!u.path.length && !tu && !tb && u.retreatAt && !u.retreating && d.kind !== 'air' && w.tick % r.tickRate === u.id % r.tickRate && u.hp < this.maxHp(u) * u.retreatAt) this.fallBack(u);
     }

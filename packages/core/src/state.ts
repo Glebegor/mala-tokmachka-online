@@ -186,6 +186,14 @@ export interface Unit {
   frontPost?: number;
   /** ID of the frontline garrison post this unit is ordered to move to and garrison. */
   targetPost?: number;
+  /** Combat strength level (e.g. 1, 2, 3...). Default 1. */
+  strength?: number;
+  /** Actual combatants in unit/squad (e.g. 20 for regular squad, 100 for frontline garrison). */
+  squadSize?: number;
+  /** Time until next random frontline skirmish shot. */
+  skirmishTimer?: number;
+  /** Target frontline garrison unit to reinforce and merge into upon arrival. */
+  reinforceTarget?: number;
 }
 
 /**

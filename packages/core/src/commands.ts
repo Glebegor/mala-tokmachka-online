@@ -55,6 +55,8 @@ export type Command =
   /** Advance immediately from current haul stop without waiting for full load. */
   | { type: 'departNow'; unit: number }
   /** Dispatch drones waiting at a factory to fly to the nearest launch site / airfield. */
-  | { type: 'dispatchDrones'; building: number; targetLauncher?: number };
+  | { type: 'dispatchDrones'; building: number; targetLauncher?: number }
+  /** Send units to reinforce and merge into a friendly frontline garrison squad. */
+  | { type: 'reinforce'; units: number[]; targetUnit: number };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

@@ -20,7 +20,9 @@ assert.ok(sim.world.units.length > 100, `frontline infantry deployed along the f
 assert.ok(sim.world.units.every((u) => u.owner.startsWith('__front_')), 'all initial units are autonomous frontline garrisons');
 assert.ok(sim.world.units.every((u) => u.hp === 5000), 'all frontline squads have 100 soldiers (5000 HP)');
 assert.ok(sim.world.units.every((u) => u.stance === 'hold'), 'all frontline squads have stance: hold (stand in place)');
-console.log(`✓ Frontline garrisons: ${sim.world.units.length} squads deployed along the front line (100 soldiers each, hold stance)`);
+assert.ok(sim.world.units.every((u) => !(u.pos[0] < 35.35 && u.pos[1] < 47.7)), 'no frontline units deployed along Dnipro river / reservoir');
+assert.ok(sim.world.units.every((u) => (u.strength ?? 1) === 1 && (u.morale ?? 100) === 100 && (u.ammo ?? 100) === 100), 'all frontline squads have strength=1, morale=100, ammo=100');
+console.log(`✓ Frontline garrisons: ${sim.world.units.length} squads deployed along overland front line (Dnipro excluded, strength/morale/ammo verified)`);
 
 // 2. Resources: Money (10k start) and Ore (cap 5000)
 assert.equal(rs.resources.length, 2, '2 resources defined: money and ore');
@@ -227,7 +229,9 @@ console.log('✓ Mine: strictly inside iron deposits, accumulates ore in storage
 
 // 10. Oil Rig placement (only on oil deposits) & max 1 per player
 sim.player('player1')!.res.money = 50000;
-const nonOilPos: [number, number] = [28.0, 50.0];
+let scanX = 24.0;
+while (inDeposit('oil', [scanX, 49.0], 0, sim.deposits) !== null) scanX += 0.5;
+const nonOilPos: [number, number] = [scanX, 49.0];
 assert.equal(inDeposit('oil', nonOilPos, 0, sim.deposits), null, 'pos is not on oil deposit');
 const oilRigFail = sim.apply('player1', { type: 'build', def: 'oil_rig', pos: nonOilPos });
 assert.equal(oilRigFail.ok, false, 'oil rig rejected outside oil deposit');
@@ -575,7 +579,7 @@ assert.ok(moveForeign.reason.includes('foreign'), `Error mentions foreign territ
 // Frontline infantry squads: 100 soldiers, cannot be ordered by player, stand in place
 const flSquad = sim.world.units.find((u) => u.owner === '__front_0')!;
 assert.ok(flSquad, 'Frontline garrison squad exists');
-assert.equal(flSquad.hp, 5000, 'Frontline garrison squad has 5000 HP (100 soldiers)');
+assert.ok(flSquad.hp > 4000 && flSquad.hp <= 5000, `Frontline garrison squad has ~5000 HP (actual=${flSquad.hp})`);
 assert.equal(flSquad.stance, 'hold', 'Frontline garrison squad stands in place (stance: hold)');
 const playerOrderToFrontline = sim.apply('player1', { type: 'move', units: [flSquad.id], to: friendlyPos });
 assert.ok(!playerOrderToFrontline.ok, 'Player cannot command frontline squads');
@@ -594,6 +598,41 @@ for (let i = 0; i < testHouses.length; i++) {
   }
 }
 console.log('✓ Housing: 1.95x scaled dimensions and >=85m spacing dispersion verified');
+
+// 18. Reinforcing frontline positions: player infantry merges into frontline squad, increasing strength and squad size
+const friendlyGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0)!;
+assert.ok(friendlyGarrison, 'Friendly frontline garrison exists');
+assert.equal(friendlyGarrison.strength ?? 1, 1, 'Initial garrison strength is 1');
+assert.equal(friendlyGarrison.squadSize ?? 100, 100, 'Initial garrison headcount is 100');
+
+// Spawn reinforcing player infantry near the garrison (1.2 km away)
+const reinforcePos = offsetKm(friendlyGarrison.pos, -1.0, 0);
+const reinforcingUnit = sim.spawnUnit('infantry', sim.player('player1')!, reinforcePos);
+assert.ok(reinforcingUnit, 'Reinforcing player infantry spawned');
+
+// Order reinforcement
+const reinforceCmd = sim.apply('player1', { type: 'reinforce', units: [reinforcingUnit.id], targetUnit: friendlyGarrison.id });
+assert.ok(reinforceCmd.ok, 'Reinforce command accepted');
+
+// Step sim until the unit moves to the garrison and merges
+for (let step = 0; step < 50; step++) {
+  sim.step(0.5);
+  if (!sim.world.units.some((u) => u.id === reinforcingUnit.id)) break;
+}
+assert.ok(!sim.world.units.some((u) => u.id === reinforcingUnit.id), 'Reinforcing squad merged into garrison');
+assert.equal(friendlyGarrison.strength, 2, 'Garrison strength increased to 2');
+assert.equal(friendlyGarrison.squadSize, 120, 'Garrison squad size increased by 20 (to 120)');
+console.log('✓ Reinforce & Merge: player infantry walks to frontline squad, merges, increases strength to 2 and headcount to 120 verified');
+
+// 19. Random frontline skirmish crossfire simulation
+// Fast-forward sim and verify that frontline garrisons exchange random skirmish bursts
+sim.shots.length = 0;
+for (let step = 0; step < 30; step++) {
+  sim.step(0.5);
+}
+const frontlineShots = sim.shots.filter((s) => s.def === 'frontline_infantry');
+assert.ok(frontlineShots.length > 0, `Frontline garrisons engage in random skirmish firefights (actual=${frontlineShots.length} shots)`);
+console.log(`✓ Frontline Firefights: opposing garrisons simulate random skirmishes (${frontlineShots.length} shots recorded) verified`);
 
 console.log('All reboot tests passed successfully!');
 
