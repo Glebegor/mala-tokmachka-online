@@ -78,6 +78,7 @@ export class Sim {
   income = new Map<string, Record<string, number>>();
   /** Shots fired since the buffer was last drained (animation only). */
   shots: Shot[] = [];
+  hadEverPlacedHq = new Set<Team>();
 
   constructor(
     readonly ruleset: Ruleset,
@@ -151,58 +152,6 @@ export class Sim {
       posts: [],
     };
     this.world = w;
-    const counters: [number, number] = [0, 0];
-    const teamSize = [0, 1].map((t) => players.filter((p) => p.team === t).length);
-    // spawns are authored as mirrored pairs: both teams use the same indices, spread evenly along the front
-    const perTeam = Math.max(teamSize[0], teamSize[1]);
-    for (const p of players) {
-      const spawns = this.map.spawns[p.team];
-      const n = counters[p.team]++;
-      const idx = perTeam <= spawns.length ? Math.floor(((n + 0.5) * spawns.length) / perTeam) : n % spawns.length;
-      const base = spawns[idx];
-      // players beyond the authored spawn list share a spawn, nudged aside
-      const lap = perTeam <= spawns.length ? 0 : Math.floor(n / spawns.length);
-      const pos: LngLat = [base[0] + lap * 0.09, base[1] + lap * 0.05];
-      this.spawnBuilding('hq', p, pos, true);
-      r.startUnits.forEach((u, i) => this.spawnUnit(u, p, [pos[0] + 0.035 * Math.cos(i * 1.3), pos[1] + 0.025 * Math.sin(i * 1.3)]));
-    }
-    // spawn initial frontline garrison posts along the front line
-    const p0 = players.find((p) => p.team === 0);
-    const p1 = players.find((p) => p.team === 1);
-    if (r.frontPosts && p0 && p1) {
-      const stepNodes = Math.max(3, Math.round(27 / (r.frontNodeSpacingKm || 9)));
-      const isDry = (p: LngLat) => this.isPlayableGround(p) && this.terrainAt(p).id !== 'water' && !this.terrain?.isBarrier(p);
-      const frontPlayer0: Player = { id: '__front_0', name: 'Frontline UA', team: 0, bot: true, res: {}, share: true };
-      const frontPlayer1: Player = { id: '__front_1', name: 'Frontline RU', team: 1, bot: true, res: {}, share: true };
-      for (let i = 1; i < w.front.length - 1; i += stepNodes) {
-        const node = w.front[i];
-        const [nx, ny] = normalAt(w.front, i);
-        const pos0: LngLat = offsetKm([node.lng, node.lat], -nx * 0.45, -ny * 0.45);
-        const pos1: LngLat = offsetKm([node.lng, node.lat], nx * 0.45, ny * 0.45);
-        const isWaterLine = (node.lng < 35.3 && node.lat < 47.75) ||
-                            this.barrierNear([node.lng, node.lat], 2.5) ||
-                            this.barrierNear(pos0, 2.0) ||
-                            this.barrierNear(pos1, 2.0) ||
-                            !this.lineClear(pos0, pos1, []);
-        if (!isWaterLine && isDry([node.lng, node.lat]) && isDry(pos0) && isDry(pos1)) {
-          const post0: FrontPost = { id: w.nextId++, team: 0, pos: pos0, nodeIdx: i, garrison: [], cap: 4 };
-          const post1: FrontPost = { id: w.nextId++, team: 1, pos: pos1, nodeIdx: i, garrison: [], cap: 4 };
-          const u0 = this.spawnUnit('infantry', frontPlayer0, pos0);
-          u0.frontPost = post0.id;
-          u0.stance = 'defend';
-          u0.post = [pos0[0], pos0[1]];
-          post0.garrison.push(u0.id);
-
-          const u1 = this.spawnUnit('infantry', frontPlayer1, pos1);
-          u1.frontPost = post1.id;
-          u1.stance = 'defend';
-          u1.post = [pos1[0], pos1[1]];
-          post1.garrison.push(u1.id);
-
-          w.posts.push(post0, post1);
-        }
-      }
-    }
     this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = this.side(cp.pos)));
     this.occ.tick = -1; // the territory index is rebuilt from the live front on first use
     return w;
@@ -653,41 +602,44 @@ export class Sim {
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         if (!this.isPlayableGround(cmd.pos)) return fail('outside the theatre of war');
-        // special zones: build there even behind the line, but only the side the zone belongs to
-        const zone = specialZoneAt(cmd.pos);
-        const mySide = p.team === 0 ? 'ua' : 'ru';
-        if (zone && zone.side !== mySide) return fail(`${zone.name} is only available to ${zone.side === 'ua' ? 'Ukraine' : 'Russia'}`);
-        // ammo depots may go up on contested ground our troops hold, even behind the enemy line
-        const inGrey = !!d.buildInGrey && this.inOwnGrey(p.team, cmd.pos);
-        if (!zone && !inGrey) {
-          const pocket = w.pockets.length ? pocketAt(w.pockets, cmd.pos) : null;
-          if (pocket) return fail(pocket.team === p.team ? 'this ground is encircled' : 'not your territory');
-          if (w.grey.some((z) => distKm(z.pos, cmd.pos) <= z.r) || this.liberatedAt(cmd.pos)) return fail('contested ground (grey zone)');
-          if (this.side(cmd.pos) !== p.team) return fail('not your territory');
-          const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
-          if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
-        }
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
-        if (d.needsWaterWithinKm && !this.barrierNear(cmd.pos, d.needsWaterWithinKm)) return fail('must be built on a river bank');
-        if (d.id === 'housing') {
-          // housing only inside a city your side holds, and only so many per city
-          const city = this.cityAt(cmd.pos);
-          if (!city) return fail('housing can only be built inside a city');
-          if (w.points[this.map.capturePoints.indexOf(city)]?.owner !== p.team) return fail('your side must hold the city');
-          if (w.buildings.filter((x) => x.def === 'housing' && this.inCity(x.pos, city)).length >= r.cityHousingLimit) return fail(`at most ${r.cityHousingLimit} housing blocks per city`);
-          if (w.buildings.some((x) => x.def === 'housing' && distKm(x.pos, cmd.pos) < 0.08)) return fail('too close to another housing block');
-        } else {
-          // every site needs its own patch; only supply-chain partners (mine and metal works, …) must be far apart
-          const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
-          if (clash) {
-            const other = this.defs.b.get(clash.def)!;
-            const gap = this.spacingBetween(d, other.id, !!zone);
-            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied');
+        // Military HQ can be placed anywhere on playable dry ground
+        if (d.id !== 'hq') {
+          const zone = specialZoneAt(cmd.pos);
+          const mySide = p.team === 0 ? 'ua' : 'ru';
+          if (zone && zone.side !== mySide) return fail(`${zone.name} is only available to ${zone.side === 'ua' ? 'Ukraine' : 'Russia'}`);
+          // ammo depots may go up on contested ground our troops hold, even behind the enemy line
+          const inGrey = !!d.buildInGrey && this.inOwnGrey(p.team, cmd.pos);
+          if (!zone && !inGrey) {
+            const pocket = w.pockets.length ? pocketAt(w.pockets, cmd.pos) : null;
+            if (pocket) return fail(pocket.team === p.team ? 'this ground is encircled' : 'not your territory');
+            if (w.grey.some((z) => distKm(z.pos, cmd.pos) <= z.r) || this.liberatedAt(cmd.pos)) return fail('contested ground (grey zone)');
+            if (this.side(cmd.pos) !== p.team) return fail('not your territory');
+            const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
+            if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
+          }
+          if (d.needsWaterWithinKm && !this.barrierNear(cmd.pos, d.needsWaterWithinKm)) return fail('must be built on a river bank');
+          if (d.id === 'housing') {
+            // housing only inside a city your side holds, and only so many per city
+            const city = this.cityAt(cmd.pos);
+            if (!city) return fail('housing can only be built inside a city');
+            if (w.points[this.map.capturePoints.indexOf(city)]?.owner !== p.team) return fail('your side must hold the city');
+            if (w.buildings.filter((x) => x.def === 'housing' && this.inCity(x.pos, city)).length >= r.cityHousingLimit) return fail(`at most ${r.cityHousingLimit} housing blocks per city`);
+            if (w.buildings.some((x) => x.def === 'housing' && distKm(x.pos, cmd.pos) < 0.08)) return fail('too close to another housing block');
+          } else {
+            // every site needs its own patch; only supply-chain partners (mine and metal works, …) must be far apart
+            const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
+            if (clash) {
+              const other = this.defs.b.get(clash.def)!;
+              const gap = this.spacingBetween(d, other.id, !!zone);
+              return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied');
+            }
           }
         }
-        if (!this.canPay(p, d.cost)) return fail(Object.keys(d.cost).some((k) => this.isGood(k)) ? 'not enough resources (materials come from your HQ and warehouses)' : 'not enough resources');
+        if (!this.canPay(p, d.cost)) return fail('not enough resources');
         this.payFor(p, d.cost);
-        this.spawnBuilding(d.id, p, cmd.pos);
+        this.spawnBuilding(d.id, p, cmd.pos, d.id === 'hq');
+        if (d.id === 'hq') this.hadEverPlacedHq.add(p.team);
         return ok();
       }
       case 'train': {
@@ -3279,8 +3231,10 @@ export class Sim {
     if (pts.every((p) => p.owner === 1)) return this.win(1, 'all points captured');
     for (const t of [0, 1] as Team[]) {
       const had = w.players.some((p) => p.team === t);
+      if (w.buildings.some((b) => b.team === t && b.def === 'hq')) this.hadEverPlacedHq.add(t);
+      const hadHq = this.hadEverPlacedHq.has(t);
       const hq = w.buildings.some((b) => b.team === t && b.def === 'hq');
-      if (had && !hq && w.time > 5) return this.win((1 - t) as Team, 'headquarters destroyed');
+      if (had && hadHq && !hq) return this.win((1 - t) as Team, 'headquarters destroyed');
     }
   }
 

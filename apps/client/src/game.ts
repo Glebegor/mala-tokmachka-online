@@ -1140,6 +1140,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function placementProblem(def: BuildingDef, p: LngLat): string | null {
     if (!init || !snap) return 'not ready';
+    if (def.id === 'hq') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (myHq) return 'Военный штаб уже построен (максимум 1)';
+      return null;
+    }
     const r = init.ruleset.rules;
     const zone = specialZoneAt(p);
     const mySide = init.team === 0 ? 'ua' : 'ru';
@@ -1270,21 +1276,34 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     card.style.display = 'none'; // its button is about to be replaced
     clear(palette);
     for (const cat of ['civil', 'military'] as const) {
+      const list = init.ruleset.buildings.filter((x) => x.category === cat);
+      if (!list.length) continue;
       palette.append(h('div', { class: 'cat' }, cat === 'civil' ? 'Civil infrastructure' : 'War infrastructure'));
-      for (const b of init.ruleset.buildings.filter((x) => x.category === cat)) {
+      for (const b of list) {
+        const owned = snap?.buildings.filter((x) => x.owner === me && x.def === b.id).length ?? 0;
+        const reachedLimit = b.maxPerPlayer ? owned >= b.maxPerPlayer : false;
         const btn =
-          h('button', { class: 'bld' + (placing?.id === b.id ? ' active' : ''), onClick: () => {
-            placing = b;
-            // lines (trenches, bridges, railways) are drawn by dragging: the map must not pan meanwhile
-            if (b.line) map.dragPan.disable();
-            else map.dragPan.enable();
-            mapEl.classList.add('placing');
-            showPlacementAids();
-            hint.textContent = b.line ? `${b.name}: press and drag on the map the way it should run, release to build (a click gives a short one; Esc cancels)` : `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
-            buildPalette();
-          } },
+          h('button', {
+            class: 'bld' + (placing?.id === b.id ? ' active' : '') + (reachedLimit ? ' disabled' : ''),
+            disabled: reachedLimit,
+            onClick: () => {
+              if (reachedLimit) return;
+              placing = b;
+              // lines (trenches, bridges, railways) are drawn by dragging: the map must not pan meanwhile
+              if (b.line) map.dragPan.disable();
+              else map.dragPan.enable();
+              mapEl.classList.add('placing');
+              showPlacementAids();
+              hint.textContent = b.id === 'hq'
+                ? 'Размещение: Военный штаб — кликните в любой точке карты для установки (Esc — отмена)'
+                : b.line
+                  ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
+                  : `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
+              buildPalette();
+            }
+          },
             h('span', { class: 'ico' }, b.icon),
-            h('span', { class: 'meta' }, h('b', {}, b.name), costHtml(b.cost, snap?.res)),
+            h('span', { class: 'meta' }, h('b', {}, b.name), reachedLimit ? h('span', { class: 'muted' }, 'Построен') : costHtml(b.cost, snap?.res)),
           );
         describe(btn, b.name, b.description, buildingFacts(b), 'right');
         palette.append(btn);

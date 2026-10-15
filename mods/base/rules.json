@@ -4,14 +4,8 @@
   "frontMaxSpeed": 0.11,
   "frontNodeSpacingKm": 9,
   "xpPerKill": 25,
-  "startUnits": [
-    "infantry",
-    "infantry",
-    "infantry",
-    "infantry",
-    "drone"
-  ],
-  "minBuildSpacing": 17.5,
-  "fieldWorkSpacing": 0.6,
-  "civilSpacing": 5
+  "startUnits": [],
+  "minBuildSpacing": 0,
+  "fieldWorkSpacing": 0.5,
+  "civilSpacing": 0
 }

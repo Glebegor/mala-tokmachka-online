@@ -35,7 +35,12 @@ export class Bot {
     const mine = w.buildings.filter((b) => b.owner === p.id);
     if (mine.filter((b) => b.progress < 1).length >= 2) return;
     const hq = mine.find((b) => b.def === 'hq');
-    if (!hq) return;
+    if (!hq) {
+      const spawns = sim.map.spawns[p.team];
+      const spawnPos = spawns && spawns[0] ? spawns[0] : ([36.0, 48.0] as LngLat);
+      sim.apply(p.id, { type: 'build', def: 'hq', pos: spawnPos });
+      return;
+    }
     const fn = w.front[nearestNode(w.front, hq.pos)];
     const frontPos: LngLat = [fn.lng, fn.lat];
 
