@@ -41,6 +41,10 @@ export interface BuildingDef {
   supply?: { radiusKm: number; rounds: number };
   /** May also be built inside your side's grey zones (contested ground), even behind the enemy line. */
   buildInGrey?: boolean;
+  /** Drawn as a line (trenches): length limits in km; cost and build time are per km, cover reaches `defense.radiusKm` from the line. */
+  line?: { minKm: number; maxKm: number };
+  /** A line that must span barrier water with both ends on your dry ground (bridges). */
+  spansWater?: boolean;
   /** Two buildings of this kind must stay this far apart (km), e.g. ore mines. */
   sameKindKm?: number;
   /** Supply-chain links: these buildings must stay `minBuildSpacing` km apart (checked both ways), so goods go by truck. */

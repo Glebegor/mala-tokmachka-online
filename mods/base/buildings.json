@@ -222,39 +222,43 @@
     "name": "Trench Line",
     "category": "military",
     "icon": "≋",
-    "description": "Cheap fortification. Friendly units and buildings within 6 km take less damage and the front is harder to push there. Several trenches covering the same spot do not add up: upgrade one instead (3 levels).",
+    "description": "Dug-in line: drag on the map to draw it, 0.3 to 10 km long (a click gives 1 km along the front). Friendly troops and buildings within 1.5 km of it take less damage and the front is harder to push there. Cost and digging time are per km. Overlapping trenches do not add up: upgrade one instead (3 levels).",
     "cost": {
-      "money": 80,
-      "people": 5
+      "money": 50,
+      "people": 3
     },
-    "buildTime": 8,
+    "buildTime": 6,
     "hp": 300,
     "defense": {
-      "radiusKm": 6,
+      "radiusKm": 1.5,
       "mult": 0.25
     },
     "vision": 3,
     "levels": [
       {
         "cost": {
-          "money": 120,
-          "people": 5
+          "money": 60,
+          "people": 3
         },
-        "time": 10,
+        "time": 8,
         "defenseMult": 0.4,
         "hp": 450
       },
       {
         "cost": {
-          "money": 220,
-          "metal": 10
+          "money": 110,
+          "metal": 5
         },
-        "time": 14,
+        "time": 12,
         "defenseMult": 0.55,
         "hp": 650
       }
     ],
-    "fieldWork": true
+    "fieldWork": true,
+    "line": {
+      "minKm": 0.3,
+      "maxKm": 10
+    }
   },
   {
     "id": "bunker",
@@ -332,6 +336,29 @@
     },
     "needsWaterWithinKm": 3,
     "fieldWork": true
+  },
+  {
+    "id": "bridge",
+    "name": "Bridge",
+    "category": "military",
+    "icon": "⌇",
+    "description": "A real bridge: drag across a river (up to 2 km) with both ends on your dry ground. Takes minutes to build (1 min plus 3 min per km). Your troops cross on it at road speed. Strike drones, missiles and artillery can bring it down.",
+    "cost": {
+      "money": 300,
+      "metal": 60
+    },
+    "buildTime": 180,
+    "hp": 900,
+    "vision": 3,
+    "line": {
+      "minKm": 0.15,
+      "maxKm": 2
+    },
+    "spansWater": true,
+    "crossing": {
+      "radiusKm": 0.35,
+      "speed": 1
+    }
   },
   {
     "id": "antiair",

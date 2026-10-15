@@ -39,7 +39,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       // enemy filling stations are never shown; everything else enemy only when seen
       .filter((b) => b.team === team || (seen(b.pos) && b.def !== 'gas_station'))
       .map((b) => ({
-        id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0, level: b.level,
+        id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), line: b.line ? [p4(b.line[0]), p4(b.line[1])] as [LngLat, LngLat] : undefined, size: b.size, hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0, level: b.level,
         upgrade: b.team === team && b.upgrade ? { remaining: Math.ceil(b.upgrade.remaining), total: b.upgrade.total } : null,
         course: b.team === team && b.course ? { remaining: Math.ceil(b.course.remaining), total: b.course.total } : null,
         inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank, ready: sim.canTrain(u) })) : undefined,

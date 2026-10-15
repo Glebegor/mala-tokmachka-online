@@ -26,6 +26,9 @@ export interface Building {
   /** Local stock of physical goods (own team only in snapshots). */
   storage?: Record<string, number>;
   lastDamagedTime?: number;
+  /** Line structures (trenches): the two ends, and the length in km (cost, build time and upgrades scale with it). */
+  line?: [LngLat, LngLat];
+  size?: number;
   /** Upgrade level, starting at 1. */
   level: number;
   /** Upgrade to the next level in progress. */
@@ -112,6 +115,8 @@ export interface Unit {
   /** Falls back to a hospital or base by itself below this share of its health (0 = never). */
   retreatAt?: number;
   retreating?: boolean;
+  /** Strike craft locked on a target: follows it until impact. */
+  lockOn?: { unit?: number; building?: number };
   /** Moving with an attack-move order: stops to fight whatever it meets. */
   attackMove?: boolean;
   fuel?: number;

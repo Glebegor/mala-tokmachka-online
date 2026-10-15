@@ -475,6 +475,66 @@ export class Sim {
     return true;
   }
 
+  /**
+   * A line structure (trench) from `a` to `b` (or, without `b`, 1 km along the nearby front centred on `a`): it must lie
+   * on your own ground, clear of water and grey zones; cost and build time are per km of length.
+   */
+  private buildLine(p: Player, d: BuildingDef, a: LngLat, b?: LngLat): CommandResult {
+    const w = this.world;
+    if (!isFinitePos(a) || (b && !isFinitePos(b))) return fail('bad position');
+    if (!b) {
+      // a single click: a 1 km line parallel to the nearest stretch of front
+      const i = nearestNode(w.front, a);
+      const p0 = w.front[Math.max(0, i - 1)], p1 = w.front[Math.min(w.front.length - 1, i + 1)];
+      const tx = (p1.lng - p0.lng) * kmPerDegLng(a[1]), ty = (p1.lat - p0.lat) * 111.32;
+      const len = Math.hypot(tx, ty) || 1;
+      const ends: [LngLat, LngLat] = [offsetKm(a, (-tx / len) * 0.5, (-ty / len) * 0.5), offsetKm(a, (tx / len) * 0.5, (ty / len) * 0.5)];
+      [a, b] = ends;
+    }
+    const km = distKm(a, b);
+    const lim = d.line!;
+    if (km < lim.minKm) return fail(`a ${d.name.toLowerCase()} is at least ${lim.minKm} km long`);
+    if (km > lim.maxKm) return fail(`at most ${lim.maxKm} km in one go`);
+    const steps = Math.max(2, Math.ceil(km / 0.25));
+    let wet = 0;
+    for (let i = 0; i <= steps; i++) {
+      const q: LngLat = [a[0] + ((b[0] - a[0]) * i) / steps, a[1] + ((b[1] - a[1]) * i) / steps];
+      const end = i === 0 || i === steps;
+      const water = this.terrainAt(q).id === 'water' || !!this.terrain?.isBarrier(q);
+      if (water) wet++;
+      if (!inBounds(this.map, q) || this.foreign(q)) return fail('the line leaves the theatre');
+      if (d.spansWater) {
+        // a bridge: dry, friendly ground at both ends, river in between
+        if (end && (water || this.side(q) !== p.team)) return fail('both ends of a bridge must be on your dry ground');
+        continue;
+      }
+      if (this.side(q) !== p.team) return fail('the whole line must be on your ground');
+      if (water) return fail('the line crosses water');
+      if (this.liberatedAt(q) || w.grey.some((z) => distKm(z.pos, q) <= z.r)) return fail('contested ground (grey zone)');
+    }
+    if (d.spansWater && !this.terrain?.isBarrier([(a[0] + b[0]) / 2, (a[1] + b[1]) / 2]) && wet === 0) return fail('a bridge has to cross a river');
+    const size = Math.max(0.5, Math.round(km * 10) / 10);
+    const cost = Object.fromEntries(Object.entries(d.cost).map(([k, v]) => [k, Math.round(v * size)]));
+    if (!this.canPay(p, cost)) return fail('not enough resources');
+    this.payFor(p, cost);
+    const mid: LngLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+    const site = this.spawnBuilding(d.id, p, mid);
+    site.line = [[a[0], a[1]], [b[0], b[1]]];
+    site.size = size;
+    return ok();
+  }
+
+  /** Distance from p to a building: to its line for line structures, else to its spot. */
+  reachKm(b: Building, p: LngLat): number {
+    if (!b.line) return distKm(b.pos, p);
+    const [a, c] = b.line;
+    const kx = kmPerDegLng(p[1]);
+    const ax = (a[0] - p[0]) * kx, ay = (a[1] - p[1]) * 111.32, cx = (c[0] - p[0]) * kx, cy = (c[1] - p[1]) * 111.32;
+    const dx = cx - ax, dy = cy - ay, l2 = dx * dx + dy * dy;
+    const t = l2 > 0 ? Math.min(1, Math.max(0, -(ax * dx + ay * dy) / l2)) : 0;
+    return Math.hypot(ax + dx * t, ay + dy * t);
+  }
+
   /** Supply-chain partners must be built far apart (see `spacedFrom`). */
   chained(a: BuildingDef, b: BuildingDef): boolean {
     return !!a.spacedFrom?.includes(b.id) || !!b.spacedFrom?.includes(a.id);
@@ -535,6 +595,7 @@ export class Sim {
       case 'build': {
         const d = this.defs.b.get(cmd.def);
         if (!d) return fail('unknown building');
+        if (d.line) return this.buildLine(p, d, cmd.pos, cmd.to);
         if (d.maxPerPlayer && countOf(w, p.id, d.id) >= d.maxPerPlayer) return fail('limit reached');
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
@@ -844,8 +905,9 @@ export class Sim {
         const next = this.defs.b.get(b.def)!.levels?.[b.level - 1];
         if (!next) return fail('already at the highest level');
         if (b.upgrade) return fail('upgrade already in progress');
-        if (!this.canPay(p, next.cost)) return fail('not enough resources (materials come from your HQ and warehouses)');
-        this.payFor(p, next.cost);
+        const upCost = Object.fromEntries(Object.entries(next.cost).map(([k, v]) => [k, Math.round(v * (b.size ?? 1))]));
+        if (!this.canPay(p, upCost)) return fail('not enough resources (materials come from your HQ and warehouses)');
+        this.payFor(p, upCost);
         b.upgrade = { remaining: next.time * r.buildTimeMult, total: next.time * r.buildTimeMult };
         return ok();
       }
@@ -856,7 +918,7 @@ export class Sim {
         const b = w.buildings[i];
         if (b.def === 'hq') return fail('cannot demolish HQ');
         const d = this.defs.b.get(b.def)!;
-        this.credit(p, Object.fromEntries(Object.entries(d.cost).map(([k, v]) => [k, v * 0.4])));
+        this.credit(p, Object.fromEntries(Object.entries(d.cost).map(([k, v]) => [k, v * 0.4 * (b.size ?? 1)])));
         this.evict(b);
         w.buildings.splice(i, 1);
         return ok();
@@ -872,14 +934,19 @@ export class Sim {
   }
 
   /** Friendly boat/pontoon crossings in service. */
-  private crossings(team: Team): { pos: LngLat; r: number; speed: number }[] {
-    const out: { pos: LngLat; r: number; speed: number }[] = [];
+  private crossings(team: Team): { pos: LngLat; r: number; speed: number; line?: [LngLat, LngLat] }[] {
+    const out: { pos: LngLat; r: number; speed: number; line?: [LngLat, LngLat] }[] = [];
     for (const b of this.world.buildings) {
       if (b.team !== team || b.progress < 1) continue;
       const c = this.defs.b.get(b.def)!.crossing;
-      if (c) out.push({ pos: b.pos, r: c.radiusKm, speed: c.speed });
+      if (c) out.push({ pos: b.pos, r: c.radiusKm, speed: c.speed, line: b.line });
     }
     return out;
+  }
+
+  /** Is p within a crossing (around a pontoon site, or along a bridge)? */
+  private inCrossing(c: { pos: LngLat; r: number; line?: [LngLat, LngLat] }, p: LngLat): boolean {
+    return (c.line ? this.reachKm({ pos: c.pos, line: c.line } as Building, p) : distKm(c.pos, p)) <= c.r;
   }
 
   private barrierNear(p: LngLat, km: number): boolean {
@@ -894,7 +961,7 @@ export class Sim {
   }
 
   /** Can a ground unit of this team walk/drive cross-country from a to b without entering a river? */
-  private lineClear(a: LngLat, b: LngLat, cross: { pos: LngLat; r: number }[]): boolean {
+  private lineClear(a: LngLat, b: LngLat, cross: { pos: LngLat; r: number; line?: [LngLat, LngLat] }[]): boolean {
     if (!this.terrain) return !this.foreign(b);
     const steps = Math.max(1, Math.ceil(distKm(a, b) / 0.15));
     let leaving = this.terrain.isBarrier(a); // a unit already afloat may always make for the bank
@@ -902,7 +969,7 @@ export class Sim {
       const t = i / steps;
       const p: LngLat = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
       if (!this.terrain.isBarrier(p)) leaving = false;
-      else if (!leaving && !cross.some((c) => distKm(c.pos, p) <= c.r)) return false;
+      else if (!leaving && !cross.some((c) => this.inCrossing(c, p))) return false;
       if (i % 7 === 0 && this.foreign(p)) return false; // ~1 km resolution is plenty for country borders
     }
     return !this.foreign(b);
@@ -920,7 +987,7 @@ export class Sim {
   }
 
   /** One stretch without boats: straight if open, by road if that is quicker (or the only way). */
-  private planLeg(from: LngLat, to: LngLat, speed: number, cross: { pos: LngLat; r: number }[], direct: boolean): { wps: Waypoint[]; sec: number } | null {
+  private planLeg(from: LngLat, to: LngLat, speed: number, cross: { pos: LngLat; r: number; line?: [LngLat, LngLat] }[], direct: boolean): { wps: Waypoint[]; sec: number } | null {
     const off = speed * 0.85; // rough cross-country average, terrain is applied for real while moving
     const clear = (a: LngLat, b: LngLat) => this.lineClear(a, b, cross);
     const open = clear(from, to);
@@ -984,6 +1051,12 @@ export class Sim {
         u.target = to;
         u.cap = 0;
         u.loiterCenter = isReconDrone(d) ? to : undefined;
+        // strike craft aimed at (or right next to) an enemy lock on to it
+        if (isStrikeDrone(d)) {
+          const unit = this.world.units.find((e) => e.team !== u.team && !e.embarkedIn && this.defs.u.get(e.def)!.kind !== 'air' && distKm(e.pos, to) < 0.6);
+          const bld = unit ? undefined : this.world.buildings.find((e) => e.team !== u.team && distKm(e.pos, to) < 0.6);
+          u.lockOn = unit ? { unit: unit.id } : bld ? { building: bld.id } : undefined;
+        }
         u.loiterRadius = isReconDrone(d) ? 4 : undefined;
         u.isLoitering = false;
         moved++;
@@ -1108,7 +1181,8 @@ export class Sim {
     for (const b of this.world.buildings) {
       if (b.progress >= 1) continue;
       const d = this.defs.b.get(b.def)!;
-      b.progress = Math.min(1, b.progress + dt / (d.buildTime * this.ruleset.rules.buildTimeMult));
+      // line structures take their time per km (a bridge also a fixed minute to start)
+      b.progress = Math.min(1, b.progress + dt / ((d.buildTime * (b.size ?? 1) + (d.spansWater ? 60 : 0)) * this.ruleset.rules.buildTimeMult));
       if (b.progress >= 1) {
         this.stat(b.owner).buildingsBuilt++;
         this.hooks.emit('buildingCompleted', { id: b.id, def: b.def, owner: b.owner });
@@ -1502,9 +1576,9 @@ export class Sim {
     }
     let best: Map<string, number> | null = null;
     for (const b of this.forts.list) {
-      if (b.team !== team || Math.abs(b.pos[1] - pos[1]) > 0.1) continue;
+      if (b.team !== team || Math.abs(b.pos[1] - pos[1]) > (b.line ? 0.2 : 0.1)) continue;
       const d = this.defs.b.get(b.def)!.defense;
-      if (!d || distKm(b.pos, pos) > d.radiusKm) continue;
+      if (!d || this.reachKm(b, pos) > d.radiusKm) continue;
       const m = this.defenseOf(b);
       best ??= new Map();
       if (m > (best.get(b.def) ?? 0)) best.set(b.def, m);
@@ -1607,7 +1681,7 @@ export class Sim {
     }
     for (const b of this.world.buildings) {
       if (b.team === attacker.team || b.hp <= 0) continue;
-      const d = distKm(at, b.pos);
+      const d = this.reachKm(b, at); // a bridge or trench is hit anywhere along its length
       if (d <= radius) total += this.hitBuilding(attacker, b, damage * 0.8 * (1 - d / radius));
     }
     if (hitsCities) {
@@ -2019,6 +2093,12 @@ export class Sim {
       u.path = this.orbit(u);
     }
     if (!u.path.length) return;
+    // locked on: the aim point follows the target while it lives
+    if (strike && u.lockOn && u.path.length === 1) {
+      const t = u.lockOn.unit !== undefined ? this.world.units.find((x) => x.id === u.lockOn!.unit && x.hp > 0) : this.world.buildings.find((x) => x.id === u.lockOn!.building);
+      if (t) u.path[0].p = [t.pos[0], t.pos[1]];
+      else u.lockOn = undefined;
+    }
     const speed = d.speed;
     const wp = u.path[0];
     const dx = (wp.p[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
@@ -2026,7 +2106,9 @@ export class Sim {
     const want = Math.abs(dx) + Math.abs(dy) > 1e-9 ? (Math.atan2(dx, dy) * 180) / Math.PI : u.bearing ?? 0;
     u.bearing ??= want;
     const diff = ((want - u.bearing + 540) % 360) - 180;
-    const turn = (d.turnRate ?? 30) * dt;
+    // strike craft pull hard into the terminal dive (the last 3 km) so they hit the spot instead of circling past it
+    const terminal = strike && u.path.length === 1 && distKm(u.pos, wp.p) < 3;
+    const turn = (d.turnRate ?? 30) * (terminal ? 6 : 1) * dt;
     u.bearing = (u.bearing + clamp(diff, -turn, turn) + 360) % 360;
     const rad = (u.bearing * Math.PI) / 180;
     const step = speed * dt;
@@ -2046,10 +2128,11 @@ export class Sim {
     const ndx = (wp.p[0] - u.pos[0]) * kmPerDegLng(u.pos[1]);
     const ndy = (wp.p[1] - u.pos[1]) * 111.32;
     const off = Math.abs(((((Math.atan2(ndx, ndy) * 180) / Math.PI - u.bearing) + 540) % 360) - 180);
-    // missiles are too fast for the drone rule of thumb: they hit when the next step would carry them past the target
-    const reach = d.missile ? Math.max(0.25, step * 1.05) : strike && u.path.length === 1 ? Math.max(0.25, speed * 1.5) : Math.max(0.6, speed * 2.5);
-    if (left > reach && !(left <= 0.8 && off > 90)) return;
-    if (d.missile && strike && u.path.length === 1) u.pos = [wp.p[0], wp.p[1]];
+    // strike craft hit when the next step would carry them onto (or past) the aim point, and they hit it exactly
+    const hitting = strike && u.path.length === 1;
+    const reach = hitting ? Math.max(0.08, step * 1.05) : Math.max(0.6, speed * 2.5);
+    if (left > reach && !(left <= (hitting ? reach * 2 : 0.8) && off > 90)) return;
+    if (hitting) u.pos = [wp.p[0], wp.p[1]];
     const done = u.path.shift()!;
     if (recon && u.isLoitering) u.path.push(done); // keep circling
     if (recon && !u.path.length) {
@@ -2174,12 +2257,12 @@ export class Sim {
     const blocked = this.blockedFor(d) && this.terrain;
     if (blocked && this.terrain!.isBarrier(u.pos)) {
       // afloat: boats set the pace inside a crossing; a unit stranded outside one may still struggle to the bank
-      const c = this.crossings(u.team).find((x) => distKm(x.pos, u.pos) <= x.r);
+      const c = this.crossings(u.team).find((x) => this.inCrossing(x, u.pos));
       if (c) mult = c.speed;
     }
     const next = moveToward(u.pos, to, budgetKm * mult);
     if (this.foreign(next) && !this.foreign(u.pos)) return false;
-    if (blocked && this.terrain!.isBarrier(next) && !this.terrain!.isBarrier(u.pos) && !this.crossings(u.team).some((x) => distKm(x.pos, next) <= x.r)) return false;
+    if (blocked && this.terrain!.isBarrier(next) && !this.terrain!.isBarrier(u.pos) && !this.crossings(u.team).some((x) => this.inCrossing(x, next))) return false;
     u.pos = next;
     return true;
   }
