@@ -19,30 +19,13 @@ const BARRIER = 0x80; // flag bit: cell belongs to a body of barrier terrain
 const VISITED = 0x40; // scratch bit used while flood-filling
 const KIND = 0x3f;
 
-/** Procedural terrain for positions outside the high-res terrain grid. */
+/** Fallback terrain for positions outside the high-res terrain grid. */
 export function proceduralTerrain(lng: number, lat: number): string {
   // Major water bodies outside the grid:
   if (lat < 43.5 || (lat < 44.5 && lng < 37.0) || (lng > 47.5 && lat < 46.5)) return 'water';
   if (lng > 30.5 && lng < 33.2 && lat > 59.8 && lat < 61.6) return 'water'; // Lake Ladoga
   if (lng > 34.5 && lng < 36.5 && lat > 61.3 && lat < 63.0) return 'water'; // Lake Onega
-
-  // Deterministic multi-octave harmonic noise
-  const n1 = Math.sin(lng * 0.75 + lat * 0.95) + Math.cos(lng * 1.35 - lat * 0.85);
-  const n2 = Math.sin(lng * 2.8 + lat * 2.1) + Math.cos(lng * 3.4 - lat * 2.9);
-  const n3 = Math.sin(lng * 7.2 - lat * 6.5);
-  const val = n1 * 0.55 + n2 * 0.3 + n3 * 0.15;
-
-  // Rivers and watercourses: thin bands
-  const riverVal = Math.sin(lng * 1.2 + Math.cos(lat * 1.8) * 1.5);
-  if (Math.abs(riverVal) < 0.045 && val > -0.5) return 'water';
-
-  // Hills
-  if (val > 0.85) return 'hill';
-
-  // Forest: extensive in Central and Northern Russia / Belarus
-  const forestBias = lat > 52 ? 0.25 : 0.0;
-  if (val + forestBias > 0.05) return 'forest';
-
+  if (lat > 60) return 'forest';
   return 'field';
 }
 

@@ -27,8 +27,8 @@ const oreRes = rs.resources.find((r) => r.id === 'ore')!;
 assert.equal(oreRes.cap, 5000, 'ore cap is 5000');
 console.log('✓ Resources: Money (10k start) and physical Ore (cap 5k) verified');
 
-// 3. Buildings: HQ, Military Base, Warehouse, Mine, Housing
-assert.equal(rs.buildings.length, 5, '5 building definitions exist');
+// 3. Buildings: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing
+assert.equal(rs.buildings.length, 7, '7 building definitions exist');
 const hqDef = rs.buildings.find((b) => b.id === 'hq')!;
 assert.equal(hqDef.hp, 10000, 'HQ has 10,000 HP');
 assert.equal(hqDef.sameKindKm, 100, 'HQ has sameKindKm = 100');
@@ -45,21 +45,32 @@ assert.equal(whDef.sameKindKm, 100, 'Warehouse has sameKindKm = 100');
 
 const mineDef = rs.buildings.find((b) => b.id === 'mine')!;
 assert.equal(mineDef.cost.money, 5000, 'Mine costs 5000');
+assert.equal(mineDef.maxPerPlayer, 1, '1 mine per player');
 assert.equal(mineDef.storageCap, 5000, 'Mine stores up to 5000 ore');
 assert.equal(mineDef.produces?.ore, 5, 'Mine produces 5 ore/s');
+
+const oilRigDef = rs.buildings.find((b) => b.id === 'oil_rig')!;
+assert.equal(oilRigDef.cost.money, 5000, 'Oil rig costs 5000');
+assert.equal(oilRigDef.maxPerPlayer, 1, '1 oil rig per player');
+assert.equal(oilRigDef.storageCap, 5000, 'Oil rig stores up to 5000 oil');
+
+const refDef = rs.buildings.find((b) => b.id === 'refinery')!;
+assert.equal(refDef.cost.money, 8000, 'Refinery costs 8000');
+assert.equal(refDef.maxPerTeam, 2, '2 refineries per team');
 
 const houseDef = rs.buildings.find((b) => b.id === 'housing')!;
 assert.equal(houseDef.cost.money, 2000, 'Housing costs 2000');
 assert.equal(houseDef.produces?.money, 10, 'Housing produces 10 $/s');
-console.log('✓ Buildings defined: HQ, Military Base, Warehouse, Mine, Housing verified');
+console.log('✓ Buildings defined: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing verified');
 
 // 4. Procedural Terrain Full Map Coverage
+const validTerrainIds = rs.terrain.map((t) => t.id);
 const farPointRU: [number, number] = [48.0, 56.0];
 const farTerrainRU = sim.terrainAt(farPointRU);
-assert.ok(['field', 'forest', 'hill', 'water'].includes(farTerrainRU.id), `Procedural terrain generates valid terrain for far east RU (actual=${farTerrainRU.id})`);
+assert.ok(validTerrainIds.includes(farTerrainRU.id), `Procedural terrain generates valid terrain for far east RU (actual=${farTerrainRU.id})`);
 const farPointWest: [number, number] = [21.0, 50.0];
 const farTerrainWest = sim.terrainAt(farPointWest);
-assert.ok(['field', 'forest', 'hill', 'water'].includes(farTerrainWest.id), `Procedural terrain generates valid terrain for west map (actual=${farTerrainWest.id})`);
+assert.ok(validTerrainIds.includes(farTerrainWest.id), `Procedural terrain generates valid terrain for west map (actual=${farTerrainWest.id})`);
 console.log('✓ Procedural Terrain covers full map extent smoothly');
 
 // 5. Deposits: 16 Iron + 16 Oil (8 each per team, sizes 20-80 km diameter)
@@ -180,13 +191,14 @@ console.log('✓ Warehouse: cost 5000, 100 km spacing constraint verified');
 // 9. Mine placement (only on iron deposits) & ore accumulation up to 5000
 // Try building mine on plain ground outside iron deposits
 const nonDepPos: [number, number] = [34.0, 48.0];
-assert.equal(inDeposit('iron', nonDepPos), null, 'pos is not on iron deposit');
+assert.equal(inDeposit('iron', nonDepPos, 0, sim.deposits), null, 'pos is not on iron deposit');
 const mineResFail = sim.apply('player1', { type: 'build', def: 'mine', pos: nonDepPos });
 assert.equal(mineResFail.ok, false, 'mine rejected outside iron deposit');
 assert.equal(mineResFail.reason, 'mines can only be built on iron deposits');
 
-// Find a friendly iron deposit in Ukraine
-const friendlyIronDep = ironDeps.find((d) => d.team === 0 && sim.side(d.center) === 0)!;
+// Find a friendly iron deposit in Ukraine from match deposits
+const matchIron = (sim.deposits ?? DEPOSITS).filter((d) => d.type === 'iron');
+const friendlyIronDep = matchIron.find((d) => d.team === 0 && sim.side(d.center) === 0)!;
 assert.ok(friendlyIronDep, 'Found friendly iron deposit');
 const mineResOk = sim.apply('player1', { type: 'build', def: 'mine', pos: friendlyIronDep.center });
 assert.ok(mineResOk.ok, 'Mine placement succeeded inside iron deposit');
@@ -202,7 +214,82 @@ const startOre = mine.storage?.ore ?? 0;
 sim.step(10);
 const afterOre = mine.storage?.ore ?? 0;
 assert.ok(afterOre > startOre, `Mine accumulated ore (before=${startOre}, after=${afterOre})`);
-console.log('✓ Mine: strictly inside iron deposits, accumulates ore in storage up to 5k cap');
+
+// Player can build at most 1 mine
+const mine2Res = sim.apply('player1', { type: 'build', def: 'mine', pos: friendlyIronDep.center });
+assert.equal(mine2Res.ok, false, 'second mine for player1 rejected');
+assert.equal(mine2Res.reason, 'limit reached');
+console.log('✓ Mine: strictly inside iron deposits, accumulates ore in storage up to 5k cap, limit 1 per player');
+
+// 10. Oil Rig placement (only on oil deposits) & max 1 per player
+sim.player('player1')!.res.money = 50000;
+const nonOilPos: [number, number] = [28.0, 50.0];
+assert.equal(inDeposit('oil', nonOilPos, 0, sim.deposits), null, 'pos is not on oil deposit');
+const oilRigFail = sim.apply('player1', { type: 'build', def: 'oil_rig', pos: nonOilPos });
+assert.equal(oilRigFail.ok, false, 'oil rig rejected outside oil deposit');
+assert.equal(oilRigFail.reason, 'oil rigs can only be built on oil deposits');
+
+const matchOil = (sim.deposits ?? DEPOSITS).filter((d) => d.type === 'oil');
+const friendlyOilDep = matchOil.find((d) => d.team === 0 && sim.side(d.center) === 0)!;
+assert.ok(friendlyOilDep, 'Found friendly oil deposit');
+const oilRigOk = sim.apply('player1', { type: 'build', def: 'oil_rig', pos: friendlyOilDep.center });
+assert.ok(oilRigOk.ok, 'Oil rig placement succeeded inside oil deposit');
+const oilRig = sim.world.buildings.find((b) => b.owner === 'player1' && b.def === 'oil_rig')!;
+assert.ok(oilRig);
+
+const oilRig2Fail = sim.apply('player1', { type: 'build', def: 'oil_rig', pos: friendlyOilDep.center });
+assert.equal(oilRig2Fail.ok, false, 'second oil rig for player1 rejected');
+assert.equal(oilRig2Fail.reason, 'limit reached');
+console.log('✓ Oil Rig: limit 1 per player, strictly on friendly oil deposit');
+
+// 11. Refinery placement: cost 8000, max 2 per team, Kremenchuk (team 0) & Rostov (team 1) rules
+sim.player('player1')!.res.money = 50000;
+// First refinery at Kremenchuk [33.4397, 49.0703] succeeds
+const kremenchukPos: [number, number] = [33.4397, 49.0703];
+const ref1Res = sim.apply('player1', { type: 'build', def: 'refinery', pos: kremenchukPos });
+assert.ok(ref1Res.ok, 'First refinery in Kremenchuk succeeded');
+
+// Second refinery within 10 km of 1st refinery must fail
+const refCloseFail = sim.apply('player1', { type: 'build', def: 'refinery', pos: offsetKm(kremenchukPos, 5, 0) });
+assert.equal(refCloseFail.ok, false, 'refinery within 10 km rejected');
+assert.equal(refCloseFail.reason, 'keep at least 10 km from other refineries');
+
+// Second refinery anywhere in Ukraine (e.g. Kyiv) succeeds
+const kyivPos: [number, number] = [30.5, 50.4];
+const ref2Ok = sim.apply('player1', { type: 'build', def: 'refinery', pos: kyivPos });
+assert.ok(ref2Ok.ok, 'Second refinery in Kyiv succeeded');
+
+// Third refinery must fail (max 2 per team)
+const lvivPos: [number, number] = [24.0, 49.8];
+const ref3Fail = sim.apply('player1', { type: 'build', def: 'refinery', pos: lvivPos });
+assert.equal(ref3Fail.ok, false, 'third refinery rejected');
+assert.equal(ref3Fail.reason, 'team limit reached');
+console.log('✓ Refinery: max 2 per team, mandatory Kremenchuk location verified');
+
+// Russia Refinery placement rules:
+sim.player('player2')!.res.money = 50000;
+
+// Refinery 1 for Russia not near Rostov (Voronezh east)
+const voronezhPos: [number, number] = [39.5, 51.6];
+const ruRef1Res = sim.apply('player2', { type: 'build', def: 'refinery', pos: voronezhPos });
+assert.ok(ruRef1Res.ok, 'First RU refinery placed');
+
+// Refinery 2 for Russia not near Rostov (Tambov) must fail
+const tambovPos: [number, number] = [41.4, 52.7];
+const ruRef2Fail = sim.apply('player2', { type: 'build', def: 'refinery', pos: tambovPos });
+assert.equal(ruRef2Fail.ok, false, 'second RU refinery outside Rostov rejected');
+assert.equal(ruRef2Fail.reason, 'one of your team refineries must be near Rostov-on-Don');
+
+// Refinery 2 near Rostov [39.7203, 47.2357] succeeds
+const rostovPos: [number, number] = [39.7203, 47.2357];
+const ruRef2Ok = sim.apply('player2', { type: 'build', def: 'refinery', pos: rostovPos });
+assert.ok(ruRef2Ok.ok, 'Second RU refinery near Rostov succeeded');
+
+// Third RU refinery fails
+const ruRef3Fail = sim.apply('player2', { type: 'build', def: 'refinery', pos: tambovPos });
+assert.equal(ruRef3Fail.ok, false, 'third RU refinery rejected');
+assert.equal(ruRef3Fail.reason, 'team limit reached');
+console.log('✓ Refinery: Russia mandatory Rostov location verified');
 
 // 10. Housing: placed only in cities held by team, max 5 per city, produces 10 $/s split among team
 const nonCityPos: [number, number] = [33.0, 48.0];
@@ -322,6 +409,38 @@ for (let i = 0; i < allWhs.length; i++) {
     assert.ok(d >= 100, `Warehouses ${allWhs[i].id} and ${allWhs[j].id} must be at least 100 km apart (actual=${d.toFixed(1)}km)`);
   }
 }
+
+// Bots build mine, oil rig, and refinery when funded
+sim.player('botUA')!.res.money = 50000;
+sim.player('botRU')!.res.money = 50000;
+sim.step(130.0);
+bUA.think(sim);
+bRU.think(sim);
+sim.step(10.0);
+bUA.think(sim);
+bRU.think(sim);
+sim.step(10.0);
+bUA.think(sim);
+bRU.think(sim);
+
+const uaMine = sim.world.buildings.find((b) => b.owner === 'botUA' && b.def === 'mine');
+const ruMine = sim.world.buildings.find((b) => b.owner === 'botRU' && b.def === 'mine');
+assert.ok(uaMine, 'Bot UA built a mine');
+assert.ok(ruMine, 'Bot RU built a mine');
+assert.ok(inDeposit('iron', uaMine.pos, 0, sim.deposits), 'Bot UA mine is on UA iron deposit');
+assert.ok(inDeposit('iron', ruMine.pos, 1, sim.deposits), 'Bot RU mine is on RU iron deposit');
+
+const uaRig = sim.world.buildings.find((b) => b.owner === 'botUA' && b.def === 'oil_rig');
+const ruRig = sim.world.buildings.find((b) => b.owner === 'botRU' && b.def === 'oil_rig');
+assert.ok(uaRig, 'Bot UA built an oil rig');
+assert.ok(ruRig, 'Bot RU built an oil rig');
+assert.ok(inDeposit('oil', uaRig.pos, 0, sim.deposits), 'Bot UA oil rig is on UA oil deposit');
+assert.ok(inDeposit('oil', ruRig.pos, 1, sim.deposits), 'Bot RU oil rig is on RU oil deposit');
+
+// Team refinery limits enforced
+assert.equal(sim.world.buildings.filter(b => b.team === 0 && b.def === 'refinery').length, 2, 'Team 0 has exactly 2 refineries');
+assert.equal(sim.world.buildings.filter(b => b.team === 1 && b.def === 'refinery').length, 2, 'Team 1 has exactly 2 refineries');
+console.log('✓ Bot AI: Mines on friendly iron deposits, Oil Rigs on friendly oil deposits, and Team Refinery limits verified');
 
 console.log('✓ Bot AI: HQs, Warehouses (~80 km from front, >= 100 km apart), and Military Bases verified');
 console.log('All reboot tests passed successfully!');

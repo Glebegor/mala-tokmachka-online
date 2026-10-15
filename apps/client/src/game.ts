@@ -2,7 +2,7 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DEBUFFS, DEPOSITS, depositsGeoJSON, distKm, distToFrontKm, forbiddenRings, formationSpot, inDeposit, inOccupied, inPolygon, isReconDrone, isStrikeDrone, LIBERATED_CELL, offsetKm, pointInRing, proceduralTerrain, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
-  type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
+  type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ResourceDeposit, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 
 import type { Session } from './api';
@@ -502,6 +502,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   let forbidden: LngLat[][] = [];
+  let matchDeposits: ResourceDeposit[] | undefined;
   function foreignAt(p: LngLat): boolean {
     return forbidden.some((r) => inPolygon(p, r));
   }
@@ -538,6 +539,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     switch (msg.t) {
       case 'init':
         init = msg;
+        matchDeposits = msg.map.deposits;
         defB = new Map(msg.ruleset.buildings.map((b) => [b.id, b]));
         defU = new Map(msg.ruleset.units.map((u) => [u.id, u]));
         const barriers: Record<string, number> = {};
@@ -652,8 +654,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('load', () => {
       for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing']) map.addSource(id, { type: 'geojson', data: empty() });
 
-      map.addSource('deposits-iron', { type: 'geojson', data: depositsGeoJSON('iron', init?.team) });
-      map.addSource('deposits-oil', { type: 'geojson', data: depositsGeoJSON('oil', init?.team) });
+      map.addSource('deposits-iron', { type: 'geojson', data: depositsGeoJSON('iron', init?.team, matchDeposits) });
+      map.addSource('deposits-oil', { type: 'geojson', data: depositsGeoJSON('oil', init?.team, matchDeposits) });
       map.addSource('housing-osm', { type: 'geojson', data: empty() });
 
       if (terrain) {
@@ -1292,8 +1294,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!mapReady) return;
     const terrainOn = map.getLayer('terrain') && map.getLayoutProperty('terrain', 'visibility') === 'visible';
     const placingMine = placing?.id === 'mine';
+    const placingOilRig = placing?.id === 'oil_rig';
     const showIron = terrainOn || placingMine;
-    const showOil = terrainOn;
+    const showOil = terrainOn || placingOilRig;
 
     const ironVis = showIron ? 'visible' : 'none';
     const oilVis = showOil ? 'visible' : 'none';
@@ -1308,14 +1311,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     if (map.getLayer('deposits-oil-fill')) {
       map.setLayoutProperty('deposits-oil-fill', 'visibility', oilVis);
+      if (placingOilRig && !terrainOn) {
+        map.setPaintProperty('deposits-oil-fill', 'fill-opacity', 0.48);
+      } else {
+        map.setPaintProperty('deposits-oil-fill', 'fill-opacity', ['interpolate', ['linear'], ['zoom'], 4, 0.20, 7, 0.30, 11, 0.38]);
+      }
     }
   }
 
   function showTerrain(p: LngLat) {
     if (!terrain || !init) return;
     const t = init.ruleset.terrain.find((d) => d.id === terrain!.at(p));
-    const depIron = inDeposit('iron', p, init.team);
-    const depOil = !depIron ? inDeposit('oil', p, init.team) : null;
+    const depIron = inDeposit('iron', p, init.team, matchDeposits);
+    const depOil = !depIron ? inDeposit('oil', p, init.team, matchDeposits) : null;
     const friendlyDep = depIron ?? depOil;
 
     if (!t && !friendlyDep) return void (terrainChip.style.display = 'none');
@@ -1380,6 +1388,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function placementProblem(def: BuildingDef, p: LngLat): string | null {
     if (!init || !snap) return 'not ready';
+    const currentInit = init;
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'Недостаточно денег';
     if (def.id === 'hq') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
@@ -1415,9 +1424,49 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (!myHq) return 'Сначала необходимо построить Военный штаб';
-      if (!inDeposit('iron', p, init.team)) return 'Шахту можно строить только на месторождении железа вашей команды';
+      const myMines = snap.buildings.filter((b) => b.owner === me && b.def === 'mine').length;
+      if (myMines >= 1) return 'Можно построить только 1 шахту';
+      if (!inDeposit('iron', p, init.team, matchDeposits)) return 'Шахту можно строить только на месторождении железа вашей команды';
       const clash = snap.buildings.find((b) => b.def === 'mine' && distKm(b.pos, p) < 1);
       if (clash) return 'Место занято другой шахтой';
+      return null;
+    }
+    if (def.id === 'oil_rig') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
+      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      const myRigs = snap.buildings.filter((b) => b.owner === me && b.def === 'oil_rig').length;
+      if (myRigs >= 1) return 'Можно построить только 1 нефтяную вышку';
+      if (!inDeposit('oil', p, init.team, matchDeposits)) return 'Нефтяную вышку можно строить только на месторождении нефти вашей команды';
+      const clash = snap.buildings.find((b) => b.def === 'oil_rig' && distKm(b.pos, p) < 1);
+      if (clash) return 'Место занято другой вышкой';
+      return null;
+    }
+    if (def.id === 'refinery') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
+      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      const teamRefineries = snap.buildings.filter((b) => b.team === currentInit.team && b.def === 'refinery');
+      if (teamRefineries.length >= 2) return 'На команду можно построить максимум 2 нефтеперерабатывающих завода';
+      if (currentInit.team === 0) {
+        const isAtKremenchuk = distKm(p, [33.4397, 49.0703]) <= 25;
+        const hasKremenchuk = teamRefineries.some((b) => distKm(b.pos, [33.4397, 49.0703]) <= 25);
+        if (teamRefineries.length === 1 && !hasKremenchuk && !isAtKremenchuk) {
+          return 'Один из заводов команды должен быть построен в Кременчуге';
+        }
+      } else {
+        const isNearRostov = distKm(p, [39.7203, 47.2357]) <= 65;
+        const hasRostov = teamRefineries.some((b) => distKm(b.pos, [39.7203, 47.2357]) <= 65);
+        if (teamRefineries.length === 1 && !hasRostov && !isNearRostov) {
+          return 'Один из заводов команды должен быть построен возле Ростова-на-Дону';
+        }
+      }
+      const clash = snap.buildings.find((b) => b.def === 'refinery' && distKm(b.pos, p) < 10);
+      if (clash) return 'Слишком близко к другому НПЗ (минимум 10 км)';
       return null;
     }
     if (def.id === 'housing') {

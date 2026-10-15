@@ -1,3 +1,4 @@
+import type { ResourceDeposit } from './deposits';
 import type { LngLat } from './geo';
 import type { RoadLine } from './roads';
 import type { TerrainGridData } from './terrain';
@@ -31,6 +32,7 @@ export interface BuildingDef {
   defense?: { radiusKm: number; mult: number };
   trains?: string[];
   maxPerPlayer?: number;
+  maxPerTeam?: number;
   /** Local stock of physical goods (metal, fuel, ore) per resource. Goods arrive by production or by truck. */
   storageCap?: number;
   /** Fortifications and other field works (built near the front, between the HQ and the line). */
@@ -199,6 +201,8 @@ export interface MapDef {
   roads?: RoadLine[];
   /** Terrain grid (see tools/build-terrain.mjs). In map JSON use `terrainFile` instead. */
   terrain?: TerrainGridData;
+  /** Active resource deposits for this match (iron and oil fields). */
+  deposits?: ResourceDeposit[];
   capturePoints: CapturePointDef[];
   spawns: [LngLat[], LngLat[]];
 }

@@ -197,6 +197,65 @@ export class Bot {
         sim.apply(p.id, { type: 'build', def: 'military_base', pos });
       }
     }
+
+    // Build mine (up to 1 per bot) in friendly iron deposit
+    const mineDef = sim.defs.b.get('mine');
+    if (mineDef && sim.canPay(p, mineDef.cost)) {
+      const myMines = mine.filter((b) => b.def === 'mine');
+      if (myMines.length < 1) {
+        const ironDeposits = (sim.deposits ?? []).filter((d) => d.type === 'iron' && d.team === p.team);
+        if (ironDeposits.length) {
+          const dep = ironDeposits[Math.floor(Math.random() * ironDeposits.length)];
+          const ang = Math.random() * Math.PI * 2;
+          const r = Math.random() * (dep.radiusKm * 0.55);
+          const spot = offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+            sim.apply(p.id, { type: 'build', def: 'mine', pos: spot });
+          }
+        }
+      }
+    }
+
+    // Build oil rig (up to 1 per bot) in friendly oil deposit
+    const oilDef = sim.defs.b.get('oil_rig');
+    if (oilDef && sim.canPay(p, oilDef.cost)) {
+      const myRigs = mine.filter((b) => b.def === 'oil_rig');
+      if (myRigs.length < 1) {
+        const oilDeposits = (sim.deposits ?? []).filter((d) => d.type === 'oil' && d.team === p.team);
+        if (oilDeposits.length) {
+          const dep = oilDeposits[Math.floor(Math.random() * oilDeposits.length)];
+          const ang = Math.random() * Math.PI * 2;
+          const r = Math.random() * (dep.radiusKm * 0.55);
+          const spot = offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+            sim.apply(p.id, { type: 'build', def: 'oil_rig', pos: spot });
+          }
+        }
+      }
+    }
+
+    // Build refinery (up to 2 per team)
+    const refDef = sim.defs.b.get('refinery');
+    if (refDef && sim.canPay(p, refDef.cost)) {
+      const teamRefineries = w.buildings.filter((b) => b.team === p.team && b.def === 'refinery');
+      if (teamRefineries.length < 2) {
+        if (p.team === 0) {
+          const kremSpot: LngLat = [33.4397 + (Math.random() - 0.5) * 0.08, 49.0703 + (Math.random() - 0.5) * 0.08];
+          const hasKrem = teamRefineries.some((b) => distKm(b.pos, [33.4397, 49.0703]) <= 25);
+          const spot = !hasKrem ? kremSpot : offsetKm(hq.pos, 15, 15);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === 0) {
+            sim.apply(p.id, { type: 'build', def: 'refinery', pos: spot });
+          }
+        } else {
+          const rostovSpot: LngLat = [39.7203 + (Math.random() - 0.5) * 0.1, 47.2357 + (Math.random() - 0.5) * 0.1];
+          const hasRostov = teamRefineries.some((b) => distKm(b.pos, [39.7203, 47.2357]) <= 65);
+          const spot = !hasRostov ? rostovSpot : offsetKm(hq.pos, 15, 15);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === 1) {
+            sim.apply(p.id, { type: 'build', def: 'refinery', pos: spot });
+          }
+        }
+      }
+    }
   }
 
 

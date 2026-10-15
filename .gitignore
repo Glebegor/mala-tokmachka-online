@@ -9,3 +9,4 @@ data/*.json
 *.log
 .DS_Store
 .env.prod
+tools/tile-cache*/

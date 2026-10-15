@@ -5,7 +5,7 @@ import { buildFront, distToFrontKm, findPinch, nearestNode, normalAt, normalOf, 
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
-import { inDeposit } from './deposits';
+import { generateMatchDeposits, inDeposit, type ResourceDeposit } from './deposits';
 import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
@@ -73,6 +73,7 @@ export class Sim {
   /** Shots fired since the buffer was last drained (animation only). */
   shots: Shot[] = [];
   hadEverPlacedHq = new Set<Team>();
+  readonly deposits: ResourceDeposit[];
 
   constructor(
     readonly ruleset: Ruleset,
@@ -107,6 +108,15 @@ export class Sim {
     this.forbidden = shared.forbidden;
     this.cities = shared.cities;
     this.world = this.createWorld(slots);
+    if (!this.map.deposits) {
+      this.map.deposits = generateMatchDeposits(
+        this.world.front,
+        (p) => this.side(p),
+        (p) => this.foreign(p),
+        this.terrain ?? undefined,
+      );
+    }
+    this.deposits = this.map.deposits;
   }
 
   setHooks(h: Hooks) {
@@ -595,6 +605,7 @@ export class Sim {
         if (!d) return fail('unknown building');
         if (d.line) return this.buildLine(p, d, cmd.pos, cmd.to);
         if (d.maxPerPlayer && countOf(w, p.id, d.id) >= d.maxPerPlayer) return fail('limit reached');
+        if (d.maxPerTeam && w.buildings.filter((b) => b.team === p.team && b.def === d.id).length >= d.maxPerTeam) return fail('team limit reached');
         if (!isFinitePos(cmd.pos)) return fail('bad position');
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         if (!this.isPlayableGround(cmd.pos)) return fail('outside the theatre of war');
@@ -622,10 +633,47 @@ export class Sim {
           if (!hasHq) return fail('must place military HQ first');
           if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
           if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
-          const dep = inDeposit('iron', cmd.pos, p.team);
+          const myMines = w.buildings.filter((b) => b.owner === p.id && b.def === 'mine').length;
+          if (myMines >= 1) return fail('you can build at most 1 mine');
+          const dep = inDeposit('iron', cmd.pos, p.team, this.deposits);
           if (!dep) return fail('mines can only be built on iron deposits');
           const clash = w.buildings.find((b) => b.def === 'mine' && distKm(b.pos, cmd.pos) < 1);
           if (clash) return fail('space occupied');
+        } else if (d.id === 'oil_rig') {
+          const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
+          if (!hasHq) return fail('must place military HQ first');
+          if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
+          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
+          const myRigs = w.buildings.filter((b) => b.owner === p.id && b.def === 'oil_rig').length;
+          if (myRigs >= 1) return fail('you can build at most 1 oil rig');
+          const dep = inDeposit('oil', cmd.pos, p.team, this.deposits);
+          if (!dep) return fail('oil rigs can only be built on oil deposits');
+          const clash = w.buildings.find((b) => b.def === 'oil_rig' && distKm(b.pos, cmd.pos) < 1);
+          if (clash) return fail('space occupied');
+        } else if (d.id === 'refinery') {
+          const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
+          if (!hasHq) return fail('must place military HQ first');
+          if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
+          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
+          const teamRefineries = w.buildings.filter((b) => b.team === p.team && b.def === 'refinery');
+          if (teamRefineries.length >= 2) return fail('at most 2 refineries per team');
+          if (p.team === 0) {
+            const kremenchukPos: LngLat = [33.4397, 49.0703];
+            const isAtKremenchuk = distKm(cmd.pos, kremenchukPos) <= 25;
+            const hasKremenchuk = teamRefineries.some((b) => distKm(b.pos, kremenchukPos) <= 25);
+            if (teamRefineries.length === 1 && !hasKremenchuk && !isAtKremenchuk) {
+              return fail('one of your team refineries must be in Kremenchuk');
+            }
+          } else {
+            const rostovPos: LngLat = [39.7203, 47.2357];
+            const isNearRostov = distKm(cmd.pos, rostovPos) <= 65;
+            const hasRostov = teamRefineries.some((b) => distKm(b.pos, rostovPos) <= 65);
+            if (teamRefineries.length === 1 && !hasRostov && !isNearRostov) {
+              return fail('one of your team refineries must be near Rostov-on-Don');
+            }
+          }
+          const clash = w.buildings.find((b) => b.def === 'refinery' && distKm(b.pos, cmd.pos) < 10);
+          if (clash) return fail('keep at least 10 km from other refineries');
         } else if (d.id === 'housing') {
           const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
           if (!hasHq) return fail('must place military HQ first');

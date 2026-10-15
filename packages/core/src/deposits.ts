@@ -1,5 +1,8 @@
 import type { LngLat } from './geo';
 import { distKm, inPolygon, offsetKm } from './geo';
+import { distToFrontKm } from './frontline';
+import type { FrontNode } from './state';
+import type { TerrainGrid } from './terrain';
 
 export type DepositType = 'iron' | 'oil';
 
@@ -357,9 +360,140 @@ export const DEPOSITS: ResourceDeposit[] = DEPOSIT_DEFS.map((d) => ({
   polygon: createOrganicPolygon(d.center, d.radiusKm, d.seed),
 }));
 
+export const UA_IRON_NAMES = [
+  'Криворожское месторождение железа',
+  'Кременчугское железорудное поле',
+  'Никопольско-Марганецкий бассейн',
+  'Белозерское железное месторождение',
+  'Коростенское месторождение руды',
+  'Приазовский железорудный район',
+  'Побужское рудное поле',
+  'Малинское месторождение железа',
+];
+
+export const UA_OIL_NAMES = [
+  'Шебелинское нефтегазовое месторождение',
+  'Долинское нефтяное месторождение',
+  'Бориславское нефтяное поле',
+  'Глинско-Розбышевское месторождение',
+  'Леляковское нефтяное месторождение',
+  'Охтырское нефтеносное поле',
+  'Прилукское нефтяное месторождение',
+  'Качановское нефтяное месторождение',
+];
+
+export const RU_IRON_NAMES = [
+  'Курская магнитная аномалия',
+  'Михайловское железное месторождение',
+  'Лебединское рудное поле',
+  'Стойленское месторождение железа',
+  'Яковлевское железорудное поле',
+  'Тульское рудное поле',
+  'Липецкое железное месторождение',
+  'Костомукшское железорудное поле',
+];
+
+export const RU_OIL_NAMES = [
+  'Волго-Уральское нефтяное поле (Самара)',
+  'Ромашкинское нефтяное месторождение',
+  'Бавлинское нефтяное поле',
+  'Мухановское месторождение нефти',
+  'Касимовское нефтяное месторождение',
+  'Тамбовское нефтяное поле',
+  'Саратовское месторождение нефти',
+  'Сызранское нефтяное поле',
+];
+
+/**
+ * Generates randomized resource deposits (8 iron and 8 oil per team) with dynamic locations,
+ * varied radii (20..80 km diameter), and unique organic shapes for each match.
+ */
+export function generateMatchDeposits(
+  front: LngLat[] | { lng: number; lat: number }[],
+  sideFn: (p: LngLat) => number,
+  foreignFn: (p: LngLat) => boolean,
+  terrainGrid?: TerrainGrid,
+  seed = Date.now(),
+): ResourceDeposit[] {
+  let s = (seed % 2147483647) || 1234567;
+  const rand = () => {
+    s = (s * 16807) % 2147483647;
+    return (s - 1) / 2147483646;
+  };
+
+  const frontNodes: FrontNode[] = front.map((n) => (Array.isArray(n) ? { lng: n[0], lat: n[1], v: 0 } : { lng: n.lng, lat: n.lat, v: (n as any).v ?? 0 }));
+  const deposits: ResourceDeposit[] = [];
+
+  const addDepositsForTeam = (team: 0 | 1) => {
+    const ironNames = team === 0 ? UA_IRON_NAMES : RU_IRON_NAMES;
+    const oilNames = team === 0 ? UA_OIL_NAMES : RU_OIL_NAMES;
+
+    const minLng = team === 0 ? 24.5 : 37.5;
+    const maxLng = team === 0 ? 36.5 : 52.5;
+    const minLat = team === 0 ? 46.8 : 46.5;
+    const maxLat = team === 0 ? 51.5 : 57.5;
+
+    const types: ('iron' | 'oil')[] = ['iron', 'oil'];
+    for (const type of types) {
+      const names = type === 'iron' ? ironNames : oilNames;
+      for (let i = 0; i < 8; i++) {
+        let bestPt: LngLat | null = null;
+        for (let attempt = 0; attempt < 250; attempt++) {
+          const lng = minLng + rand() * (maxLng - minLng);
+          const lat = minLat + rand() * (maxLat - minLat);
+          const pt: LngLat = [lng, lat];
+
+          if (sideFn(pt) !== team) continue;
+          if (foreignFn(pt)) continue;
+          if (terrainGrid && terrainGrid.at(pt) === 'water') continue;
+
+          const dFront = distToFrontKm(frontNodes, pt);
+          const distFromFront = team === 0 ? dFront : -dFront;
+          const minFrontDist = attempt < 120 ? 150 : 80;
+          if (distFromFront < minFrontDist) continue;
+
+          const minDist = attempt < 150 ? 45 : 28;
+          if (deposits.some((d) => distKm(d.center, pt) < minDist)) continue;
+
+          bestPt = pt;
+          break;
+        }
+
+        if (!bestPt) {
+          bestPt = team === 0
+            ? [29.0 + (i % 4) * 2.2, 49.0 + Math.floor(i / 4) * 1.5]
+            : [43.0 + (i % 4) * 2.5, 52.0 + Math.floor(i / 4) * 2.0];
+        }
+
+        // Diameter 20 to 80 km (radius 10 to 40 km)
+        const radiusKm = 10 + rand() * 30;
+        const polySeed = rand() * 10000;
+        const depId = `${type}_${team === 0 ? 'ua' : 'ru'}_${i + 1}`;
+        const name = names[i % names.length] || `${type === 'iron' ? 'Месторождение железа' : 'Нефтяное месторождение'} #${i + 1}`;
+
+        deposits.push({
+          id: depId,
+          type,
+          team,
+          name,
+          center: bestPt,
+          radiusKm,
+          polygon: createOrganicPolygon(bestPt, radiusKm, polySeed),
+        });
+      }
+    }
+  };
+
+  addDepositsForTeam(0);
+  addDepositsForTeam(1);
+
+  return deposits;
+}
+
 /** Tests if a given point is inside any deposit of the specified type. */
-export function inDeposit(type: DepositType, p: LngLat, team?: 0 | 1): ResourceDeposit | null {
-  for (const dep of DEPOSITS) {
+export function inDeposit(type: DepositType, p: LngLat, team?: 0 | 1, deposits?: ResourceDeposit[]): ResourceDeposit | null {
+  const list = deposits ?? DEPOSITS;
+  for (const dep of list) {
     if (dep.type !== type) continue;
     if (team !== undefined && dep.team !== team) continue;
     // Bounding circle fast-rejection
@@ -370,8 +504,9 @@ export function inDeposit(type: DepositType, p: LngLat, team?: 0 | 1): ResourceD
 }
 
 /** Converts deposits into a GeoJSON FeatureCollection for MapLibre layer rendering. */
-export function depositsGeoJSON(filterType?: DepositType, team?: 0 | 1): any {
-  let list = filterType ? DEPOSITS.filter((d) => d.type === filterType) : DEPOSITS;
+export function depositsGeoJSON(filterType?: DepositType, team?: 0 | 1, deposits?: ResourceDeposit[]): any {
+  let list = deposits ?? DEPOSITS;
+  if (filterType) list = list.filter((d) => d.type === filterType);
   if (team !== undefined) list = list.filter((d) => d.team === team);
   return {
     type: 'FeatureCollection',
