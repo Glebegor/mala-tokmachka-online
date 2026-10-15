@@ -2,6 +2,7 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DEBUFFS, LIBERATED_CELL, SECTOR_CELL, distKm, distToFrontKm, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  districtPolygon, districtSeed, districtName,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -362,6 +363,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return inOccupied(snap!.front, init!.map.occupiedClosure, p) ? 1 : 0;
   }
 
+  const districtPolyCache = new Map<number, LngLat[]>();
+  function getCachedDistrictPoly(ix: number, iy: number): LngLat[] {
+    const k = ix * 100000 + iy;
+    let poly = districtPolyCache.get(k);
+    if (!poly) {
+      poly = districtPolygon(ix, iy);
+      districtPolyCache.set(k, poly);
+    }
+    return poly;
+  }
+
   /** Show a description card beside `el` while the pointer is over it. */
   function describe(el: HTMLElement, title: string, text: string | undefined, facts: string[], side: 'right' | 'left') {
     el.addEventListener('mouseenter', () => {
@@ -544,17 +556,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } }, 'front-zone');
       map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } }, 'front-zone');
       map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } }, 'front-zone');
-      // tactical 5x5 km combat districts (HoI4 / East Showdown style):
-      // discrete province tiles with team fill, tactical borders, and frontline along held districts
+      // tactical combat districts (HoI4 / East Showdown style):
+      // discrete Voronoi province tiles with team fill, tactical borders, and frontline along held districts
       map.addLayer({
         id: 'sectors-fill', type: 'fill', source: 'sectors',
         paint: {
-          'fill-color': ['case', ['get', 'contested'], '#f59e0b', ['match', ['get', 'team'], 0, '#1d4ed8', '#b91c1c']],
-          'fill-opacity': ['case', ['get', 'contested'], 0.28, ['+', 0.12, ['*', ['get', 'entrenchment'], 0.16]]],
+          'fill-color': ['case', ['get', 'contested'], '#f59e0b', ['match', ['get', 'team'], 0, '#1d4ed8', '#881337']],
+          'fill-opacity': ['case', ['get', 'contested'], 0.28, ['+', 0.14, ['*', ['get', 'entrenchment'], 0.16]]],
         },
       }, 'front-zone');
       map.addLayer({
-        id: 'sectors-line', type: 'line', source: 'sectors', minzoom: 6.0,
+        id: 'sectors-line', type: 'line', source: 'sectors', minzoom: 5.5,
         paint: {
           'line-color': ['case', ['get', 'contested'], '#f59e0b', '#334155'],
           'line-width': ['case', ['get', 'contested'], 1.8, 1.0],
@@ -582,19 +594,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }, 'front-zone');
       // District names / labels on map when zoomed in
       map.addLayer({
-        id: 'sectors-labels', type: 'symbol', source: 'sectors', minzoom: 7.2,
+        id: 'sectors-labels', type: 'symbol', source: 'sectors', minzoom: 6.8,
         layout: {
           'text-field': ['get', 'name'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10, 10, 13],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 6.8, 9.5, 9, 12, 11, 14],
           'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
           'text-anchor': 'center',
           'text-allow-overlap': false,
         },
         paint: {
-          'text-color': '#e2e8f0',
-          'text-halo-color': '#0f172a',
+          'text-color': '#f1f5f9',
+          'text-halo-color': '#090d16',
           'text-halo-width': 1.6,
-          'text-opacity': 0.85,
+          'text-opacity': 0.88,
         },
       });
       // trench lines: a zig-zag in the side's colour on a dark casing (faded while being dug)
@@ -1793,42 +1805,110 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
     const sectorFeatures: any[] = [];
     const frontSegments: any[] = [];
-    if (snap.sectors?.length) {
-      const { lng: cw, lat: ch } = SECTOR_CELL;
-      const secMap = new Map<string, (typeof snap.sectors)[0]>();
-      for (const s of snap.sectors) secMap.set(`${s.ix},${s.iy}`, s);
+    if (init?.map) {
+      const secMap = new Map<number, (typeof snap.sectors)[0]>();
+      if (snap.sectors?.length) {
+        for (const s of snap.sectors) secMap.set(s.ix * 100000 + s.iy, s);
+      }
 
-      for (const sec of snap.sectors) {
-        const x0 = sec.ix * cw, y0 = sec.iy * ch;
-        const x1 = x0 + cw, y1 = y0 + ch;
-        sectorFeatures.push({
-          type: 'Feature',
-          properties: {
-            id: `${sec.ix}_${sec.iy}`,
-            name: sec.name ?? '',
-            team: sec.team,
-            entrenchment: sec.entrenchment,
-            contested: sec.contested,
-            captureProgress: sec.captureProgress ?? 0,
-            defenders: sec.defenders,
-            attackers: sec.attackers,
-          },
-          geometry: {
-            type: 'Polygon',
-            coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]],
-          },
-        });
+      // Render HoI4 / East Showdown organic Voronoi provinces across the current viewport
+      const bounds = map.getBounds();
+      const pad = 0.15;
+      const west = Math.max(init.map.bounds[0], bounds.getWest() - pad);
+      const east = Math.min(init.map.bounds[2], bounds.getEast() + pad);
+      const south = Math.max(init.map.bounds[1], bounds.getSouth() - pad);
+      const north = Math.min(init.map.bounds[3], bounds.getNorth() + pad);
 
-        // HoI4 style frontline: extract boundary edges between friendly and hostile districts
-        if (sec.team === 0) {
-          const east = secMap.get(`${sec.ix + 1},${sec.iy}`);
-          if (east && east.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x1, y0], [x1, y1]] } });
-          const west = secMap.get(`${sec.ix - 1},${sec.iy}`);
-          if (west && west.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x0, y0], [x0, y1]] } });
-          const north = secMap.get(`${sec.ix},${sec.iy + 1}`);
-          if (north && north.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x0, y1], [x1, y1]] } });
-          const south = secMap.get(`${sec.ix},${sec.iy - 1}`);
-          if (south && south.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x0, y0], [x1, y0]] } });
+      let minIx = Math.floor(west / SECTOR_CELL.lng);
+      let maxIx = Math.ceil(east / SECTOR_CELL.lng);
+      let minIy = Math.floor(south / SECTOR_CELL.lat);
+      let maxIy = Math.ceil(north / SECTOR_CELL.lat);
+
+      // Clamp max cells if zoomed far out to keep high 60fps framerate
+      const totalCells = (maxIx - minIx + 1) * (maxIy - minIy + 1);
+      if (totalCells > 3600) {
+        const cx = Math.floor((minIx + maxIx) / 2);
+        const cy = Math.floor((minIy + maxIy) / 2);
+        const halfSpanX = Math.floor(Math.sqrt(3600 * (SECTOR_CELL.lat / SECTOR_CELL.lng)) / 2);
+        const halfSpanY = Math.floor(Math.sqrt(3600 * (SECTOR_CELL.lng / SECTOR_CELL.lat)) / 2);
+        minIx = cx - halfSpanX;
+        maxIx = cx + halfSpanX;
+        minIy = cy - halfSpanY;
+        maxIy = cy + halfSpanY;
+      }
+
+      for (let ix = minIx; ix <= maxIx; ix++) {
+        for (let iy = minIy; iy <= maxIy; iy++) {
+          const key = ix * 100000 + iy;
+          const s = secMap.get(key);
+          const center = districtSeed(ix, iy);
+          const team = s !== undefined ? s.team : sideAt(center);
+          const entrenchment = s?.entrenchment ?? 0;
+          const contested = s?.contested ?? false;
+          const captureProgress = s?.captureProgress ?? 0;
+          const name = s?.name || districtName(center, init.map.capturePoints);
+          const poly = getCachedDistrictPoly(ix, iy);
+          if (!poly || poly.length < 3) continue;
+
+          sectorFeatures.push({
+            type: 'Feature',
+            properties: {
+              id: `${ix}_${iy}`,
+              name,
+              team,
+              entrenchment,
+              contested,
+              captureProgress,
+              defenders: s?.defenders ?? 0,
+              attackers: s?.attackers ?? 0,
+            },
+            geometry: {
+              type: 'Polygon',
+              coordinates: [poly],
+            },
+          });
+
+          // HoI4 style frontline: extract organic boundary edges between friendly and hostile districts
+          if (team === 0) {
+            const cA = center;
+            for (let e = 0; e < poly.length - 1; e++) {
+              const v1 = poly[e];
+              const v2 = poly[e + 1];
+              const mx = (v1[0] + v2[0]) / 2;
+              const my = (v1[1] + v2[1]) / 2;
+              const dToA = (mx - cA[0]) ** 2 + (my - cA[1]) ** 2;
+
+              let bestDx = 0;
+              let bestDy = 0;
+              let minDiff = Infinity;
+              for (let dx = -1; dx <= 1; dx++) {
+                for (let dy = -1; dy <= 1; dy++) {
+                  if (dx === 0 && dy === 0) continue;
+                  const nSeed = districtSeed(ix + dx, iy + dy);
+                  const dToN = (mx - nSeed[0]) ** 2 + (my - nSeed[1]) ** 2;
+                  const diff = Math.abs(dToN - dToA);
+                  if (diff < minDiff) {
+                    minDiff = diff;
+                    bestDx = dx;
+                    bestDy = dy;
+                  }
+                }
+              }
+
+              const nKey = (ix + bestDx) * 100000 + (iy + bestDy);
+              const nSec = secMap.get(nKey);
+              const nTeam = nSec !== undefined ? nSec.team : sideAt(districtSeed(ix + bestDx, iy + bestDy));
+              if (nTeam === 1) {
+                frontSegments.push({
+                  type: 'Feature',
+                  geometry: {
+                    type: 'LineString',
+                    coordinates: [v1, v2],
+                  },
+                });
+              }
+            }
+          }
         }
       }
     }

@@ -2,6 +2,7 @@ import type { SnapMsg } from './protocol';
 import type { Sim } from './sim';
 import { distKm, type LngLat } from './geo';
 import type { Shot, Team } from './state';
+import { districtSeed } from './districts';
 
 const r4 = (n: number) => Math.round(n * 1e4) / 1e4;
 const p4 = (p: LngLat): LngLat => [r4(p[0]), r4(p[1])];
@@ -118,7 +119,26 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
     closed: w.players.filter((p) => p.team === team && !p.share).map((p) => p.id),
-    sectors: sim.activeSectors(team),
+    sectors: sim.activeSectors(team).map((s) => {
+      const isFriendly = s.team === team;
+      const center = districtSeed(s.ix, s.iy);
+      const isSeen = isFriendly || seen(center) || (s.attackers > 0 && s.capturingTeam === team);
+      if (isFriendly || isSeen) {
+        return s;
+      }
+      return {
+        ix: s.ix,
+        iy: s.iy,
+        name: s.name,
+        team: s.team,
+        entrenchment: 0,
+        contested: false,
+        captureProgress: 0,
+        capturingTeam: null,
+        defenders: 0,
+        attackers: 0,
+      };
+    }),
     queue: w.queue.filter((q) => w.buildings.find((b) => b.id === q.building)?.team === team).map((q) => ({ id: q.id, building: q.building, unit: q.unit, owner: q.owner, remaining: Math.round(q.remaining * 10) / 10, total: q.total })),
   };
 }

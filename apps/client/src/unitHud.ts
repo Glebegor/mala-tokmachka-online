@@ -1,4 +1,4 @@
-import { distKm, isReconDrone, isStrikeDrone, SECTOR_CELL, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
+import { distKm, districtAt, isReconDrone, isStrikeDrone, SECTOR_CELL, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
 import { clear, h } from './dom';
 
 /** Picking state shared with the map: route = two clicks on buildings, barrage and launch = one click on the map. */
@@ -118,18 +118,18 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     if (eta > 0) lines.push(`Arrives in ~${formatEta(eta)}`);
   }
   if (d0.kind !== 'air') {
-    const sec = c.snap.sectors?.find((s) => {
-      const ix = Math.floor(first.pos[0] / SECTOR_CELL.lng);
-      const iy = Math.floor(first.pos[1] / SECTOR_CELL.lat);
-      return s.ix === ix && s.iy === iy;
-    });
-    if (sec) {
-      const distName = sec.name ? `📍 ${sec.name}` : '📍 Тактичний район';
+    const dLoc = districtAt(first.pos);
+    const sec = c.snap.sectors?.find((s) => s.ix === dLoc.ix && s.iy === dLoc.iy);
+    const isStopped = !first.target && (!first.path || first.path.length === 0);
+    const distName = sec?.name ? `📍 ${sec.name}` : '📍 Тактичний район';
+    if (!isStopped) {
+      lines.push(`${distName}: 🚚 На марші (зупиніться для закріплення)`);
+    } else if (sec) {
       if (sec.team === c.myTeam) {
         if (sec.contested) {
           lines.push(`${distName}: ⚔️ Оборона під вогнем (${sec.defenders} захисн. / ${sec.attackers} ворог.)`);
         } else {
-          lines.push(`${distName}: 🛡️ Утримується (${Math.round(sec.entrenchment * 65)}% окопання)`);
+          lines.push(`${distName}: 🛡️ Закріплено в районі (${Math.round(sec.entrenchment * 65)}% захисту)`);
         }
       } else {
         if (sec.captureProgress && sec.captureProgress > 0) {
@@ -138,6 +138,8 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
           lines.push(`${distName}: ⚔️ Ворожий рубіж (${sec.defenders} захисн.)`);
         }
       }
+    } else {
+      lines.push(`${distName}: 🛡️ Закріплено на позиції`);
     }
   }
   el.append(

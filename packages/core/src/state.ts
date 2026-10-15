@@ -277,8 +277,8 @@ export interface CombatSector {
   attackers: number; // count of hostile ground troops assaulting the sector
 }
 
-/** 5x5 km district cell dimensions in degrees (~5.0 km lat, ~5.0 km lng at ~48°N). */
-export const SECTOR_CELL = { lng: 0.067, lat: 0.045 } as const;
+/** Tactical district/province dimensions in degrees (~4.0 km lat, ~4.0 km lng at ~48°N). */
+export const SECTOR_CELL = { lng: 0.054, lat: 0.036 } as const;
 
 export interface CapturePoint {
   id: string;

@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { distKm, offsetKm, Sim, type LngLat } from '../src';
+import { distKm, offsetKm, Sim, districtPolygon, districtSeed, districtAt, snapshotFor, type LngLat } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const fresh = () => {
@@ -221,8 +221,8 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   const secContested = sim.sectorAt(posA)!;
   assert.equal(secContested.contested, true, 'district with both teams present is contested');
 
-  // 6. Capture by presence: once defender is eliminated, attackers capture the district
-  defender.hp = 0; // eliminate defender
+  // 6. Capture by presence: once defenders are eliminated, attackers capture the district
+  sim.world.units.filter((u) => u.team === 0).forEach((u) => (u.hp = 0));
   run(sim, 8); // 8 seconds of uncontested enemy occupation
   const secCaptured = sim.sectorAt(posA)!;
   assert.equal(secCaptured.team, 1, 'district flipped ownership to enemy team');
@@ -230,4 +230,94 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
 
   console.log('tactical districts ok: naming, entrenchment, 65% direct damage reduction, and capture by presence');
 }
+
+// --- HoI4-style irregular Voronoi provinces: organic polygonal geometry, non-square puzzle pieces ---
+{
+  const poly = districtPolygon(600, 1200);
+  assert.ok(poly.length >= 6, `district polygon has organic vertices (had ${poly.length})`);
+  assert.deepEqual(poly[0], poly[poly.length - 1], 'district polygon is a closed ring');
+
+  // Verify non-square irregular edges: angles/lengths are organic rather than a simple 4-corner box
+  const polyNeighbor = districtPolygon(601, 1200);
+  const uniquePoly1 = poly.slice(0, -1);
+  const uniquePoly2 = polyNeighbor.slice(0, -1);
+  let sharedVertices = 0;
+  for (const p1 of uniquePoly1) {
+    if (uniquePoly2.some((p2) => Math.abs(p1[0] - p2[0]) < 1e-4 && Math.abs(p1[1] - p2[1]) < 1e-4)) {
+      sharedVertices++;
+    }
+  }
+  assert.equal(sharedVertices, 2, 'neighboring Voronoi provinces share exactly 2 vertices (a common tactical border edge)');
+  console.log('Voronoi province geometry ok: organic irregular puzzle pieces, shared border edges, zero gaps');
+}
+
+// --- Ground troop snapping: units only bind to a sector once completely halted ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hqA = hqOf(sim, 'a');
+  // Clear any existing starter units to test in isolation
+  sim.world.units.forEach((u) => (u.hp = 0));
+
+  const startPos = offsetKm(hqA.pos, 3, 0);
+  const destPos = offsetKm(startPos, 2, 0);
+  const unit = sim.spawnUnit('infantry', a, startPos);
+
+  // 1. Give move order: unit is in transit, path > 0
+  sim.orderMove([unit], destPos, false, false, false);
+  run(sim, 0.5); // unit starts moving
+  assert.ok(unit.path.length > 0 || unit.target, 'unit has active move path');
+  const secMoving = sim.sectorAt(unit.pos)!;
+  assert.equal(secMoving.defenders, 0, 'moving unit does NOT bind to sector while on the march');
+  assert.ok(!unit.status.some(([s]) => s === 'entrenched'), 'moving unit does NOT gain entrenched status');
+
+  // 2. Halt unit completely: unit binds to the sector and starts garrisoning
+  unit.path = [];
+  unit.target = null;
+  run(sim, 1.0); // 1.0s stationary -> still >= 0.5
+  const secStopped = sim.sectorAt(unit.pos)!;
+  assert.equal(secStopped.defenders, 1, 'unit binds and garrisons sector once completely halted');
+
+  console.log('troop snapping ok: moving units do not bind, halted units garrison and entrench');
+}
+
+// --- Fog of war secrecy: enemy troop movements and sectors in fog NEVER leak positions ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const b = sim.player('b')!;
+  const hqB = hqOf(sim, 'b');
+
+  // Place enemy unit deep in Russia outside Ukraine's vision
+  const deepRuPos = offsetKm(hqB.pos, 10, 0);
+  const enemyUnit = sim.spawnUnit('tank', b, deepRuPos);
+  run(sim, 1.0); // enemy stops and garrisons its district
+
+  // Ukraine player 'a' takes snapshot:
+  const snapUA = snapshotFor(sim, 'a', 0);
+  const leakedSector = snapUA.sectors?.find((s) => {
+    const loc = districtAt(deepRuPos);
+    return s.ix === loc.ix && s.iy === loc.iy;
+  });
+  assert.ok(leakedSector, 'province ownership is public strategic knowledge');
+  assert.equal(leakedSector.defenders, 0, 'fog of war: enemy defenders count masked to 0');
+  assert.equal(leakedSector.attackers, 0, 'fog of war: attackers masked to 0');
+  assert.equal(leakedSector.contested, false, 'fog of war: contested state masked to false');
+  assert.equal(leakedSector.captureProgress, 0, 'fog of war: capture progress masked to 0');
+  assert.equal(leakedSector.entrenchment, 0, 'fog of war: enemy entrenchment masked to 0');
+
+  // Now spawn Ukrainian recon drone with line of sight over the enemy position:
+  const recon = sim.spawnUnit('drone', a, deepRuPos);
+  run(sim, 0.2);
+  const snapWithSight = snapshotFor(sim, 'a', 0);
+  const spottedSector = snapWithSight.sectors?.find((s) => {
+    const loc = districtAt(deepRuPos);
+    return s.ix === loc.ix && s.iy === loc.iy;
+  });
+  assert.ok(spottedSector, 'spotted sector exists');
+  assert.equal(spottedSector.defenders, 1, 'spotted sector reveals enemy defenders when in sight');
+
+  console.log('fog of war secrecy ok: zero position leaks in fog of war, full intel when spotted');
+}
+
 

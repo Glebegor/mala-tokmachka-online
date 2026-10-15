@@ -6,7 +6,7 @@ import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
 import { LIBERATED_CELL, SECTOR_CELL, type Building, type CombatSector, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
-import { districtName } from './districts';
+import { districtAt, districtName, districtSeed } from './districts';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -1427,16 +1427,14 @@ export class Sim {
     return (this.libRuns = out);
   }
 
-  /** Tactical 2x2 km combat sectors by spatial key. */
+  /** Tactical Voronoi combat districts / provinces by spatial key. */
   private sectorByKey = new Map<number, CombatSector>();
 
   sectorAt(p: LngLat): CombatSector | undefined {
-    const ix = Math.floor(p[0] / SECTOR_CELL.lng);
-    const iy = Math.floor(p[1] / SECTOR_CELL.lat);
+    const { ix, iy, center } = districtAt(p);
     const key = Sim.cellKey(ix, iy);
     let s = this.sectorByKey.get(key);
     if (!s) {
-      const center: LngLat = [(ix + 0.5) * SECTOR_CELL.lng, (iy + 0.5) * SECTOR_CELL.lat];
       s = {
         ix,
         iy,
@@ -1455,9 +1453,10 @@ export class Sim {
   }
 
   /**
-   * 5x5 km Tactical combat districts / provinces (HoI4 / East Showdown style):
+   * Tactical combat districts / provinces (HoI4 / East Showdown style):
    * Holds territory, tracks entrenchment, handles capture by presence (~7.5s uncontested),
    * and provides ~2.8x survivability (65% direct damage reduction) for defending infantry.
+   * Ground units only bind to and garrison a sector once they have completely halted.
    */
   private sectors(dt: number) {
     const w = this.world;
@@ -1466,12 +1465,14 @@ export class Sim {
       if (u.hp <= 0 || u.embarkedIn || u.parkedAt !== undefined) continue;
       const ud = this.defs.u.get(u.def);
       if (!ud || ud.kind === 'air') continue;
-      const ix = Math.floor(u.pos[0] / SECTOR_CELL.lng);
-      const iy = Math.floor(u.pos[1] / SECTOR_CELL.lat);
+      // Ground unit must be completely stopped inside the sector to bind and garrison it:
+      const isStopped = !u.target && (!u.path || u.path.length === 0) && (u.still ?? 0) >= 0.3;
+      if (!isStopped) continue;
+
+      const { ix, iy, center } = districtAt(u.pos);
       const key = Sim.cellKey(ix, iy);
       let s = this.sectorByKey.get(key);
       if (!s) {
-        const center: LngLat = [(ix + 0.5) * SECTOR_CELL.lng, (iy + 0.5) * SECTOR_CELL.lat];
         s = {
           ix,
           iy,
@@ -1585,7 +1586,8 @@ export class Sim {
         if (u.transport) s.push(['transport', r.transportDamageMult]);
         if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
         const sec = this.sectorAt(u.pos);
-        if (sec && sec.team === u.team && sec.entrenchment > 0.05) s.push(['entrenched', sec.entrenchment]);
+        const isStopped = !u.target && (!u.path || u.path.length === 0) && (u.still ?? 0) >= 0.3;
+        if (sec && sec.team === u.team && sec.entrenchment > 0.05 && isStopped) s.push(['entrenched', sec.entrenchment]);
       }
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
