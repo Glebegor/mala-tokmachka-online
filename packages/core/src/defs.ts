@@ -43,6 +43,8 @@ export interface BuildingDef {
   buildInGrey?: boolean;
   /** Drawn as a line (trenches): length limits in km; cost and build time are per km, cover reaches `defense.radiusKm` from the line. */
   line?: { minKm: number; maxKm: number };
+  /** Bunker: troops on foot can take cover inside, fire out of it and cannot be hit until it falls. */
+  garrison?: { capacity: number };
   /** Launcher: drones and missiles of these kinds wait here and take off from here (airfield: recon; launch site: strike). */
   launches?: ('recon' | 'strike')[];
   /** Railway track (a line): joins up with stations and other track within 1.5 km into a network trains run on. */

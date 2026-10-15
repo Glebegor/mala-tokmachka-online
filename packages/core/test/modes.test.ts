@@ -792,3 +792,50 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(sim.world.units.length <= n + 1, 'no money, no more');
   console.log('launchers, rally points, repeat ok');
 }
+
+// --- bunkers: a garrison fires out, cannot be hit until it falls; shelled it dies, stormed it stumbles out shaken ---
+{
+  const mkBunker = (sim: Sim) => {
+    const hq = hqOf(sim, 'a');
+    const b = { ...hq, id: sim.world.nextId++, def: 'bunker', hp: 1400, pos: offsetKm(hq.pos, 20, 0), storage: undefined, inside: [], course: null, upgrade: null };
+    sim.world.buildings.push(b);
+    return b;
+  };
+  const sim = fresh({ peaceSeconds: 0 });
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const bunker = mkBunker(sim);
+  const men = [sim.spawnUnit('infantry', a, offsetKm(bunker.pos, 0.5, 0)), sim.spawnUnit('infantry_assault', a, offsetKm(bunker.pos, 0, 0.5))];
+  const tank = sim.spawnUnit('tank', a, offsetKm(bunker.pos, 0, -0.5));
+  assert.ok(sim.apply('a', { type: 'enter', units: [...men, tank].map((u) => u.id), building: bunker.id }).ok);
+  run(sim, 15);
+  assert.equal(bunker.inside.length, 2, 'the two squads on foot went in (not the tank)');
+  tank.hp = 0;
+  run(sim, 0.2);
+  const foe = sim.spawnUnit('infantry', b, offsetKm(bunker.pos, 0.8, 0));
+  foe.hp = 1e6;
+  run(sim, 5);
+  assert.ok(foe.hp < 1e6, 'the garrison fires out of the bunker');
+  assert.ok(bunker.hp < 1400, 'the enemy can only hit the bunker');
+  assert.ok(men.every((u) => u.hp === sim.maxHp(u)), 'the men inside are untouched');
+  // shelled down: the garrison dies with it
+  bunker.hp = 1;
+  const gun = sim.spawnUnit('artillery', b, offsetKm(bunker.pos, 8, 0));
+  (sim as any).blast(gun, bunker.pos, 1, 500, false);
+  run(sim, 0.2);
+  assert.ok(!sim.world.buildings.includes(bunker), 'the bunker fell');
+  assert.ok(men.every((u) => !sim.world.units.includes(u)), 'shelled: the garrison is lost');
+  // stormed: they come out shaken
+  const sim2 = fresh({ peaceSeconds: 0 });
+  const b2 = mkBunker(sim2);
+  const sq = sim2.spawnUnit('infantry', sim2.player('a')!, offsetKm(b2.pos, 0.3, 0));
+  sim2.apply('a', { type: 'enter', units: [sq.id], building: b2.id });
+  run(sim2, 10);
+  assert.equal(b2.inside.length, 1);
+  b2.hp = 1;
+  const rifle = sim2.spawnUnit('infantry', sim2.player('b')!, offsetKm(b2.pos, 0.6, 0));
+  rifle.hp = 1e6;
+  run(sim2, 3);
+  assert.ok(!sim2.world.buildings.includes(b2) && sim2.world.units.includes(sq), 'stormed: the squad comes out alive');
+  assert.ok(sq.status.some(([id]) => id === 'suppressed'), 'shaken for a few seconds');
+  console.log('bunkers ok');
+}
