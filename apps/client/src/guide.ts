@@ -37,6 +37,8 @@ const SECTIONS: Section[] = [
         ['Right click', 'Move by the fastest route (roads in transport mode, bridges over rivers)'],
         ['Shift + right click', 'Add a waypoint'],
         ['Alt + right click', 'Move straight across country, ready to fight'],
+        ['Right drag', 'Move and form up facing the way you drag (line, column or wedge; a spread group forms a line)'],
+        ['F', 'Next formation: spread, line, column, wedge'],
         ['S', 'Stop'],
         ['G / U', 'Group / ungroup the selection'],
         ['Ctrl + 1–9, 1–9', 'Assign / select a numbered group (press again to jump to it)'],

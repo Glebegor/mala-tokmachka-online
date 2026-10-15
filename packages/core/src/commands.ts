@@ -17,7 +17,7 @@ export type Command =
    * `queue` appends to the current orders; `mode: 'direct'` skips roads and stays combat-ready when the way is open;
    * `attack` stops to fight whatever it meets on the way. `formation` arranges a group at the destination.
    */
-  | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean; queue?: boolean; mode?: 'fast' | 'direct'; attack?: boolean; formation?: Formation }
+  | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean; queue?: boolean; mode?: 'fast' | 'direct'; attack?: boolean; formation?: Formation; facing?: number }
   /** How units behave on their own: hold position, defend their post, or go after what they see. */
   | { type: 'stance'; units: number[]; stance: Stance }
   /** Fall back to a hospital or base by themselves below this share of health (0 = never). */

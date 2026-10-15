@@ -1,6 +1,6 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
-import { clamp, distKm, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
+import { clamp, distKm, formationSpot, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
 import { buildFront, distToFrontKm, findPinch, nearestNode, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
@@ -697,7 +697,9 @@ export class Sim {
         if (mine.length && mine.every((u) => this.defs.u.get(u.def)!.railOnly)) return fail('trains only run delivery routes between railway stations');
         for (const u of mine) (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false); // a manual order cancels a delivery round or a fuel run
         const formation = (['spread', 'line', 'column', 'wedge'] as const).includes(cmd.formation as never) ? cmd.formation : 'spread';
-        const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation);
+        // the way the front of the formation faces (degrees from north, clockwise); otherwise the way it travels
+        const facing = typeof cmd.facing === 'number' && Number.isFinite(cmd.facing) ? ((cmd.facing % 360) + 360) % 360 : undefined;
+        const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation, facing);
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
       }
       case 'rally': {
@@ -1104,7 +1106,7 @@ export class Sim {
    * Plan routes for a move order. Ground units travel by road in transport mode when that is quicker, rivers are only
    * crossed on bridges (roads) or at boat crossings. Returns how many units got a route.
    */
-  private orderMove(units: Unit[], to: LngLat, cohesion: boolean, queue: boolean, direct: boolean, formation: 'spread' | 'line' | 'column' | 'wedge' = 'spread'): number {
+  private orderMove(units: Unit[], to: LngLat, cohesion: boolean, queue: boolean, direct: boolean, formation: 'spread' | 'line' | 'column' | 'wedge' = 'spread', facing?: number): number {
     if (!units.length) return 0;
     const r = this.ruleset.rules;
     const cap = cohesion ? Math.min(...units.map((u) => this.defs.u.get(u.def)!.speed)) : 0;
@@ -1119,6 +1121,16 @@ export class Sim {
     }
     let own = 0;
     let moved = 0;
+    // places in the formation go to the units nearest to them, so nobody has to cross the whole group to reach theirs
+    const slot = new Map<Unit, number>();
+    if (formation !== 'spread' && ground.length > 1) {
+      const spots = ground.map((_, i) => formationSpot(formation, i, ground.length, centre, to, facing));
+      const free = new Set(spots.keys());
+      const pairs: [number, Unit, number][] = [];
+      for (const u of ground) for (const i of free) pairs.push([distKm(startOf(u), spots[i]), u, i]);
+      pairs.sort((a, b) => a[0] - b[0]);
+      for (const [, u, i] of pairs) if (!slot.has(u) && free.has(i)) slot.set(u, i), free.delete(i);
+    }
     units.forEach((u, i) => {
       const d = this.defs.u.get(u.def)!;
       const from = startOf(u);
@@ -1147,7 +1159,7 @@ export class Sim {
       if (this.peaceLeft() > 0 && this.side(to) !== u.team) return; // ceasefire: the front is closed
       // artillery never drives up to (or over) the front line
       if (d.minRange && distToFrontKm(this.world.front, to) * (u.team === 0 ? 1 : -1) < 0.5) return;
-      let dest: LngLat = this.formationSpot(formation, i, units.length, centre, to);
+      let dest: LngLat = formationSpot(formation, slot.get(u) ?? i, ground.length, centre, to, facing);
       let leg: Waypoint[] | null;
       {
         // never park a unit in the river because of its place in the formation
@@ -1174,31 +1186,6 @@ export class Sim {
       moved++;
     });
     return moved;
-  }
-
-  /**
-   * Where the i-th of n units stands when a group arrives: spread (a loose cluster), a line across the direction of
-   * travel, a column along it, or a wedge pointing forward. Spacing ~350 m.
-   */
-  private formationSpot(f: 'spread' | 'line' | 'column' | 'wedge', i: number, n: number, from: LngLat, to: LngLat): LngLat {
-    if (f === 'spread' || n < 2) {
-      const ring = Math.ceil(Math.sqrt(i));
-      return [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
-    }
-    const dx = (to[0] - from[0]) * kmPerDegLng(to[1]), dy = (to[1] - from[1]) * 111.32;
-    const len = Math.hypot(dx, dy) || 1;
-    const fx = dx / len, fy = dy / len; // forward
-    const rx = fy, ry = -fx; // right
-    const s = 0.35;
-    let side = 0, back = 0;
-    if (f === 'line') side = (i - (n - 1) / 2) * s;
-    else if (f === 'column') back = i * s;
-    else {
-      const k = Math.ceil(i / 2);
-      side = (i % 2 ? 1 : -1) * k * s;
-      back = k * s;
-    }
-    return offsetKm(to, rx * side - fx * back, ry * side - fy * back);
   }
 
   private rankUp(u: Unit) {

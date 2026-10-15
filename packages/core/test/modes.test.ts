@@ -551,8 +551,10 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   const goal = offsetKm(at, -20, 6);
   sim.apply('a', { type: 'move', units: squad.map((u) => u.id), to: goal, mode: 'direct', formation: 'line' });
   const ends = squad.map((u) => u.path[u.path.length - 1].p);
-  const spanEW = distKm(ends[0], ends[4]);
-  assert.ok(spanEW > 1.2 && Math.abs(ends[0][1] - ends[4][1]) < 0.005, `line formation: side by side across the way (${spanEW.toFixed(2)} km wide)`);
+  // (each unit takes the place nearest to it, so measure the whole line)
+  const byLng = [...ends].sort((p, q) => p[0] - q[0]);
+  const spanEW = distKm(byLng[0], byLng[4]);
+  assert.ok(spanEW > 1.2 && Math.max(...ends.map((p) => p[1])) - Math.min(...ends.map((p) => p[1])) < 0.005, `line formation: side by side across the way (${spanEW.toFixed(2)} km wide)`);
   // retreat: below the threshold a unit falls back to a field hospital by itself
   sim.world.buildings.push({ ...hq, id: sim.world.nextId++, def: 'med_center', hp: 450, pos: offsetKm(hq.pos, 5, 5), storage: undefined, inside: [], course: null, upgrade: null });
   const hurt = sim.spawnUnit('infantry', a, offsetKm(hq.pos, 30, 20));
@@ -561,6 +563,24 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   run(sim, 2);
   assert.ok(hurt.retreating && hurt.path.length > 0, 'a battered unit falls back');
   console.log('combat system ok: stances, attack-move, formations, retreat');
+}
+
+// --- formations face where they are told: a line facing east stands north–south, a wedge facing north points north ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const squad = [0, 1, 2, 3, 4].map((k) => sim.spawnUnit('infantry', a, offsetKm(hq.pos, -6 + k * 0.2, -3)));
+  const to = offsetKm(hq.pos, -6, -8); // straight south of them
+  assert.ok(sim.apply('a', { type: 'move', units: squad.map((u) => u.id), to, formation: 'line', facing: 90 }).ok);
+  const spots = squad.map((u) => u.target!);
+  const lngSpan = Math.max(...spots.map((p) => p[0])) - Math.min(...spots.map((p) => p[0]));
+  const latSpan = Math.max(...spots.map((p) => p[1])) - Math.min(...spots.map((p) => p[1]));
+  assert.ok(latSpan > 0.01 && lngSpan < 0.001, `the line runs north–south when facing east (Δlat ${latSpan.toFixed(4)}, Δlng ${lngSpan.toFixed(4)})`);
+  assert.ok(sim.apply('a', { type: 'move', units: squad.map((u) => u.id), to, formation: 'wedge', facing: 0 }).ok);
+  const tip = squad.map((u) => u.target!).reduce((m, p) => (p[1] > m[1] ? p : m));
+  assert.ok(distKm(tip, to) < 0.05, 'the point of the wedge is the northernmost, at the destination');
+  console.log('formation facing ok');
 }
 
 // --- multi-stop delivery routes: load, via a waypoint, unload at two sites; leave only with the minimum load ---

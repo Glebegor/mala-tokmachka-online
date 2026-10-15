@@ -24,3 +24,31 @@ export function offsetKm(p: LngLat, dxKm: number, dyKm: number): LngLat {
 }
 
 export const clamp = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+/**
+ * Where the i-th of n units stands when a group arrives: spread (a loose cluster), a line across the direction of
+ * travel, a column along it, or a wedge pointing forward. Spacing ~350 m. `facing` (degrees from north, clockwise)
+ * turns the front another way than the direction of travel.
+ */
+export function formationSpot(f: 'spread' | 'line' | 'column' | 'wedge', i: number, n: number, from: LngLat, to: LngLat, facing?: number): LngLat {
+  if (f === 'spread' || n < 2) {
+    const ring = Math.ceil(Math.sqrt(i));
+    return [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
+  }
+  const rad = facing === undefined ? 0 : (facing * Math.PI) / 180;
+  const dx = facing === undefined ? (to[0] - from[0]) * kmPerDegLng(to[1]) : Math.sin(rad);
+  const dy = facing === undefined ? (to[1] - from[1]) * 111.32 : Math.cos(rad);
+  const len = Math.hypot(dx, dy) || 1;
+  const fx = dx / len, fy = dy / len; // forward
+  const rx = fy, ry = -fx; // right
+  const s = 0.35;
+  let side = 0, back = 0;
+  if (f === 'line') side = (i - (n - 1) / 2) * s;
+  else if (f === 'column') back = i * s;
+  else {
+    const k = Math.ceil(i / 2);
+    side = (i % 2 ? 1 : -1) * k * s;
+    back = k * s;
+  }
+  return offsetKm(to, rx * side - fx * back, ry * side - fy * back);
+}

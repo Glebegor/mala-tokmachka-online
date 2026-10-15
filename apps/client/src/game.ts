@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
@@ -51,7 +51,7 @@ const STYLE: maplibregl.StyleSpecification = {
 const TEAM_COLOR = ['#3d8bff', '#ff4d4d'];
 const TEAM_NAME = ['UKRAINE', 'RUSSIA'];
 const GROUP_ZOOM = 8; // below this zoom a group is drawn as one formation marker
-const HINT = 'Click: select (Shift: add) · Shift+drag: box · Right click: move (Shift: waypoint, Alt: off-road) · P / Alt+click: ping · G: group · T: terrain · M: map';
+const HINT = 'Click: select (Shift: add) · Shift+drag: box · Right click: move (drag: face that way; Shift: waypoint, Alt: off-road) · P / Alt+click: ping · G: group · T: terrain · M: map';
 
 type Fc = { type: 'FeatureCollection'; features: any[] };
 const empty = (): Fc => ({ type: 'FeatureCollection', features: [] });
@@ -78,6 +78,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let stored: UnitView[] = [];
   /** Attack-move or plain move, and the formation for group moves (set in the command panel, A / F). */
   const orders: OrderStyle = { attack: false, formation: 'spread' };
+  /** A right press with units selected: where they go, and (once dragged) which way the formation faces. */
+  let faceDrag: { to: LngLat; x: number; y: number; facing?: number } | null = null;
+  let faceDone = 0;
   /** City boundaries per capture point (housing may only go inside a held city). */
   const cityPolys = new Map<string, LngLat[][]>();
   /** Smoothly interpolated unit positions between 5 Hz snapshots. */
@@ -492,7 +495,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -570,9 +573,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'rings-sel', type: 'fill', source: 'rings', filter: ['==', ['get', 'sel'], true], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.06 } }, 'rings');
       map.addLayer({ id: 'ghost-fill', type: 'fill', source: 'ghost', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 } });
       map.addLayer({ id: 'ghost-line', type: 'line', source: 'ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [3, 2] } });
-      // where the selected units are going: a bright dashed line on a dark casing, readable over any terrain
+      // where the selected units are going: a soft solid blue line on a faint casing
       map.addLayer({ id: 'sel-case', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#0b1220', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.2, 10, 5.2], 'line-opacity': 0.35 } });
       map.addLayer({ id: 'sel-line', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#5aa9ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.5, 10, 2.6], 'line-opacity': 0.75, 'line-blur': 0.4 } });
+      // right-drag preview: the arrow shows where the front will face, the dots where each unit will stand
+      map.addLayer({ id: 'facing-line', type: 'line', source: 'facing', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#5aa9ff', 'line-width': 2.2, 'line-opacity': 0.9 } });
+      map.addLayer({ id: 'facing-pts', type: 'circle', source: 'facing', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': 'rgba(90,169,255,0.25)', 'circle-stroke-color': '#5aa9ff', 'circle-stroke-width': 1.5 } });
       map.addLayer({ id: 'sel-pts', type: 'circle', source: 'sel', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#0b1220', 'circle-stroke-color': '#5aa9ff', 'circle-stroke-width': 1.6, 'circle-opacity': 0.8, 'circle-stroke-opacity': 0.85 } });
 
       const iconSize: any = ['interpolate', ['linear'], ['zoom'], 5, 0.4, 8, 0.58, 11, 0.85];
@@ -716,9 +722,32 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (pick.route || pick.launch || pick.fuel || pick.launchFrom || pick.rally) return void ((pick.route = pick.launch = pick.fuel = pick.launchFrom = pick.rally = null), render());
       if (placing) return cancelPlacing();
       if (!selUnits.size) return;
-      const ev = e.originalEvent;
-      // Shift queues another waypoint, Alt goes straight across country (no roads, stays combat-ready)
-      send({ type: 'move', units: [...selUnits], to: [e.lngLat.lng, e.lngLat.lat], cohesion: formation && selUnits.size > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast', attack: orders.attack, formation: orders.formation });
+      // a right press on the map is finished on release (a drag there sets which way the formation faces)
+      if (faceDrag || performance.now() - faceDone < 400) return;
+      moveOrder([e.lngLat.lng, e.lngLat.lat], e.originalEvent);
+    });
+    // right press, drag the way the front should face, release: the group forms up there facing that way
+    mapEl.addEventListener('mousedown', (e) => {
+      if (e.button !== 2 || !selUnits.size || (e.target as Element).closest?.('.maplibregl-marker') || placing || marking || pick.bombard || pick.route || pick.launch || pick.fuel || pick.launchFrom || pick.rally) return;
+      const r = mapEl.getBoundingClientRect();
+      const ll = map.unproject([e.clientX - r.left, e.clientY - r.top]);
+      faceDrag = { to: [ll.lng, ll.lat], x: e.clientX, y: e.clientY };
+    }, true);
+    window.addEventListener('mousemove', (e) => {
+      if (!faceDrag) return;
+      if (Math.hypot(e.clientX - faceDrag.x, e.clientY - faceDrag.y) < 18) return void ((faceDrag.facing = undefined), drawFacing());
+      const r = mapEl.getBoundingClientRect();
+      const ll = map.unproject([e.clientX - r.left, e.clientY - r.top]);
+      faceDrag.facing = bearing(faceDrag.to, [ll.lng, ll.lat]);
+      drawFacing();
+    });
+    window.addEventListener('mouseup', (e) => {
+      if (e.button !== 2 || !faceDrag) return;
+      const { to, facing } = faceDrag;
+      faceDrag = null;
+      faceDone = performance.now();
+      drawFacing();
+      moveOrder(to, e, facing);
     });
     window.addEventListener('keydown', onKey);
 
@@ -730,6 +759,42 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }, true);
     window.addEventListener('mousemove', onBoxMove);
     window.addEventListener('mouseup', onBoxUp);
+  }
+
+  /** Move the selection (Shift queues another waypoint, Alt goes straight across country, ready to fight). */
+  function moveOrder(to: LngLat, ev: { shiftKey: boolean; altKey: boolean }, facing?: number) {
+    if (!selUnits.size) return;
+    // a facing only means something for a line, column or wedge: with a loose spread it lines them up
+    const shape = facing !== undefined && orders.formation === 'spread' ? 'line' : orders.formation;
+    send({ type: 'move', units: [...selUnits], to, cohesion: formation && selUnits.size > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast', attack: orders.attack, formation: shape, facing });
+  }
+
+  /** Degrees from north, clockwise, from a to b. */
+  const bearing = (a: LngLat, b: LngLat) => {
+    const dx = (b[0] - a[0]) * Math.cos((a[1] * Math.PI) / 180), dy = b[1] - a[1];
+    return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+  };
+
+  /** The right-drag preview: an arrow the way the front faces and a dot where each ground unit will stand. */
+  function drawFacing() {
+    const src = map?.getSource('facing') as GeoJSONSource | undefined;
+    if (!src) return;
+    if (!faceDrag || faceDrag.facing === undefined || !snap) return src.setData(empty());
+    const ground = snap.units.filter((u) => selUnits.has(u.id) && defU.get(u.def)?.kind !== 'air');
+    const n = Math.max(1, ground.length);
+    const centre: LngLat = ground.length ? [ground.reduce((a, u) => a + posOf(u)[0], 0) / n, ground.reduce((a, u) => a + posOf(u)[1], 0) / n] : faceDrag.to;
+    const shape = orders.formation === 'spread' ? 'line' : orders.formation;
+    const { to, facing } = faceDrag;
+    const rad = (facing * Math.PI) / 180;
+    const kmPerPx = (40075 * Math.cos((to[1] * Math.PI) / 180)) / (512 * 2 ** map.getZoom());
+    const len = Math.max(0.8, n * 0.2, 70 * kmPerPx); // at least ~70 px on screen
+    const tip = offsetKm(to, Math.sin(rad) * len, Math.cos(rad) * len);
+    const barb = (a: number) => offsetKm(tip, Math.sin(rad + Math.PI + a) * len * 0.35, Math.cos(rad + Math.PI + a) * len * 0.35);
+    src.setData({ type: 'FeatureCollection', features: [
+      { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [to, tip] } },
+      { type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: [barb(0.45), tip, barb(-0.45)] } },
+      ...Array.from({ length: n }, (_, i) => ({ type: 'Feature', properties: {}, geometry: { type: 'Point', coordinates: formationSpot(shape, i, n, centre, to, facing) } })),
+    ] } as any);
   }
 
   /** The guidebook, with this match's units and buildings. */
@@ -1473,7 +1538,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           group ? h('button', { onClick: () => ungroup() }, 'Ungroup (U)') : null,
           h('button', { class: 'ghost', onClick: () => send({ type: 'stop', units: [...selUnits] }) }, 'Stop (S)'),
         ),
-        h('div', { class: 'muted' }, 'Right click: fastest route (roads in transport mode, bridges over rivers). Shift+right click: add a waypoint. Alt+right click: straight across country.'),
+        h('div', { class: 'muted' }, 'Right click: fastest route (roads in transport mode, bridges over rivers). Shift+right click: add a waypoint. Alt+right click: straight across country. Right drag: form up facing the way you drag.'),
       );
       renderEffects(effects);
     }
