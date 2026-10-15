@@ -224,11 +224,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     lastQueue = new Map(s.queue.map((q) => [q.id, q]));
   }
 
+  let topBar!: HTMLElement;
   app.append(
     h('div', { class: 'game' }, mapEl, dock.el, queueSlot, effectsSlot,
-      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, langControl('ghost'), uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      topBar = h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, langControl('ghost'), uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner, markMenu),
   );
+
+  // the side panels start below the top bar, however many rows it wraps into (resources, UI size, language)
+  const fitTop = () => topBar.parentElement?.style.setProperty('--top', `${Math.ceil(topBar.offsetHeight) + 6}px`);
+  new ResizeObserver(fitTop).observe(topBar);
+  fitTop();
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
   const toast = (text: string, bad = false) => {
@@ -392,6 +398,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         break;
       case 'error':
         toast(msg.reason, true);
+        // a refused delivery route comes back to the panel to be fixed, stops and all
+        if (pick.sentRoute && Date.now() - pick.sentRoute.at < 3000) (pick.route = pick.sentRoute.route), (pick.sentRoute = null), render();
         break;
       case 'mark':
         showMark(msg);

@@ -62,6 +62,8 @@ export interface HaulStop {
   action: 'load' | 'unload' | 'via';
   building?: number;
   pos?: LngLat;
+  /** A one-off stop (dropping goods left on board from an earlier job), left out of the loop after it is done. */
+  once?: boolean;
 }
 
 /** A standing delivery order for a truck: 2–6 stops driven in a loop (load, unload, waypoints), repeat. */
@@ -74,8 +76,10 @@ export interface Haul {
   /** Leave the last loading stop only with at least this much on board (or full). */
   minLoad?: number;
   timer?: number;
-  /** At a loading stop, waiting for enough goods. */
+  /** At a loading stop, waiting for enough goods (or at an unloading stop, for room). */
   waiting?: boolean;
+  /** Low on fuel: off the route to fill up here, then back to the current stop. */
+  refuelAt?: LngLat;
   /** A train with no track to its next stop: it waits until there is a connection. */
   noTrack?: boolean;
   /** Track segments the current leg runs on (a train re-plans when one is cut). */

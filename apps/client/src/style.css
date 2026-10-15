@@ -45,8 +45,8 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 .bar { display: flex; height: 3px; background: var(--line); }
 .bar i { display: block; transition: width .5s; }
 .palette, .side { position: absolute; background: var(--panel); border: 1px solid var(--line); backdrop-filter: blur(6px); padding: 10px; display: flex; flex-direction: column; gap: 6px; border-radius: 3px; }
-.palette { left: 12px; top: 56px; width: 232px; max-height: calc(100% - 120px); overflow: auto; }
-.side { right: 12px; top: 56px; width: 270px; display: none; }
+.palette { left: 12px; top: var(--top, 56px); width: 232px; max-height: calc(100% - var(--top, 56px) - 64px); overflow: auto; }
+.side { right: 12px; top: var(--top, 56px); width: 270px; display: none; }
 .side.open { display: flex; }
 .cat { color: var(--muted); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; margin-top: 4px; }
 .bld { display: flex; gap: 10px; align-items: center; text-align: left; padding: 6px 8px; }
@@ -151,7 +151,7 @@ button.ghost.on { color: var(--accent); }
 .bm.busy .glyph { animation: scan 1.2s linear infinite; }
 .game::after { content: ''; position: absolute; inset: 0; pointer-events: none; box-shadow: inset 0 0 180px 40px rgba(0, 0, 0, 0.55); }
 .hud.top, .palette, .side, .groups, .terrain-chip, .toasts, .hint { z-index: 3; }
-.side { max-height: calc(100% - 120px); overflow: auto; }
+.side { max-height: calc(100% - var(--top, 56px) - 64px); overflow: auto; }
 
 /* buffs / debuffs */
 .status-list { display: flex; flex-direction: column; gap: 5px; margin: 2px 0; }
@@ -237,7 +237,7 @@ small.warn { color: #f59e0b; }
 .side .stat.warn { color: #ffb347; }
 
 /* training queue: its own panel left of the description window, one column card per order */
-.queue-panel { position: absolute; right: 294px; top: 56px; z-index: 3; padding: 8px 10px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 8px; }
+.queue-panel { position: absolute; right: 294px; top: var(--top, 56px); z-index: 3; padding: 8px 10px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 8px; }
 .queue-head { display: flex; align-items: baseline; gap: 8px; white-space: nowrap; }
 .queue-head em { font-style: normal; font-size: 10px; letter-spacing: .14em; text-transform: uppercase; color: var(--accent); }
 .queue-head b { font-size: 12px; }
@@ -262,7 +262,7 @@ small.warn { color: #f59e0b; }
 .bld .qcount { position: absolute; left: 2px; top: 2px; z-index: 1; padding: 0 4px; border-radius: 7px; background: var(--accent); color: #0b0d10; font-size: 10px; font-weight: 700; line-height: 14px; }
 
 /* production strip over the map */
-.prod-dock { position: absolute; left: 260px; top: 56px; z-index: 3; display: none; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 560px); }
+.prod-dock { position: absolute; left: 260px; top: var(--top, 56px); z-index: 3; display: none; gap: 6px; flex-wrap: wrap; max-width: calc(100% - 560px); }
 .pchip { display: flex; align-items: center; gap: 6px; padding: 3px 9px 3px 4px; background: var(--panel); border: 1px solid var(--line); border-radius: 18px; backdrop-filter: blur(6px); }
 .pchip:hover { border-color: var(--accent); }
 .pchip.theirs { opacity: .7; }
@@ -356,7 +356,7 @@ kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); bo
 .overlay .card.g-card, .overlay .card.stats-card { text-align: left; }
 
 /* buffs and debuffs of the selection, left of the description window */
-.effects-panel { position: absolute; right: 294px; top: 56px; z-index: 3; width: 190px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 4px; }
+.effects-panel { position: absolute; right: 294px; top: var(--top, 56px); z-index: 3; width: 190px; padding: 8px 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 3px; backdrop-filter: blur(6px); display: flex; flex-direction: column; gap: 4px; }
 .effects-panel .effect { display: flex; align-items: center; gap: 7px; padding: 3px 5px; border-left: 2px solid transparent; border-radius: 2px; cursor: help; font-size: 12px; }
 .effects-panel .effect.good { border-left-color: #4ade80; }
 .effects-panel .effect.bad { border-left-color: #ff5a5a; }

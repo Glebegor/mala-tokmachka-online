@@ -230,7 +230,7 @@ export class Sim {
       if (d < bestD) (bestD = d), (best = p);
     };
     for (const b of this.world.buildings) {
-      if (b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner)) continue;
+      if (b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner) || (b.storage?.fuel ?? 0) < 1) continue; // dry stations are no use
       if (air ? b.def === 'airfield' : b.def === 'gas_station' || b.def === 'hq') take(b.pos);
     }
     if (!air) for (const t of this.world.units) if (t !== u && t.team === u.team && this.defs.u.get(t.def)!.fuelOnly && (t.cargo?.res.fuel ?? 0) > 0) take(t.pos);
@@ -796,20 +796,35 @@ export class Sim {
         const loads = stops.filter((x) => x.action === 'load'), unloads = stops.filter((x) => x.action === 'unload');
         if (!loads.length || !unloads.length) return fail('a route needs somewhere to load and somewhere to unload');
         if (cmd.fromBuilding !== undefined && !cmd.stops?.length && cmd.fromBuilding === cmd.toBuilding) return fail('pick two different buildings of your side');
-        // every unloading stop must take what is carried; tankers carry fuel only
+        // every stop must keep goods; every unloading stop must take what is carried; tankers carry fuel only
         const want = ud.fuelOnly ? 'fuel' : cmd.resType && cmd.resType !== 'any' ? cmd.resType : null;
+        const at = (st: HaulStop) => w.buildings.find((x) => x.id === st.building)!;
+        const nameOf = (b: Building) => this.defs.b.get(b.def)!.name;
+        const keeps = (b: Building) => this.storageFor(this.defs.b.get(b.def)!);
+        for (const st of [...loads, ...unloads]) if (!keeps(at(st)).length) return fail(`the ${nameOf(at(st))} keeps no goods`);
+        if (want && !loads.some((l) => keeps(at(l)).includes(want))) return fail(`nowhere on this route to load ${want}`);
         for (const st of unloads) {
-          const to = w.buildings.find((x) => x.id === st.building)!;
-          const accepts = this.storageFor(this.defs.b.get(to.def)!);
-          if (want && accepts.length && !accepts.includes(want)) return fail(`the ${this.defs.b.get(to.def)!.name} does not take ${want}`);
-          if (!want && !loads.some((l) => this.haulKinds(w.buildings.find((x) => x.id === l.building)!, to, ud).length)) {
-            return fail(`nothing on this route is wanted at the ${this.defs.b.get(to.def)!.name}`);
-          }
+          const to = at(st);
+          if (want && !keeps(to).includes(want)) return fail(`the ${nameOf(to)} does not take ${want}`);
+          if (!want && !loads.some((l) => this.haulKinds(at(l), to, ud).length)) return fail(`nothing on this route is wanted at the ${nameOf(to)}`);
         }
-        const loaded = !!u.cargo && Object.values(u.cargo.res).some((v) => v > 0);
+        // goods already on board must have somewhere on the route to go (unloaded, or handed back at a loading stop)
+        const onBoard = Object.entries(u.cargo?.res ?? {}).filter(([, v]) => v > 0.5).map(([k]) => k);
+        const stray = onBoard.filter((k) => !stops.some((st) => st.action !== 'via' && keeps(at(st)).includes(k)));
         const minLoad = Math.max(1, Math.min(ud.cargoCap, Math.round(Number(cmd.minLoad) || 1)));
-        // already carrying something: start at the first unloading stop
-        const idx = loaded ? stops.findIndex((x) => x.action === 'unload') : 0;
+        // already carrying something an unloading stop takes: start there
+        const firstUnload = stops.findIndex((x) => x.action === 'unload' && onBoard.some((k) => keeps(at(x)).includes(k)));
+        let idx = firstUnload >= 0 ? firstUnload : 0;
+        if (stray.length) {
+          // goods from an earlier job that nothing on this route takes: drop them at the nearest store that does, first
+          let drop: Building | null = null;
+          for (const b of w.buildings) {
+            if (b.team !== u.team || b.progress < 1 || !this.usable(b, p.id) || !stray.every((k) => keeps(b).includes(k))) continue;
+            if (!drop || distKm(u.pos, b.pos) < distKm(u.pos, drop.pos)) drop = b;
+          }
+          if (!drop) return fail(`nowhere to drop the ${stray.join(', ')} it still carries`);
+          stops.splice(idx, 0, { action: 'unload', building: drop.id, once: true });
+        }
         u.haul = { stops, idx, state: 'moving', resType: cmd.resType, minLoad };
         this.haulGo(u);
         return ok();
@@ -1846,6 +1861,13 @@ export class Sim {
   private refuelInPlace(u: Unit, d: UnitDef, dt: number) {
     if (u.fuel === undefined || u.maxFuel === undefined || u.fuel >= u.maxFuel || isStrikeDrone(d) || u.encircled) return; // cut off: no supply
     const need = u.maxFuel - u.fuel;
+    // a tanker runs on its own load
+    if (d.fuelOnly && (u.cargo?.res.fuel ?? 0) > 0) {
+      const take = Math.min(25 * dt, need, u.cargo!.res.fuel);
+      u.cargo!.res.fuel -= take;
+      u.fuel += take;
+      return;
+    }
     const fromStore = (kinds: string[], km: number, rate: number) => {
       let done = false;
       this.near(this.buildingGrid, u.pos, km, (b) => {
@@ -1903,7 +1925,7 @@ export class Sim {
     const produced = Object.keys(this.defs.b.get(from.def)!.produces ?? {});
     // what the source makes first, then whatever else it keeps; fuel is for tankers
     const kinds = [...new Set([...produced, ...this.storageFor(this.defs.b.get(from.def)!)])].filter((k) => k !== 'fuel' && k !== 'money' && k !== 'people' && k !== 'energy');
-    return kinds.filter((k) => !accepts.length || accepts.includes(k));
+    return kinds.filter((k) => accepts.includes(k));
   }
 
   /** Where a route stop is (a building or a waypoint); null if the building is gone. */
@@ -2039,12 +2061,33 @@ export class Sim {
     const b = st.building !== undefined ? w.buildings.find((x) => x.id === st.building && x.team === u.team) : undefined;
     if (st.action !== 'via' && !b) return void (u.haul = undefined); // a stop's building is gone: the route ends
     const next = () => {
-      (h.idx = (h.idx + 1) % h.stops.length), (h.state = 'moving'), (h.timer = undefined), (h.waiting = undefined);
+      if (h.stops[h.idx].once) h.stops.splice(h.idx, 1); // a one-off drop: done, the loop carries on from the stop after it
+      else h.idx++;
+      (h.idx %= h.stops.length), (h.state = 'moving'), (h.timer = undefined), (h.waiting = undefined);
       this.haulGo(u);
     };
     const load = () => Object.values(u.cargo!.res).reduce((a, v) => a + v, 0);
+    const keeps = (x: Building) => this.storageFor(this.defs.b.get(x.def)!);
     switch (h.state ?? 'moving') {
       case 'moving': {
+        // running low on fuel: fill up at the nearest place that has some, then carry on (trains fill up at stations)
+        if (h.refuelAt) {
+          if (u.fuel === undefined || u.maxFuel === undefined || u.fuel >= u.maxFuel * 0.95) return void ((h.refuelAt = undefined), (h.timer = undefined), this.haulGo(u));
+          if (distKm(u.pos, h.refuelAt) <= 3) {
+            u.path = [];
+            // still not full after 20 s there (it ran dry meanwhile): give up on that place and look again
+            if ((h.timer = (h.timer ?? 0) + dt) > 20) (h.refuelAt = undefined), (h.timer = undefined), this.haulGo(u);
+          } else if ((u.id + w.tick) % 20 === 0 && !u.path.length) this.orderMove([u], h.refuelAt, false, false, false);
+          break;
+        }
+        if (!d.railOnly && u.fuel !== undefined && u.maxFuel && u.fuel < u.maxFuel * 0.25 && (u.id + w.tick) % 20 === 0) {
+          const spot = this.nearestFuel(u, false);
+          if (spot) {
+            h.refuelAt = spot;
+            this.orderMove([u], spot, false, false, false);
+            break;
+          }
+        }
         const at = this.stopPos(st)!;
         if (distKm(u.pos, at) <= (st.action === 'via' ? 0.6 : 3.5)) {
           u.path = [];
@@ -2067,6 +2110,14 @@ export class Sim {
           if (s2.action === 'unload') dest = w.buildings.find((x) => x.id === s2.building);
         }
         if (!dest) return void (u.haul = undefined);
+        // goods on board that no unloading stop on the route takes are handed back here (so they cannot clog the truck)
+        const kept = keeps(b!);
+        for (const [kind, v] of Object.entries(u.cargo.res)) {
+          if (v <= 0 || !kept.includes(kind) || h.stops.some((s2) => s2.action === 'unload' && keeps(w.buildings.find((x) => x.id === s2.building) ?? b!).includes(kind))) continue;
+          const put = Math.min(v, Math.max(0, this.storageCap(b!) - (b!.storage[kind] ?? 0)));
+          b!.storage[kind] = (b!.storage[kind] ?? 0) + put;
+          u.cargo.res[kind] = v - put;
+        }
         let room = u.cargo.cap - load();
         for (const kind of this.haulKinds(b!, dest, d, h.resType)) {
           if (room <= 0) break;
@@ -2093,13 +2144,21 @@ export class Sim {
       case 'unloading': {
         if ((h.timer = (h.timer ?? 4) - dt) > 0) break;
         b!.storage ??= {};
-        const accepts = this.storageFor(this.defs.b.get(b!.def)!);
+        const accepts = keeps(b!);
         const cap = this.storageCap(b!);
+        let put = 0, left = 0;
         for (const [kind, v] of Object.entries(u.cargo.res)) {
-          if (accepts.length && !accepts.includes(kind)) continue;
-          const put = Math.min(v, Math.max(0, cap - (b!.storage[kind] ?? 0)));
-          b!.storage[kind] = (b!.storage[kind] ?? 0) + put;
-          u.cargo.res[kind] = v - put;
+          if (!accepts.includes(kind) || v <= 0) continue;
+          const n = Math.min(v, Math.max(0, cap - (b!.storage[kind] ?? 0)));
+          b!.storage[kind] = (b!.storage[kind] ?? 0) + n;
+          u.cargo.res[kind] = v - n;
+          (put += n), (left += v - n);
+        }
+        // the store is full and no other stop on the route takes the rest: wait here for room instead of driving in circles
+        const otherUnload = h.stops.some((s2, i) => i !== h.idx && s2.action === 'unload');
+        if (put < 1 && left > 0 && !otherUnload && !st.once) {
+          (h.timer = 4), (h.waiting = true);
+          break;
         }
         next();
         break;
