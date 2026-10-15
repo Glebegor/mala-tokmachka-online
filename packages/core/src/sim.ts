@@ -605,10 +605,15 @@ export class Sim {
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         if (!this.isPlayableGround(cmd.pos)) return fail('outside the theatre of war');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
-        // Military HQ can be placed anywhere on playable dry ground, but must keep at least 100 km from other HQs
+        // Military HQ and Military Base can be placed anywhere on playable dry ground
         if (d.id === 'hq') {
           const clash = w.buildings.find((b) => b.def === 'hq' && distKm(b.pos, cmd.pos) < 100);
           if (clash) return fail('keep at least 100 km from other military HQs');
+        } else if (d.id === 'military_base') {
+          const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
+          if (!hasHq) return fail('must place military HQ first');
+          const clash = w.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, cmd.pos) < 20);
+          if (clash) return fail('keep at least 20 km from other military bases');
         } else {
           const zone = specialZoneAt(cmd.pos);
           const mySide = p.team === 0 ? 'ua' : 'ru';
@@ -643,7 +648,7 @@ export class Sim {
         }
         if (!this.canPay(p, d.cost)) return fail('not enough resources');
         this.payFor(p, d.cost);
-        this.spawnBuilding(d.id, p, cmd.pos, d.id === 'hq');
+        this.spawnBuilding(d.id, p, cmd.pos, d.id === 'hq' || d.buildTime === 0);
         if (d.id === 'hq') this.hadEverPlacedHq.add(p.team);
         return ok();
       }

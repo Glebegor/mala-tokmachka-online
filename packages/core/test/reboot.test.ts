@@ -24,17 +24,29 @@ assert.equal(rs.resources.length, 1, 'only 1 resource exists');
 assert.equal(rs.resources[0].id, 'money', 'the only resource is money');
 console.log('✓ Only resource is Money');
 
-// 3. Only single building "Военный штаб" exists
-assert.equal(rs.buildings.length, 1, 'only 1 building definition exists');
-const hqDef = rs.buildings[0];
+// 3. Buildings: "Военный штаб" and "Военная база"
+assert.equal(rs.buildings.length, 2, '2 building definitions exist');
+const hqDef = rs.buildings.find((b) => b.id === 'hq')!;
 assert.equal(hqDef.id, 'hq');
 assert.equal(hqDef.name, 'Военный штаб');
 assert.equal(hqDef.hp, 10000, 'HQ has 10,000 HP');
 assert.equal(hqDef.maxPerPlayer, 1, 'only 1 HQ allowed per player');
-console.log('✓ Single building: "Военный штаб" with 10k HP');
+
+const mbDef = rs.buildings.find((b) => b.id === 'military_base')!;
+assert.equal(mbDef.id, 'military_base');
+assert.equal(mbDef.name, 'Военная база');
+assert.equal(mbDef.hp, 5000, 'Military base has 5,000 HP');
+console.log('✓ Buildings: "Военный штаб" and "Военная база" definitions verified');
 
 // 4. Placement anywhere on the map
 const testPos: [number, number] = [36.2, 48.1];
+
+// Cannot place military base without HQ first
+const earlyBase = sim.apply('player2', { type: 'build', def: 'military_base', pos: [30.0, 49.0] });
+assert.equal(earlyBase.ok, false, 'cannot build military base before placing HQ');
+assert.equal(earlyBase.reason, 'must place military HQ first');
+console.log('✓ Cannot build military base before placing HQ');
+
 const res = sim.apply('player1', { type: 'build', def: 'hq', pos: testPos });
 assert.ok(res.ok, 'HQ placement succeeded');
 
@@ -60,6 +72,31 @@ const demoRes = sim.apply('player1', { type: 'demolish', building: hq.id });
 assert.equal(demoRes.ok, false, 'cannot demolish HQ');
 assert.equal(demoRes.reason, 'cannot demolish HQ');
 console.log('✓ HQ cannot be demolished or moved');
+
+// 6.5. Military Base placement and 20 km radius restriction
+const basePos1 = offsetKm(testPos, 30, 0);
+const mbRes1 = sim.apply('player1', { type: 'build', def: 'military_base', pos: basePos1 });
+assert.ok(mbRes1.ok, 'Military base placement succeeded');
+const mb1 = sim.world.buildings.find((b) => b.owner === 'player1' && b.def === 'military_base');
+assert.ok(mb1, 'Military base spawned');
+assert.equal(mb1.hp, 5000, 'Military base has 5000 HP');
+assert.equal(mb1.progress, 1, 'Military base is instantly built');
+
+// Cannot build 2nd military base within 20 km
+const mbResClose = sim.apply('player1', { type: 'build', def: 'military_base', pos: offsetKm(basePos1, 10, 0) });
+assert.equal(mbResClose.ok, false, 'cannot place military base within 20 km of another military base');
+assert.equal(mbResClose.reason, 'keep at least 20 km from other military bases');
+
+// Can build 2nd military base at distance >= 20 km
+const basePos2 = offsetKm(basePos1, 25, 0);
+const mbRes2 = sim.apply('player1', { type: 'build', def: 'military_base', pos: basePos2 });
+assert.ok(mbRes2.ok, '2nd military base placement succeeded at >= 20 km');
+
+// Can demolish military base (unlike HQ)
+const mbDemo = sim.apply('player1', { type: 'demolish', building: mb1.id });
+assert.ok(mbDemo.ok, 'Military base can be demolished');
+assert.ok(!sim.world.buildings.some((b) => b.id === mb1.id), 'Military base removed from world');
+console.log('✓ Military Base: placement, 20 km clash restriction, and demolition verified');
 
 // 7. Bot HQ placement: UA placed in West of Ukraine >= 200 km from front, RU placed in East >= 200 km from front, both >= 100 km from any HQ
 const bUA = new Bot('botUA', 'normal');

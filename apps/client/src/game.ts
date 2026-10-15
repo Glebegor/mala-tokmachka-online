@@ -1148,6 +1148,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (clash) return 'Слишком близко к другому штабу (минимум 100 км)';
       return null;
     }
+    if (def.id === 'military_base') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      const clash = snap.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, p) < 20);
+      if (clash) return 'Слишком близко к другой военной базе (минимум 20 км)';
+      return null;
+    }
     const r = init.ruleset.rules;
     const zone = specialZoneAt(p);
     const mySide = init.team === 0 ? 'ua' : 'ru';
@@ -1248,6 +1256,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (placing.id === 'power_plant') zones.push([init.ruleset.rules.powerGridKm, '#38bdf8', `grid ${init.ruleset.rules.powerGridKm} km`]);
     if (placing.vision) zones.push([placing.vision, '#94a3b8', `sight ${placing.vision} km`]);
     if (placing.id === 'hq') zones.push([100, '#ef4444', 'дистанция 100 км до других штабов']);
+    if (placing.id === 'military_base') zones.push([20, '#38bdf8', 'дистанция 20 км до других военных баз']);
     (map.getSource('ghost') as GeoJSONSource).setData({
       type: 'FeatureCollection',
       features: [
@@ -1274,39 +1283,56 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return wrap;
   }
 
+  function startPlacing(b: BuildingDef) {
+    placing = b;
+    if (b.line) map.dragPan.disable();
+    else map.dragPan.enable();
+    mapEl.classList.add('placing');
+    showPlacementAids();
+    hint.textContent = b.id === 'hq'
+      ? 'Размещение: Военный штаб — кликните в любой точке карты для установки (Esc — отмена)'
+      : b.id === 'military_base'
+        ? 'Размещение: Военная база — кликните в любой точке карты (минимум 20 км от других баз, Esc — отмена)'
+        : b.line
+          ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
+          : `Размещение: ${b.name} — кликните на карте (Shift — серийное строительство, Esc — отмена)`;
+    buildPalette();
+  }
+
   function buildPalette() {
     if (!init) return;
     card.style.display = 'none'; // its button is about to be replaced
     clear(palette);
+    const hasHq = snap?.buildings.some((x) => x.owner === me && x.def === 'hq');
     for (const cat of ['civil', 'military'] as const) {
-      const list = init.ruleset.buildings.filter((x) => x.category === cat);
+      const list = init.ruleset.buildings.filter((x) => x.category === cat && (hasHq || x.id === 'hq'));
       if (!list.length) continue;
       palette.append(h('div', { class: 'cat' }, cat === 'civil' ? 'Civil infrastructure' : 'War infrastructure'));
       for (const b of list) {
         const owned = snap?.buildings.filter((x) => x.owner === me && x.def === b.id).length ?? 0;
         const reachedLimit = b.maxPerPlayer ? owned >= b.maxPerPlayer : false;
+        const isBuiltHq = b.id === 'hq' && reachedLimit;
         const btn =
           h('button', {
-            class: 'bld' + (placing?.id === b.id ? ' active' : '') + (reachedLimit ? ' disabled' : ''),
-            disabled: reachedLimit,
+            class: 'bld' + (placing?.id === b.id ? ' active' : '') + (reachedLimit && !isBuiltHq ? ' disabled' : ''),
+            disabled: reachedLimit && !isBuiltHq,
             onClick: () => {
+              if (isBuiltHq) {
+                const myHq = snap?.buildings.find((x) => x.owner === me && x.def === b.id);
+                if (myHq) {
+                  selBuilding = myHq.id;
+                  selUnits.clear();
+                  map.easeTo({ center: myHq.pos });
+                  render();
+                }
+                return;
+              }
               if (reachedLimit) return;
-              placing = b;
-              // lines (trenches, bridges, railways) are drawn by dragging: the map must not pan meanwhile
-              if (b.line) map.dragPan.disable();
-              else map.dragPan.enable();
-              mapEl.classList.add('placing');
-              showPlacementAids();
-              hint.textContent = b.id === 'hq'
-                ? 'Размещение: Военный штаб — кликните в любой точке карты для установки (Esc — отмена)'
-                : b.line
-                  ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
-                  : `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
-              buildPalette();
+              startPlacing(b);
             }
           },
             h('span', { class: 'ico' }, b.icon),
-            h('span', { class: 'meta' }, h('b', {}, b.name), reachedLimit ? h('span', { class: 'muted' }, 'Построен') : costHtml(b.cost, snap?.res)),
+            h('span', { class: 'meta' }, h('b', {}, b.name), isBuiltHq ? h('span', { class: 'muted' }, 'Построен (клик)') : reachedLimit ? h('span', { class: 'muted' }, 'Лимит') : costHtml(b.cost, snap?.res)),
           );
         describe(btn, b.name, b.description, buildingFacts(b), 'right');
         palette.append(btn);
@@ -1369,6 +1395,34 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           h('div', { class: 'muted' }, d.description ?? ''),
           h('div', { class: 'stat' }, `HP ${b.hp}/${d.levels?.[b.level - 2]?.hp ?? d.hp}`),
         );
+        if (b.def === 'hq' && b.owner === me) {
+          const available = init.ruleset.buildings.filter((x) => x.id !== 'hq');
+          if (available.length) {
+            side.append(h('h4', { style: { marginTop: '14px', marginBottom: '8px', fontSize: '13px', color: 'var(--accent)', display: 'flex', alignItems: 'center', gap: '6px' } }, '🏗 Доступные постройки'));
+            for (const bld of available) {
+              const owned = snap.buildings.filter((x) => x.owner === me && x.def === bld.id).length;
+              const reachedLimit = bld.maxPerPlayer ? owned >= bld.maxPerPlayer : false;
+              const canAfford = Object.entries(bld.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v);
+              const disabled = reachedLimit || !canAfford;
+              const btn = h('button', {
+                class: 'bld' + (placing?.id === bld.id ? ' active' : '') + (disabled ? ' disabled' : ''),
+                disabled,
+                onClick: () => {
+                  if (disabled) return;
+                  startPlacing(bld);
+                }
+              },
+                h('span', { class: 'ico' }, bld.icon),
+                h('span', { class: 'meta' },
+                  h('b', {}, bld.name),
+                  reachedLimit ? h('span', { class: 'muted' }, 'Лимит') : costHtml(bld.cost, snap.res)
+                ),
+              );
+              describe(btn, bld.name, bld.description, buildingFacts(bld), 'left');
+              side.append(btn);
+            }
+          }
+        }
         // a teammate may keep their buildings to themselves
         const locked = b.owner !== me && snap.closed.includes(b.owner);
         if (locked || b.progress < 1) (sideQueue = null), queueSlot.replaceChildren();
@@ -1799,12 +1853,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (d.attack) big(d.attack.range, '#ffd84a');
       if (d.crossing) big(d.crossing.radiusKm, '#7fe7ff');
       if (selB.def === 'power_plant') big(r.powerGridKm, '#38bdf8');
+      if (selB.def === 'hq') big(100, '#ef4444');
+      if (selB.def === 'military_base') big(20, '#38bdf8');
       if (d.vision) big(d.vision, '#94a3b8');
     }
     for (const b of snap.buildings) {
       const d = defB.get(b.def)!;
       if (b.team !== myTeam || b.progress < 1 || b === selB) continue;
       const ring = (km: number, color: string) => rings.push({ type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: circle(b.pos, km, 64) } });
+      if (b.owner === me && b.def === 'military_base') ring(20, '#38bdf8');
+      if (b.owner === me && b.def === 'hq') ring(100, '#ef4444');
       if (b.owner === me && (d.vision ?? 0) >= 20) ring(d.vision!, TEAM_COLOR[b.team]);
       if (d.attack) ring(d.attack.range, '#ffd84a');
       if (d.crossing) ring(d.crossing.radiusKm, '#7fe7ff');

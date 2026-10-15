@@ -1,8 +1,7 @@
 import { type BotDifficulty, type Building, distKm, distToFrontKm, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
-  'power_plant', 'housing', 'machine_factory', 'mine', 'metalworks', 'ammo_factory', 'ammo_depot', 'drone_factory', 'launch_site', 'oil_refinery', 'trench', 'gas_station', 'housing',
-  'signal_station', 'antiair', 'ammo_depot', 'airfield', 'training_center', 'bunker', 'housing', 'trench', 'warehouse', 'bunker', 'missile_factory', 'ammo_depot',
+  'military_base',
 ];
 
 /** Selects a random position near a road far from the front (>= 200 km): West of Ukraine for UA, East for RU, with >= 100 km spacing from other HQs */
@@ -110,7 +109,11 @@ export class Bot {
         const ang = Math.random() * Math.PI * 2;
         let base = hq.pos;
         let r = 2 + Math.random() * 12;
-        if (def === 'housing') {
+        if (def === 'military_base') {
+          // military base: placed toward the front or around HQ, keeping >= 20 km from other bases
+          base = moveToward(hq.pos, frontPos, 30 + Math.random() * 80);
+          r = 5 + Math.random() * 25;
+        } else if (def === 'housing') {
           // housing goes inside a city we hold, as near home as possible
           const cities = sim.map.capturePoints.filter((cp, i) => w.points[i].owner === p.team).sort((a, b) => distKm(a.pos, hq.pos) - distKm(b.pos, hq.pos));
           const cp = cities[attempt % Math.max(1, Math.min(4, cities.length))];
