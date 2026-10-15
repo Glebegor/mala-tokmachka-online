@@ -605,8 +605,11 @@ export class Sim {
         if (!inBounds(this.map, cmd.pos)) return fail('outside map');
         if (!this.isPlayableGround(cmd.pos)) return fail('outside the theatre of war');
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
-        // Military HQ can be placed anywhere on playable dry ground
-        if (d.id !== 'hq') {
+        // Military HQ can be placed anywhere on playable dry ground, but must keep at least 100 km from other HQs
+        if (d.id === 'hq') {
+          const clash = w.buildings.find((b) => b.def === 'hq' && distKm(b.pos, cmd.pos) < 100);
+          if (clash) return fail('keep at least 100 km from other military HQs');
+        } else {
           const zone = specialZoneAt(cmd.pos);
           const mySide = p.team === 0 ? 'ua' : 'ru';
           if (zone && zone.side !== mySide) return fail(`${zone.name} is only available to ${zone.side === 'ua' ? 'Ukraine' : 'Russia'}`);
@@ -859,7 +862,7 @@ export class Sim {
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') {
           // small drones ride on a vehicle's launcher, logistics trucks can carry any drone
-          if (!ud.launchable && td.def !== 'truck') return fail('only small drones can be carried');
+          if (!ud.launchable && t.def !== 'truck') return fail('only small drones can be carried');
           if (!td.droneCap) return fail('that vehicle has no drone launcher');
           t.cargo ??= { res: {}, cap: td.cargoCap ?? 0, passengers: [] };
           t.cargo.drones ??= [];

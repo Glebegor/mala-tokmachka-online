@@ -5,39 +5,43 @@ const BUILD_ORDER = [
   'signal_station', 'antiair', 'ammo_depot', 'airfield', 'training_center', 'bunker', 'housing', 'trench', 'warehouse', 'bunker', 'missile_factory', 'ammo_depot',
 ];
 
-/** Selects a random position near a road far from the front: West of Ukraine for UA, East for RU */
+/** Selects a random position near a road far from the front (>= 200 km): West of Ukraine for UA, East for RU, with >= 100 km spacing from other HQs */
 function findBotHqPos(sim: Sim, team: Team): LngLat {
   const roads = sim.roads?.nodes ?? [];
   const front = sim.world.front;
   const isDry = (pt: LngLat) => sim.isPlayableGround(pt) && sim.terrainAt(pt).id !== 'water';
+  const existingHqs = sim.world.buildings.filter((b) => b.def === 'hq');
+  const farFromHqs = (pt: LngLat) => !existingHqs.some((h) => distKm(h.pos, pt) < 100);
 
   const candidates: LngLat[] = [];
   const step = Math.max(1, Math.floor(roads.length / 2500));
   for (let i = 0; i < roads.length; i += step) {
     const pt = roads[i];
+    if (!isDry(pt) || !farFromHqs(pt)) continue;
     if (team === 0) {
-      // Ukraine: West (lng <= 33.0), on Ukrainian side, far from front (>= 120 km)
-      if (pt[0] <= 33.0 && sim.side(pt) === 0 && isDry(pt)) {
-        if (distToFrontKm(front, pt) >= 120) candidates.push(pt);
+      // Ukraine: West (lng <= 32.5), on Ukrainian side, far from front (>= 200 km)
+      if (pt[0] <= 32.5 && sim.side(pt) === 0 && distToFrontKm(front, pt) >= 200) {
+        candidates.push(pt);
       }
     } else {
-      // Russia: East (lng >= 37.5), on Russian side, far from front (<= -80 km)
-      if (pt[0] >= 37.5 && sim.side(pt) === 1 && isDry(pt)) {
-        if (distToFrontKm(front, pt) <= -80) candidates.push(pt);
+      // Russia: East (lng >= 38.0), on Russian side, far from front (<= -200 km)
+      if (pt[0] >= 38.0 && sim.side(pt) === 1 && distToFrontKm(front, pt) <= -200) {
+        candidates.push(pt);
       }
     }
   }
 
-  // Fallback with looser distance if needed
+  // Fallback with slightly relaxed distance if crowded, preserving HQ spacing
   if (!candidates.length) {
     for (let i = 0; i < roads.length; i += step) {
       const pt = roads[i];
+      if (!isDry(pt) || !farFromHqs(pt)) continue;
       if (team === 0) {
-        if (pt[0] <= 34.0 && sim.side(pt) === 0 && isDry(pt) && distToFrontKm(front, pt) >= 60) {
+        if (pt[0] <= 33.5 && sim.side(pt) === 0 && distToFrontKm(front, pt) >= 160) {
           candidates.push(pt);
         }
       } else {
-        if (pt[0] >= 37.0 && sim.side(pt) === 1 && isDry(pt) && distToFrontKm(front, pt) <= -50) {
+        if (pt[0] >= 37.5 && sim.side(pt) === 1 && distToFrontKm(front, pt) <= -160) {
           candidates.push(pt);
         }
       }
@@ -49,12 +53,12 @@ function findBotHqPos(sim: Sim, team: Team): LngLat {
     const ang = Math.random() * Math.PI * 2;
     const r = 0.05 + Math.random() * 0.1;
     const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
-    if (isDry(nudged)) return nudged;
+    if (isDry(nudged) && farFromHqs(nudged)) return nudged;
     return pick;
   }
 
   const spawns = sim.map.spawns[team];
-  return spawns && spawns[0] ? spawns[0] : (team === 0 ? [28.0, 49.5] : [39.0, 48.0]);
+  return spawns && spawns[0] ? spawns[0] : (team === 0 ? [26.0, 49.5] : [41.0, 48.0]);
 }
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */

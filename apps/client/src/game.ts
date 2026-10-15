@@ -1144,6 +1144,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (myHq) return 'Военный штаб уже построен (максимум 1)';
+      const clash = snap.buildings.find((b) => b.def === 'hq' && distKm(b.pos, p) < 100);
+      if (clash) return 'Слишком близко к другому штабу (минимум 100 км)';
       return null;
     }
     const r = init.ruleset.rules;
@@ -1245,6 +1247,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (placing.crossing) zones.push([placing.crossing.radiusKm, '#7fe7ff', `crossing ${placing.crossing.radiusKm} km`]);
     if (placing.id === 'power_plant') zones.push([init.ruleset.rules.powerGridKm, '#38bdf8', `grid ${init.ruleset.rules.powerGridKm} km`]);
     if (placing.vision) zones.push([placing.vision, '#94a3b8', `sight ${placing.vision} km`]);
+    if (placing.id === 'hq') zones.push([100, '#ef4444', 'дистанция 100 км до других штабов']);
     (map.getSource('ghost') as GeoJSONSource).setData({
       type: 'FeatureCollection',
       features: [
@@ -1371,7 +1374,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (locked || b.progress < 1) (sideQueue = null), queueSlot.replaceChildren();
         const ownerName = init.players.find((p) => p.id === b.owner)?.name ?? 'a teammate';
         if (b.owner !== me) side.append(h('div', { class: locked ? 'stat warn' : 'muted' }, locked ? `Built by ${ownerName}, who keeps it private: you cannot use it` : `Built by ${ownerName}: shared with your side`));
-        if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((init.ruleset.rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
+        const rules = init.ruleset.rules;
+        if (d.produces) side.append(h('div', { class: 'stat' }, b.road ? `Road access: +${Math.round((rules.roadOutputMult - 1) * 100)}% output` : 'No road access'));
         if (b.def !== 'power_plant' && init.ruleset.resources.some((r) => r.id === 'energy')) {
           const grid = snap.buildings.some((o) => o.team === b.team && o.progress >= 1 && o.def === 'power_plant' && distKm(o.pos, b.pos) <= rules.powerGridKm);
           side.append(h('div', { class: 'stat', style: { color: grid ? '#38bdf8' : 'var(--muted)' } }, grid ? `On the power grid: +${Math.round(((b.def === 'housing' ? rules.housingGridMult : rules.powerGridMult) - 1) * 100)}%` : `Off the grid (no power plant within ${rules.powerGridKm} km)`));
@@ -1967,13 +1971,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           class: 'maplibregl-marker post-marker',
           onClick: (e: MouseEvent) => {
             e.stopPropagation();
-            const cur = snap.posts?.find((x) => x.id === p.id)?.pos ?? p.pos;
+            const cur = snap?.posts?.find((x) => x.id === p.id)?.pos ?? p.pos;
             if (selUnits.size) moveOrder(cur, e);
           },
           onContextmenu: (e: MouseEvent) => {
             e.preventDefault();
             e.stopPropagation();
-            const cur = snap.posts?.find((x) => x.id === p.id)?.pos ?? p.pos;
+            const cur = snap?.posts?.find((x) => x.id === p.id)?.pos ?? p.pos;
             if (selUnits.size) moveOrder(cur, e);
           },
         });

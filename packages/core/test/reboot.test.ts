@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, offsetKm, distToFrontKm } from '../src';
+import { Sim, offsetKm, distToFrontKm, distKm } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -36,7 +36,7 @@ console.log('✓ Single building: "Военный штаб" with 10k HP');
 // 4. Placement anywhere on the map
 const testPos: [number, number] = [36.2, 48.1];
 const res = sim.apply('player1', { type: 'build', def: 'hq', pos: testPos });
-assert.ok(res.ok, `HQ placement succeeded: ${res.reason ?? 'ok'}`);
+assert.ok(res.ok, 'HQ placement succeeded');
 
 const hq = sim.world.buildings.find((b) => b.owner === 'player1' && b.def === 'hq');
 assert.ok(hq, 'HQ spawned in world');
@@ -45,11 +45,15 @@ assert.equal(hq.progress, 1, 'HQ is instantly operational (progress = 1)');
 assert.equal(hq.storage, undefined, 'HQ has no physical goods storage when only money exists');
 console.log('✓ HQ placement anywhere on the map succeeds with instant 10,000 HP and no extra resources');
 
-// 5. Cannot place a second HQ
+// 5. Cannot place an HQ within 100 km of another HQ (and max 1 per player)
 const res2 = sim.apply('player1', { type: 'build', def: 'hq', pos: offsetKm(testPos, 5, 0) });
 assert.equal(res2.ok, false, 'cannot place a second HQ');
 assert.equal(res2.reason, 'limit reached');
-console.log('✓ Player cannot place a second HQ (limit reached)');
+
+const resPlayer2Close = sim.apply('player2', { type: 'build', def: 'hq', pos: offsetKm(testPos, 40, 0) });
+assert.equal(resPlayer2Close.ok, false, 'player 2 cannot place HQ within 100 km of player 1 HQ');
+assert.equal(resPlayer2Close.reason, 'keep at least 100 km from other military HQs');
+console.log('✓ HQ spacing: rejected when within 100 km of another military HQ');
 
 // 6. Cannot demolish HQ
 const demoRes = sim.apply('player1', { type: 'demolish', building: hq.id });
@@ -57,7 +61,7 @@ assert.equal(demoRes.ok, false, 'cannot demolish HQ');
 assert.equal(demoRes.reason, 'cannot demolish HQ');
 console.log('✓ HQ cannot be demolished or moved');
 
-// 7. Bot HQ placement: UA placed in West of Ukraine far from front near road, RU placed in East far from front near road
+// 7. Bot HQ placement: UA placed in West of Ukraine >= 200 km from front, RU placed in East >= 200 km from front, both >= 100 km from any HQ
 const bUA = new Bot('botUA', 'normal');
 const bRU = new Bot('botRU', 'normal');
 bUA.think(sim);
@@ -69,15 +73,24 @@ assert.ok(uaHq, 'Bot UA placed an HQ');
 assert.ok(ruHq, 'Bot RU placed an HQ');
 
 assert.equal(sim.side(uaHq.pos), 0, 'UA HQ is on Ukrainian territory');
-assert.ok(uaHq.pos[0] <= 34.0, `UA HQ is in the west of Ukraine (lng=${uaHq.pos[0].toFixed(2)} <= 34.0)`);
-assert.ok(distToFrontKm(sim.world.front, uaHq.pos) >= 60, `UA HQ is far from front (dist=${distToFrontKm(sim.world.front, uaHq.pos).toFixed(1)}km >= 60km)`);
+assert.ok(uaHq.pos[0] <= 32.5, `UA HQ is in the west of Ukraine (lng=${uaHq.pos[0].toFixed(2)} <= 32.5)`);
+assert.ok(distToFrontKm(sim.world.front, uaHq.pos) >= 200, `UA HQ is >= 200 km from front (dist=${distToFrontKm(sim.world.front, uaHq.pos).toFixed(1)}km >= 200km)`);
 assert.ok(sim.roads?.isNear(uaHq.pos, 1.0), 'UA HQ is placed near a road');
 
 assert.equal(sim.side(ruHq.pos), 1, 'RU HQ is on Russian territory');
-assert.ok(ruHq.pos[0] >= 37.0, `RU HQ is in the east (lng=${ruHq.pos[0].toFixed(2)} >= 37.0)`);
-assert.ok(distToFrontKm(sim.world.front, ruHq.pos) <= -50, `RU HQ is far from front (dist=${Math.abs(distToFrontKm(sim.world.front, ruHq.pos)).toFixed(1)}km >= 50km)`);
+assert.ok(ruHq.pos[0] >= 38.0, `RU HQ is in the east (lng=${ruHq.pos[0].toFixed(2)} >= 38.0)`);
+assert.ok(distToFrontKm(sim.world.front, ruHq.pos) <= -200, `RU HQ is >= 200 km from front (dist=${Math.abs(distToFrontKm(sim.world.front, ruHq.pos)).toFixed(1)}km >= 200km)`);
 assert.ok(sim.roads?.isNear(ruHq.pos, 1.0), 'RU HQ is placed near a road');
-console.log('✓ Bot HQ placement: UA placed in West Ukraine far from front near road, RU in East far from front near road');
+
+// Check pairwise 100 km distance between all HQs
+const allHqs = sim.world.buildings.filter((b) => b.def === 'hq');
+for (let i = 0; i < allHqs.length; i++) {
+  for (let j = i + 1; j < allHqs.length; j++) {
+    const d = distKm(allHqs[i].pos, allHqs[j].pos);
+    assert.ok(d >= 100, `HQs ${allHqs[i].id} and ${allHqs[j].id} must be at least 100 km apart (actual=${d.toFixed(1)}km)`);
+  }
+}
+console.log('✓ Bot HQ placement: UA placed in West Ukraine >= 200 km from front, RU in East >= 200 km from front, all HQs >= 100 km apart');
 
 // 8. Simulation ticks cleanly without errors
 for (let i = 0; i < 20; i++) sim.step(0.1);
