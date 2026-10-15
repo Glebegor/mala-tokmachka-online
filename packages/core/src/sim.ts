@@ -1221,6 +1221,7 @@ export class Sim {
     if (w.smokes.length && w.tick % r.tickRate === 0) w.smokes = w.smokes.filter((x) => x.expiresAt > w.time);
     if (!peace) this.territory(dt);
     if (!peace && !r.sandbox) this.checkVictory();
+    if (w.tick % 5 === 0) this.countCrowds();
     if (w.tick % 2 === 0) this.refreshStatus();
     if (!peace && w.tick % r.tickRate === 0) this.greyZones(), this.liberation();
     if (r.peaceSeconds > 0 && w.time >= r.peaceSeconds && w.time - dt < r.peaceSeconds) this.hooks.emit('ceasefireOver', {});
@@ -1449,6 +1450,7 @@ export class Sim {
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
       if (this.dugIn(u) > 0) s.push(['dugin', this.dugIn(u)]);
+      if (this.crowdOver(u) > 0) s.push(['crowded', this.crowdTaken(u)]);
       if ((u.suppressedUntil ?? 0) > this.world.time) s.push(['suppressed', 1.25]);
       if (u.morale !== undefined && u.morale < 25) s.push(['broken', u.morale / 100]);
       else if (u.morale !== undefined && u.morale < 50) s.push(['lowmorale', this.moraleMult(u)]);
@@ -1791,7 +1793,7 @@ export class Sim {
     const air = td.kind === 'air';
     const cover = air ? 0 : this.terrainAt(target.pos).cover;
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
-    const shaken = (target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1;
+    const shaken = ((target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1) * (air ? 1 : this.crowdTaken(target));
     const dealt = (raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
     target.lastHit = this.world.time;
@@ -2235,7 +2237,7 @@ export class Sim {
       if ((tu || tb) && !aimingNow && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
         if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
-        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1) * this.moraleMult(u);
+        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1) * this.moraleMult(u) * this.crowdDealt(u);
         let dealt: number;
         if (tu) {
           const td = this.defs.u.get(tu.def)!;
@@ -2469,6 +2471,32 @@ export class Sim {
    * Rescuers: inside a city they repair the city and its housing at once; outside they patch up buildings within 2 km.
    * Nothing is repaired within 60 s of being hit. Several rescuers work faster (up to 10 hp/s).
    */
+  /**
+   * Crowding: more than `crowdLimit` friendly ground units within 1.5 km make a target-rich mass. Each one over the limit
+   * costs 5% of the damage they deal (down to half), adds 6% to the damage they take (up to double) and weakens their
+   * push on the front. Spread out instead of stacking battalions.
+   */
+  crowdOver(u: Unit): number {
+    return Math.max(0, (u.crowd ?? 0) - this.ruleset.rules.crowdLimit);
+  }
+  crowdDealt(u: Unit): number {
+    return Math.max(0.5, 1 - 0.05 * this.crowdOver(u));
+  }
+  crowdTaken(u: Unit): number {
+    return Math.min(2, 1 + 0.06 * this.crowdOver(u));
+  }
+  /** Count friendly ground units near every ground unit (twice a second). */
+  private countCrowds() {
+    for (const u of this.world.units) {
+      if (u.embarkedIn || u.parkedAt !== undefined || this.defs.u.get(u.def)!.kind === 'air') continue;
+      let n = 0;
+      this.near(this.unitGrid, u.pos, 1.5, (o) => {
+        if (o.team === u.team && !o.embarkedIn && o.parkedAt === undefined && distKm(o.pos, u.pos) <= 1.5 && this.defs.u.get(o.def)!.kind !== 'air') n++;
+      });
+      u.crowd = n;
+    }
+  }
+
   /** Dug in: a unit that has not moved takes 5% less damage per 15 s it has stood, up to 40% after two minutes. */
   dugIn(u: Unit): number {
     return Math.min(0.4, Math.floor((u.still ?? 0) / 15) * 0.05);
@@ -2662,7 +2690,7 @@ export class Sim {
         if (d > R || u.embarkedIn || u.hp <= 0) return;
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') return; // only ground troops hold or take ground
-        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R);
+        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
       });
       // a manned bunker anchors the line: its garrison counts double
       for (const b of this.garrisons()) {
