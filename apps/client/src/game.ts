@@ -280,6 +280,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.levels) f.push(`Upgradable to level ${d.levels.length + 1}: ${d.levels.map((l) => `+${Math.round((l.defenseMult ?? 0) * 100)}%`).join(', ')}`);
     if (d.attack) f.push(`Hits ${d.attack.targets} targets: ${d.attack.damage} dmg/s, ${d.attack.range} km`);
     if (d.crossing) f.push(`River crossing within ${d.crossing.radiusKm} km`);
+    if (d.line) f.push(`Drawn by dragging on the map: ${d.line.minKm}–${d.line.maxKm} km; cost and digging time per km`);
     if (d.supply) f.push(`Refills ammunition of your units within ${d.supply.radiusKm} km (${d.supply.rounds} rounds a second each)`);
     if (d.heals) f.push(`Heals ${d.heals.targets === 'foot' ? 'troops on foot' : 'vehicles'} within ${d.heals.radiusKm} km: ${Math.round(d.heals.perSecond * 100)}% a second, once out of the fight for 10 s`);
     if (d.buildInGrey) f.push('Can be built inside your grey zones, even behind the enemy line');
@@ -463,7 +464,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -512,6 +513,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } }, 'front-zone');
       map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } }, 'front-zone');
       map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } }, 'front-zone');
+      // trench lines: a zig-zag in the side's colour on a dark casing (faded while being dug)
+      // bridges: a wide light deck on a dark casing
+      const isBridge: any = ['==', ['get', 'kind'], 'bridge'];
+      map.addLayer({ id: 'trench-case', type: 'line', source: 'trenches', layout: { 'line-join': 'miter' }, paint: { 'line-color': '#0b0d10', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 4.5, 2.5], 10, ['case', isBridge, 9, 5]], 'line-opacity': ['get', 'o'] } });
+      map.addLayer({ id: 'trench-line', type: 'line', source: 'trenches', layout: { 'line-join': 'miter' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 2.5, 1.2], 10, ['case', isBridge, 5.5, 2.4]], 'line-opacity': ['get', 'o'] } });
       // cauldrons: yellow broken ring around the cut-off ground
       map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
       map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
@@ -590,9 +596,27 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     setScale();
 
     let lastHover = 0;
+    // line structures (trenches): press, drag the way it should run, release
+    map.on('mousedown', (e) => {
+      if (!placing?.line || e.originalEvent.button !== 0 || e.originalEvent.shiftKey) return;
+      lineStart = [e.lngLat.lng, e.lngLat.lat];
+      lineStartPx = { x: e.point.x, y: e.point.y };
+      map.dragPan.disable();
+    });
+    map.on('mouseup', (e) => {
+      if (!lineStart || !placing) return;
+      const start = lineStart;
+      const dragged = Math.hypot(e.point.x - lineStartPx.x, e.point.y - lineStartPx.y) > 8;
+      lineStart = null;
+      map.dragPan.enable();
+      suppressClick = performance.now(); // the click that follows is this release
+      send({ type: 'build', def: placing.id, pos: start, to: dragged ? [e.lngLat.lng, e.lngLat.lat] : undefined });
+      if (!e.originalEvent.shiftKey) cancelPlacing();
+    });
     map.on('mousemove', (e) => {
       const p: LngLat = [e.lngLat.lng, e.lngLat.lat];
-      if (placing) drawGhost(p);
+      if (placing && lineStart) drawLineGhost(lineStart, p);
+      else if (placing) drawGhost(p);
       const now = performance.now();
       if (now - lastHover > 80) (lastHover = now), showTerrain(p);
     });
@@ -635,6 +659,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.route.stops.push({ action: 'via', pos: p });
         return render();
       }
+      if (placing?.line) return; // trenches are drawn with press-drag-release (see mouseup)
       if (placing) {
         send({ type: 'build', def: placing.id, pos: p });
         if (!e.originalEvent.shiftKey) cancelPlacing();
@@ -973,6 +998,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function cancelPlacing() {
     if (!placing) return;
+    if (lineStart) (lineStart = null), map.dragPan.enable();
     placing = null;
     showPlacementAids();
     hint.textContent = HINT;
@@ -1033,6 +1059,51 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!terrain) return false;
     for (let a = 0; a < 16; a++) for (const r of [km * 0.5, km]) if (terrain.isBarrier(offsetKm(p, Math.cos((a / 16) * 6.2832) * r, Math.sin((a / 16) * 6.2832) * r))) return true;
     return false;
+  }
+
+  /** The area within r km of the segment a–b (a line's cover), as a closed ring. */
+  function capsule(a: LngLat, b: LngLat, r: number): LngLat[] {
+    const kx = Math.cos((a[1] * Math.PI) / 180) * 111.32;
+    const ang = Math.atan2((b[1] - a[1]) * 111.32, (b[0] - a[0]) * kx);
+    const arc = (c: LngLat, from: number) => Array.from({ length: 13 }, (_, i) => offsetKm(c, r * Math.cos(from + (i / 12) * Math.PI), r * Math.sin(from + (i / 12) * Math.PI)));
+    const ring = [...arc(b, ang - Math.PI / 2), ...arc(a, ang + Math.PI / 2)];
+    ring.push(ring[0]);
+    return ring;
+  }
+  let lineStart: LngLat | null = null;
+  let lineStartPx = { x: 0, y: 0 };
+  /** While dragging a trench: the line, its cover either side, and length, cost and any problem in the hint. */
+  function drawLineGhost(a: LngLat, b: LngLat) {
+    if (!placing?.line || !init) return;
+    const km = distKm(a, b);
+    const lim = placing.line;
+    const steps = Math.max(2, Math.ceil(km / 0.25));
+    let problem: string | null = km < lim.minKm ? `at least ${lim.minKm} km` : km > lim.maxKm ? `at most ${lim.maxKm} km` : null;
+    let wet = 0;
+    for (let i = 0; i <= steps && !problem; i++) {
+      const q: LngLat = [a[0] + ((b[0] - a[0]) * i) / steps, a[1] + ((b[1] - a[1]) * i) / steps];
+      const water = !!terrain?.isBarrier(q) || terrain?.at(q) === 'water';
+      if (water) wet++;
+      if (placing.spansWater) {
+        if ((i === 0 || i === steps) && (water || sideAt(q) !== init.team)) problem = 'both ends must be on your dry ground';
+        continue;
+      }
+      if (sideAt(q) !== init.team) problem = 'the whole line must be on your ground';
+      else if (water) problem = 'the line crosses water';
+      else if (contestedAt(q) === 0 || contestedAt(q) === 1) problem = 'contested ground (grey zone)';
+    }
+    if (!problem && placing.spansWater && !wet) problem = 'a bridge has to cross a river';
+    const size = Math.max(0.5, Math.round(km * 10) / 10);
+    const cost = Object.fromEntries(Object.entries(placing.cost).map(([k, v]) => [k, Math.round(v * size)]));
+    if (!problem && !Object.entries(cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) problem = 'not enough resources';
+    const color = problem ? '#ff5a5a' : '#5ae88a';
+    const r = placing.defense?.radiusKm ?? placing.crossing?.radiusKm ?? 1;
+    // cover zone: the line widened by its radius (a capsule)
+    (map.getSource('ghost') as GeoJSONSource).setData({ type: 'FeatureCollection', features: [
+      { type: 'Feature', properties: { color }, geometry: { type: 'Polygon', coordinates: [capsule(a, b, r)] } },
+      { type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: [a, b] } },
+    ] } as any);
+    hint.textContent = `${placing.name}: ${km.toFixed(1)} km · ${Object.entries(cost).map(([k, v]) => `${v} ${k}`).join(', ')}${problem ? ` — ${problem}` : ' — release to dig'}`;
   }
 
   function drawGhost(p: LngLat) {
@@ -1461,6 +1532,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     renderSelLines();
 
     // vision rings for own long-range assets
+    // trench lines
+    const trenches: any[] = [];
+    for (const b of snap.buildings) {
+      if (!b.line) continue;
+      const [a, c] = b.line;
+      const kx = Math.cos((a[1] * Math.PI) / 180) * 111.32;
+      const dx = (c[0] - a[0]) * kx, dy = (c[1] - a[1]) * 111.32, len = Math.hypot(dx, dy) || 1;
+      const n = Math.max(2, Math.round(len / 0.12));
+      const pts: LngLat[] = [];
+      for (let i = 0; i <= n; i++) {
+        const t = i / n, side = i === 0 || i === n ? 0 : i % 2 ? 0.05 : -0.05;
+        pts.push(offsetKm([a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t], (-dy / len) * side, (dx / len) * side));
+      }
+      const bridge = !!defB.get(b.def)?.spansWater;
+      trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : 'trench', color: bridge ? '#e7e2cf' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge ? [a, c] : pts } });
+    }
+    (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
     const rings: any[] = [];
     // the selected building: every range it has, bold (what it covers while you read its description)
     const selB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding) : null;
@@ -1469,7 +1557,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const r = init.ruleset.rules;
       const big = (km: number, color: string) => rings.push({ type: 'Feature', properties: { color, w: 2, o: 0.9, sel: true }, geometry: { type: 'Polygon', coordinates: [circle(selB.pos, km, 96)] } });
       if (d.aura) big(d.aura.radiusKm, '#a3e635');
-      if (d.defense) big(d.defense.radiusKm, '#4ade80');
+      if (d.defense && selB.line) rings.push({ type: 'Feature', properties: { color: '#4ade80', w: 2, o: 0.9, sel: true }, geometry: { type: 'Polygon', coordinates: [capsule(selB.line[0], selB.line[1], d.defense.radiusKm)] } });
+      else if (d.defense) big(d.defense.radiusKm, '#4ade80');
       if (d.supply) big(d.supply.radiusKm, '#e39b4f');
       if (d.heals) big(d.heals.radiusKm, '#f472b6');
       if (d.attack) big(d.attack.range, '#ffd84a');

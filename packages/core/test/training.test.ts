@@ -144,9 +144,14 @@ console.log(`river ok: unit ${swimmer.path.length ? 'still driving round' : dist
   const hq3 = s3.world.buildings.find((b) => b.owner === 'a')!;
   const hold = (p: LngLat) => (s3 as any).holdMult(0, p) as number;
   const spots = [offsetKm(hq3.pos, 2, 0), offsetKm(hq3.pos, -2, 0), offsetKm(hq3.pos, 0, 2), offsetKm(hq3.pos, 0, -2)];
-  assert.ok(s3.apply('a', { type: 'build', def: 'trench', pos: spots[0] }).ok);
-  assert.ok(s3.apply('a', { type: 'build', def: 'trench', pos: spots[1] }).ok);
-  for (let i = 0; i < 100; i++) s3.step(0.1);
+  // two trench lines drawn either side of the base: both cover it, but they count as one
+  assert.ok(s3.apply('a', { type: 'build', def: 'trench', pos: offsetKm(hq3.pos, -1.5, 0.6), to: offsetKm(hq3.pos, 1.5, 0.6) }).ok);
+  assert.ok(s3.apply('a', { type: 'build', def: 'trench', pos: offsetKm(hq3.pos, -1.5, -0.6), to: offsetKm(hq3.pos, 1.5, -0.6) }).ok);
+  assert.equal(s3.apply('a', { type: 'build', def: 'trench', pos: hq3.pos, to: offsetKm(hq3.pos, 12, 0) }).ok, false, 'at most 10 km in one go');
+  const t1 = s3.world.buildings.find((b) => b.def === 'trench')!;
+  assert.ok(t1.line && Math.abs((t1.size ?? 0) - 3) < 0.05, 'a 3 km line');
+  assert.ok(Math.abs(s3.reachKm(t1, offsetKm(hq3.pos, 0, 1.6)) - 1) < 0.05, 'cover is measured from the line');
+  for (let i = 0; i < 200; i++) s3.step(0.1); // 3 km at 6 s a km
   assert.equal(hold(hq3.pos).toFixed(2), '1.25', 'two trenches count as one');
   assert.ok(s3.apply('a', { type: 'build', def: 'bunker', pos: spots[2] }).ok);
   assert.ok(s3.apply('a', { type: 'build', def: 'bunker', pos: spots[3] }).ok);

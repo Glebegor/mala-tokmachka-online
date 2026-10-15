@@ -2,7 +2,8 @@ import type { LngLat } from './geo';
 import type { Formation, Stance } from './state';
 
 export type Command =
-  | { type: 'build'; def: string; pos: LngLat }
+  /** `to`: the far end of a line structure (trench) drawn from `pos`. */
+  | { type: 'build'; def: string; pos: LngLat; to?: LngLat }
   | { type: 'train'; building: number; unit: string }
   /** Cancel one of your own training orders (full refund). */
   | { type: 'cancelTrain'; item: number }

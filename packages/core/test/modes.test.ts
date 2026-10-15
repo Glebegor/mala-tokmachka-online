@@ -647,3 +647,59 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(sim.world.scores[1] > before, 'and the enemy scores for it');
   console.log('morale ok');
 }
+
+// --- bridges: drawn across a river, let your troops cross, and strike drones can bring them down ---
+{
+  const sim = fresh({ peaceSeconds: 0 });
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const terr = (sim as any).terrain;
+  // find a river on our ground: dry – water – dry within ~1.5 km, east–west
+  let site: [LngLat, LngLat] | null = null;
+  for (let x = 30; x < 36 && !site; x += 0.05) for (let y = 47.5; y < 50.5 && !site; y += 0.05) {
+    const w: LngLat = [x, y], e: LngLat = [x + 0.02, y];
+    if (!terr.isBarrier(w) && terr.isBarrier([x + 0.01, y]) && !terr.isBarrier(e) && sim.side(w) === 0 && sim.side(e) === 0 && !sim.liberatedAt(w)) site = [w, e];
+  }
+  assert.ok(site, 'found a narrow river on our side');
+  const [w, e] = site!;
+  assert.equal(sim.apply('a', { type: 'build', def: 'bridge', pos: offsetKm(w, 0, 3), to: offsetKm(w, 0.5, 3) }).ok, false, 'a bridge must cross a river');
+  assert.ok(sim.apply('a', { type: 'build', def: 'bridge', pos: w, to: e }).ok, 'a bridge across it');
+  const bridge = sim.world.buildings.find((x) => x.def === 'bridge')!;
+  run(sim, 30);
+  assert.ok(bridge.progress < 1, 'it takes minutes to build');
+  bridge.progress = 1;
+  const inf = sim.spawnUnit('infantry', a, offsetKm(w, -0.2, 0));
+  inf.fireMode = 'hold';
+  assert.ok(sim.apply('a', { type: 'move', units: [inf.id], to: offsetKm(e, 0.3, 0), mode: 'direct' }).ok, 'a route over the bridge');
+  run(sim, 40);
+  assert.ok(distKm(inf.pos, offsetKm(e, 0.3, 0)) < 0.2, 'crossed the river on it');
+  // two strike drones on it
+  for (let k = 0; k < 4 && sim.world.buildings.includes(bridge); k++) {
+    const dr = sim.spawnUnit('drone_shahed', b, offsetKm(bridge.pos, 6, 6));
+    sim.apply('b', { type: 'move', units: [dr.id], to: bridge.pos });
+    run(sim, 25);
+  }
+  assert.ok(!sim.world.buildings.includes(bridge), 'strike drones bring the bridge down');
+  console.log('bridges ok');
+}
+
+// --- strike drones hit the aim point, and lock on to a target and follow it ---
+{
+  const sim = fresh({ peaceSeconds: 0 });
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const hq = hqOf(sim, 'a');
+  const aim = offsetKm(hq.pos, 20, 20);
+  const dr = sim.spawnUnit('drone_liutyi', a, offsetKm(aim, -15, -8));
+  sim.apply('a', { type: 'move', units: [dr.id], to: aim });
+  let hitAt: LngLat | null = null;
+  for (let i = 0; i < 800 && sim.world.units.includes(dr); i++) (sim.step(0.1), (hitAt = [dr.pos[0], dr.pos[1]]));
+  assert.ok(hitAt && distKm(hitAt, aim) < 0.05, `explodes on the spot (${hitAt ? (distKm(hitAt, aim) * 1000).toFixed(0) : '?'} m off)`);
+  // a moving truck, locked on
+  const truck = sim.spawnUnit('truck', b, offsetKm(hq.pos, 30, 0));
+  truck.path = [{ p: offsetKm(truck.pos, 0, 15), road: false, end: true }];
+  const d2 = sim.spawnUnit('drone_liutyi', a, offsetKm(truck.pos, -12, 0));
+  sim.apply('a', { type: 'move', units: [d2.id], to: truck.pos });
+  assert.equal(d2.lockOn?.unit, truck.id, 'locked on');
+  for (let i = 0; i < 800 && sim.world.units.includes(d2); i++) sim.step(0.1);
+  assert.ok(truck.hp < sim.defs.u.get('truck')!.hp, 'it hit the moving truck');
+  console.log('strike drone accuracy ok');
+}
