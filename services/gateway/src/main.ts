@@ -3,7 +3,7 @@ import { WebSocket, WebSocketServer } from 'ws';
 import { config, verify } from '@sw/kit';
 
 /** Public entry point: routes REST to auth/lobby and authenticates the realtime socket into the game service. */
-const upstreams: Record<string, string> = { '/api/auth': config.urls.auth, '/api/lobby': config.urls.lobby };
+const upstreams: Record<string, string> = { '/api/auth': config.urls.auth, '/api/lobby': config.urls.lobby, '/api/profile': config.urls.profile };
 
 async function proxy(req: IncomingMessage, res: ServerResponse) {
   const url = new URL(req.url ?? '/', 'http://x');
@@ -27,7 +27,9 @@ async function proxy(req: IncomingMessage, res: ServerResponse) {
 }
 
 const server = createServer((req, res) => void proxy(req, res));
-const wss = new WebSocketServer({ noServer: true });
+// game traffic is JSON (an 18 MB map on join, ~80 KB snapshots five times a second): compressing it cuts the bytes several
+// times over, which matters on slower links (Tailscale, Wi-Fi)
+const wss = new WebSocketServer({ noServer: true, perMessageDeflate: { threshold: 1024, zlibDeflateOptions: { level: 3 } } });
 
 server.on('upgrade', async (req, socket, head) => {
   const url = new URL(req.url ?? '/', 'http://x');

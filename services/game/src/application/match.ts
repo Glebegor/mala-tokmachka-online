@@ -1,4 +1,4 @@
-import { snapshotFor, type BotDifficulty, Sim, type ClientMsg, type InitMsg, type Ruleset, type ServerMsg, type SlotInit } from '@sw/core';
+import { MARK_KINDS, snapshotFor, type MatchReport, type BotDifficulty, type PlayerStats, Sim, type ClientMsg, type InitMsg, type Ruleset, type ServerMsg, type SlotInit, type Team } from '@sw/core';
 import { ScriptHost } from '../infrastructure/scriptHost';
 import { Bot } from './bot';
 
@@ -7,14 +7,41 @@ export interface Connection {
   close(): void;
 }
 
+/** Port: where finished matches are reported (the profile service). */
+export interface MatchReporter {
+  report(result: MatchReport): Promise<void>;
+}
+
+const COUNTDOWN_MS = 3000;
+const LOAD_TIMEOUT_MS = 25000; // start anyway if a client never reports that its map is drawn
+const EMPTY_CLOSE_MS = 60000; // a match nobody is connected to for this long is removed (time enough to reload or rejoin)
+
 export class Match {
   readonly sim: Sim;
   private conns = new Map<string, Connection>();
   private bots: Bot[];
   private timer: NodeJS.Timeout;
   private ended = false;
+  private closed = false;
   private msgBudget = new Map<string, { t: number; n: number }>();
+  private idleTicks = 0;
   onClose: () => void = () => {};
+  /** loading: waiting for players to draw the map; countdown: 3-2-1; running: the simulation advances. */
+  private phase: 'loading' | 'countdown' | 'running' = 'loading';
+  private ready = new Set<string>();
+  private createdAt = Date.now();
+  /** When the last player disconnected (0 while someone is connected). */
+  private emptySince = Date.now();
+  private startAt = 0;
+  private reporter: MatchReporter | null = null;
+  /** Version of the contested ground each player last received (it is only resent when it changes). */
+  private libSent = new Map<string, number>();
+  private snap(pid: string, team: Team, shots: Parameters<typeof snapshotFor>[3], countdown?: number) {
+    const v = this.sim.libVersion;
+    const fresh = this.libSent.get(pid) !== v;
+    if (fresh) this.libSent.set(pid, v);
+    return snapshotFor(this.sim, pid, team, shots, countdown, fresh);
+  }
 
   constructor(readonly id: string, readonly ruleset: Ruleset, mapId: string, readonly slots: SlotInit[], difficulty: BotDifficulty = 'normal') {
     this.sim = new Sim(ruleset, mapId, slots);
@@ -24,7 +51,9 @@ export class Match {
         giveResource: (pid, res, n) => {
           const p = sim.player(pid);
           const def = ruleset.resources.find((r) => r.id === res);
-          if (p && def) p.res[res] = Math.min(def.cap, Math.max(0, (p.res[res] ?? 0) + n));
+          if (!p || !def) return;
+          if (sim.isGood(res)) sim.credit(p, { [res]: n }); // goods go into the HQ
+          else p.res[res] = Math.min(def.cap, Math.max(0, (p.res[res] ?? 0) + n));
         },
         teamPlayers: (team) => sim.world.players.filter((p) => p.team === team).map((p) => p.id),
         toast: (text) => this.broadcast({ t: 'toast', text }),
@@ -38,6 +67,33 @@ export class Match {
     this.timer = setInterval(() => this.tick(dt, snapEvery), 1000 * dt);
   }
 
+  setReporter(r: MatchReporter) {
+    this.reporter = r;
+  }
+
+  /** Seconds left before the start: 3..1, 0 when running, -1 while players are still loading. */
+  private countdown(): number {
+    if (this.phase === 'running') return 0;
+    if (this.phase === 'loading') return -1;
+    return Math.max(1, Math.ceil((this.startAt - Date.now()) / 1000));
+  }
+
+  private advancePhase() {
+    if (this.phase === 'loading') {
+      const humans = this.humanIds();
+      const connected = humans.filter((id) => this.conns.has(id));
+      const allReady = connected.length > 0 && connected.every((id) => this.ready.has(id));
+      // a match with no human players has nobody to wait for
+      if (!humans.length) this.phase = 'running';
+      else if (allReady || Date.now() - this.createdAt > LOAD_TIMEOUT_MS) {
+        this.phase = 'countdown';
+        this.startAt = Date.now() + COUNTDOWN_MS;
+      }
+    } else if (this.phase === 'countdown' && Date.now() >= this.startAt) {
+      this.phase = 'running';
+    }
+  }
+
   humanIds() {
     return this.slots.filter((s) => !s.bot).map((s) => s.id);
   }
@@ -49,6 +105,7 @@ export class Match {
   connect(playerId: string, conn: Connection) {
     this.conns.get(playerId)?.close();
     this.conns.set(playerId, conn);
+    this.emptySince = 0;
     const me = this.sim.player(playerId)!;
     const { scripts: _s, maps: _m, ...pub } = this.ruleset;
     const init: InitMsg = {
@@ -61,11 +118,13 @@ export class Match {
       players: this.sim.world.players.map(({ id, name, team, bot }) => ({ id, name, team, bot })),
     };
     conn.send(init);
-    conn.send(snapshotFor(this.sim, playerId, me.team));
+    this.libSent.delete(playerId); // a fresh connection gets everything
+    conn.send(this.snap(playerId, me.team, [], this.countdown()));
   }
 
   disconnect(playerId: string, conn: Connection) {
     if (this.conns.get(playerId) === conn) this.conns.delete(playerId);
+    if (!this.conns.size) this.emptySince = Date.now();
   }
 
   handle(playerId: string, msg: ClientMsg) {
@@ -76,10 +135,34 @@ export class Match {
     this.msgBudget.set(playerId, b);
 
     if (msg.t === 'ping') return this.conns.get(playerId)?.send({ t: 'pong' });
+    if (msg.t === 'ready') return void this.ready.add(playerId);
+    if (msg.t === 'mark') return this.mark(playerId, msg);
+    if (msg.t === 'powerLines') {
+      const team = this.sim.player(playerId)?.team;
+      if (team === undefined || typeof msg.building !== 'number') return;
+      const lines = this.sim.powerLines(team, msg.building).map((l) => l.map(([x, y]) => [Math.round(x * 1e4) / 1e4, Math.round(y * 1e4) / 1e4] as [number, number]));
+      return this.conns.get(playerId)?.send({ t: 'powerLines', building: msg.building, lines });
+    }
+    if (this.phase !== 'running') return this.conns.get(playerId)?.send({ t: 'error', reason: 'the match has not started yet' });
     if (msg.t === 'cmd') {
       const res = this.sim.apply(playerId, msg.cmd);
       if (!res.ok) this.conns.get(playerId)?.send({ t: 'error', reason: res.reason });
     }
+  }
+
+  /** Map marks go to everyone on the sender's side (at most one every 0.6 s per player). */
+  private lastMark = new Map<string, number>();
+  private mark(playerId: string, msg: Extract<ClientMsg, { t: 'mark' }>) {
+    const p = this.sim.player(playerId);
+    const [lng, lat] = Array.isArray(msg.pos) ? msg.pos : [NaN, NaN];
+    if (!p || !MARK_KINDS.includes(msg.kind) || !Number.isFinite(lng) || !Number.isFinite(lat)) return;
+    const b = this.sim.map.bounds;
+    if (lng < b[0] - 2 || lng > b[2] + 2 || lat < b[1] - 2 || lat > b[3] + 2) return;
+    const now = Date.now();
+    if (now - (this.lastMark.get(playerId) ?? 0) < 600) return;
+    this.lastMark.set(playerId, now);
+    const out: ServerMsg = { t: 'mark', from: playerId, name: p.name, pos: [Math.round(lng * 1e4) / 1e4, Math.round(lat * 1e4) / 1e4], kind: msg.kind };
+    for (const [pid, c] of this.conns) if (this.sim.player(pid)?.team === p.team) c.send(out);
   }
 
   private broadcast(msg: ServerMsg) {
@@ -88,6 +171,22 @@ export class Match {
 
   private tick(dt: number, snapEvery: number) {
     const sim = this.sim;
+    // everyone has left: the match is removed (bots alone do not keep it alive)
+    if (!this.conns.size && this.emptySince && Date.now() - this.emptySince > EMPTY_CLOSE_MS) {
+      console.log(`[game] match ${this.id}: no players for ${EMPTY_CLOSE_MS / 1000} s, closing`);
+      return this.close();
+    }
+    if (this.phase !== 'running') {
+      // before the start nothing moves, but players still get snapshots so they can find their base
+      this.advancePhase();
+      if (++this.idleTicks % snapEvery === 0) {
+        for (const [pid, conn] of this.conns) {
+          const p = sim.player(pid);
+          if (p) conn.send(this.snap(pid, p.team, [], this.countdown()));
+        }
+      }
+      return;
+    }
     for (const b of this.bots) b.think(sim);
     sim.step(dt);
 
@@ -101,19 +200,34 @@ export class Match {
       }
       for (const [pid, conn] of this.conns) {
         const p = sim.player(pid);
-        if (p) conn.send(snapshotFor(sim, pid, p.team, shots));
+        if (p) conn.send(this.snap(pid, p.team, shots));
       }
     }
-    if (sim.world.winner !== null || (sim.ruleset.rules.matchSeconds > 0 && sim.world.time >= sim.ruleset.rules.matchSeconds)) {
+    // the simulation decides when it is over (a win, or the time limit after the ceasefire, which may be a draw)
+    if (sim.world.winReason !== null) {
       if (!this.ended) {
         this.ended = true;
-        this.broadcast({ t: 'end', winner: sim.world.winner, reason: sim.world.winReason ?? 'match over' });
+        sim.sampleTimeline();
+        const blank = { kills: 0, losses: 0, buildingsBuilt: 0, buildingsDestroyed: 0, unitsTrained: 0, damage: 0 };
+        const report: MatchReport = {
+          matchId: this.id,
+          mapId: sim.world.mapId,
+          seconds: Math.round(sim.world.time),
+          winner: sim.world.winner,
+          reason: sim.world.winReason ?? 'match over',
+          players: this.slots.map((s) => ({ id: s.id, name: s.name, team: s.team, bot: s.bot, stats: { ...blank, ...sim.world.stats[s.id], damage: Math.round(sim.world.stats[s.id]?.damage ?? 0) } })),
+          timeline: sim.world.timeline,
+        };
+        this.broadcast({ t: 'end', winner: report.winner, reason: report.reason, report });
+        this.reporter?.report(report).catch((e) => console.warn(`[game] could not report match ${this.id}: ${e}`));
         setTimeout(() => this.close(), 60_000);
       }
     }
   }
 
   close() {
+    if (this.closed) return;
+    this.closed = true;
     clearInterval(this.timer);
     for (const c of this.conns.values()) c.close();
     this.conns.clear();

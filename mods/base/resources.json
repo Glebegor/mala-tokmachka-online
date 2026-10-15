@@ -1,8 +1,58 @@
 [
-  { "id": "money", "icon": "coin",  "name": "Money",  "color": "#e8c35a", "start": 2500, "cap": 99999 },
-  { "id": "energy", "icon": "bolt", "name": "Energy", "color": "#5ad1e8", "start": 60,   "cap": 600 },
-  { "id": "people", "icon": "person", "name": "People", "color": "#9be85a", "start": 500,  "cap": 99999 },
-  { "id": "ore", "icon": "rock",    "name": "Ore",    "color": "#c58a5a", "start": 0,    "cap": 99999 },
-  { "id": "metal", "icon": "ingot",  "name": "Metal",  "color": "#b7c0cc", "start": 250,  "cap": 99999 },
-  { "id": "fuel", "icon": "drop",   "name": "Fuel",   "color": "#e8745a", "start": 250,  "cap": 99999 }
+  {
+    "id": "money",
+    "icon": "coin",
+    "name": "Money",
+    "color": "#e8c35a",
+    "start": 2500,
+    "cap": 99999
+  },
+  {
+    "id": "energy",
+    "icon": "bolt",
+    "name": "Energy",
+    "color": "#5ad1e8",
+    "start": 60,
+    "cap": 600
+  },
+  {
+    "id": "people",
+    "icon": "person",
+    "name": "People",
+    "color": "#9be85a",
+    "start": 500,
+    "cap": 99999
+  },
+  {
+    "id": "ore",
+    "icon": "rock",
+    "name": "Ore",
+    "color": "#c58a5a",
+    "start": 0,
+    "cap": 99999
+  },
+  {
+    "id": "metal",
+    "icon": "ingot",
+    "name": "Metal",
+    "color": "#b7c0cc",
+    "start": 250,
+    "cap": 99999
+  },
+  {
+    "id": "fuel",
+    "icon": "drop",
+    "name": "Fuel",
+    "color": "#e8745a",
+    "start": 250,
+    "cap": 99999
+  },
+  {
+    "id": "ammo",
+    "icon": "shell",
+    "name": "Ammo",
+    "color": "#e39b4f",
+    "start": 300,
+    "cap": 99999
+  }
 ]

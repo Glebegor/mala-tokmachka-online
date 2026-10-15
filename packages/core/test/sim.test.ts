@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, type SlotInit } from '../src';
+import { distToFrontKm, Sim, type LngLat, type SlotInit } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const slots: SlotInit[] = [];
@@ -11,20 +11,26 @@ const bots = slots.map((s) => new Bot(s.id));
 const front0 = sim.world.front.map((n) => [n.lng, n.lat]);
 let shots = 0;
 const t0 = Date.now();
-const totalSteps = Number(process.env.TEST_STEPS || 600);
-for (let i = 0; i < totalSteps && sim.world.winner === null; i++) {
-  if (i % 10 === 0) bots.forEach((b) => b.think(sim));
+for (let i = 0; i < 10 * 1200 && sim.world.winner === null; i++) {
+  bots.forEach((b) => b.think(sim));
   sim.step(0.1);
   shots += sim.shots.length;
   sim.shots = [];
-  if (i % 500 === 0) report(i / 10);
+  if (i % 3000 === 0) report(i / 10);
 }
 report(sim.world.time);
 function report(t: number) {
   const w = sim.world;
-  const shift = w.front.reduce((a, n, i) => a + Math.hypot(n.lng - front0[i][0], n.lat - front0[i][1]), 0) / w.front.length;
+  const shift = front0.reduce((a, p) => a + Math.abs(distToFrontKm(w.front, p as LngLat)), 0) / front0.length;
+  const wet = w.units.filter((u) => sim.defs.u.get(u.def)!.kind !== 'air' && !(u.path[0]?.road) && sim.terrain?.isBarrier(u.pos) && !w.buildings.some((b) => b.team === u.team && sim.defs.b.get(b.def)!.crossing)).length;
+  const moving = w.units.filter((u) => u.path.length).length;
+  const transport = w.units.filter((u) => u.transport).length;
+  const school = w.buildings.reduce((a, b) => a + b.inside.length, 0);
+  const kinds = [...new Set(w.buildings.map((b) => b.def))].length;
+  const hauling = w.units.filter((u) => u.haul).length;
+  const drones = w.units.filter((u) => sim.defs.u.get(u.def)!.kind === 'air').length;
   const ranks = [0, 1, 2, 3, 4].map((r) => w.units.filter((u) => u.rank === r).length).join('/');
-  console.log(`t=${t.toFixed(0)}s buildings=${w.buildings.length} units=${w.units.length} avgFrontShift=${shift.toFixed(3)}° shots=${shots} ranks=${ranks} points=${w.points.map((p) => p.owner).join('')} scores=${w.scores.map(Math.round)} winner=${w.winner} ${w.winReason ?? ''}`);
+  console.log(`t=${t.toFixed(0)}s buildings=${w.buildings.length} units=${w.units.length} nodes=${w.front.length} avgFrontShift=${shift.toFixed(1)}km moving=${moving} transport=${transport} inSchool=${school} buildingKinds=${kinds} hauling=${hauling} drones=${drones} smokes=${w.smokes.length} inRiver=${wet} shots=${shots} ranks=${ranks} points=${w.points.map((p) => p.owner).join('')} scores=${w.scores.map(Math.round)} winner=${w.winner} ${w.winReason ?? ''}`);
 }
 console.log(`wall ${Date.now() - t0}ms`);
 const bad = sim.world.players.some((p) => Object.values(p.res).some((v) => !Number.isFinite(v) || v < 0));

@@ -1,4 +1,4 @@
-import { DEFAULT_SETTINGS, type RoomInfo, type RoomSettings, type RoomSlot } from '@sw/core';
+import { DEFAULT_SETTINGS, PEACE_OPTIONS, type RoomInfo, type RoomSettings, type RoomSlot } from '@sw/core';
 
 export const MAX_TEAM_SIZE = 8;
 
@@ -24,11 +24,12 @@ export function nameBots(room: Room) {
   }
 }
 
-/** Pad teams with bots: up to teamSize when fillBots is on, otherwise just guarantee one unit per side. */
+/** Bots are only added on request: with `fillBots` on, empty slots are padded up to teamSize; otherwise nothing is added. */
 export function fillWithBots(room: Room) {
-  for (const team of [0, 1] as const) {
-    const target = room.settings.fillBots ? room.settings.teamSize : 1;
-    while (slotsOf(room, team).length < target) room.slots.push(newBot(team));
+  if (room.settings.fillBots) {
+    for (const team of [0, 1] as const) {
+      while (slotsOf(room, team).length < room.settings.teamSize) room.slots.push(newBot(team));
+    }
   }
   nameBots(room);
 }
@@ -45,5 +46,7 @@ export function sanitizeSettings(input: Partial<RoomSettings> | undefined, base:
     startResources: oneOf(i.startResources, ['low', 'normal', 'high'] as const, base.startResources),
     frontSpeed: oneOf(Number(i.frontSpeed), [0.5, 1, 2] as const, base.frontSpeed),
     fogOfWar: typeof i.fogOfWar === 'boolean' ? i.fogOfWar : base.fogOfWar,
+    mode: oneOf(i.mode, ['standard', 'sandbox'] as const, base.mode),
+    peaceMinutes: oneOf(Number(i.peaceMinutes), PEACE_OPTIONS, base.peaceMinutes),
   };
 }

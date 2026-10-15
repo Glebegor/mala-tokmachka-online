@@ -1,6 +1,10 @@
-import type { BotDifficulty, RoomInfo, RoomSettings } from '@sw/core';
+import { PEACE_OPTIONS, type BotDifficulty, type GameMode, type RoomInfo, type RoomSettings } from '@sw/core';
 import { api, type Session } from './api';
 import { clear, h } from './dom';
+import { showProfile } from './profile';
+import { openGuide } from './guide';
+import { uiScaleControl } from './uiScale';
+import { langControl } from './i18n';
 
 type Opt<T> = { v: T; label: string };
 
@@ -17,11 +21,12 @@ function toggle(label: string, value: boolean, disabled: boolean, onChange: (v: 
   return h('label', { class: 'field check' }, el, h('span', {}, label));
 }
 
-export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; onMatch(matchId: string): void }) {
+export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string; onLogout(): void; onMatch(matchId: string): void }) {
   clear(app);
   let stopped = false;
   let maps: { id: string; name: string }[] = [];
   void api.maps().then((m) => (maps = m)).catch(() => {});
+  let viewingProfile = false;
   let editing = false; // pause polling re-render while a control has focus
   const body = h('div', { class: 'lobby-body' });
   const msg = h('div', { class: 'error' });
@@ -41,12 +46,15 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
     const set = (patch: Partial<RoomSettings>) => guard(() => api.settings(room.id, patch));
     return h('div', { class: 'settings' },
       h('h3', {}, 'Match settings', isHost ? null : h('span', { class: 'muted' }, ' (host only)')),
+      select<GameMode>('Game type', st.mode, [{ v: 'standard', label: 'Standard match' }, { v: 'sandbox', label: 'Sandbox (test features)' }], !isHost, (v) => set({ mode: v })),
+      st.mode === 'sandbox' ? h('p', { class: 'muted hint-line' }, 'Endless resources, stocked stores, building and training 10× faster, no victory and no time limit.') : null,
+      select('Ceasefire at start', st.peaceMinutes, PEACE_OPTIONS.map((m) => ({ v: m as number, label: m ? `${m} min` : 'None' })), !isHost, (v) => set({ peaceMinutes: v })),
       select('Map', st.mapId, (maps.length ? maps : [{ id: st.mapId, name: st.mapId }]).map((m) => ({ v: m.id, label: m.name })), !isHost, (v) => set({ mapId: v })),
-      select('Duration', st.matchMinutes, [{ v: 0, label: 'До победного' }, ...[10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` }))], !isHost, (v) => set({ matchMinutes: v })),
+      st.mode === 'sandbox' ? null : select('Duration', st.matchMinutes, [{ v: 0, label: 'Until victory' }, ...[10, 20, 30, 45, 60, 90].map((m) => ({ v: m, label: `${m} min` }))], !isHost, (v) => set({ matchMinutes: v })),
       select('Team size', st.teamSize, [1, 2, 3, 4, 5, 6, 7, 8].map((n) => ({ v: n, label: `${n} v ${n}` })), !isHost, (v) => set({ teamSize: v })),
       toggle('Fill empty slots with bots', st.fillBots, !isHost, (v) => set({ fillBots: v })),
       select<BotDifficulty>('Bot difficulty', st.botDifficulty, [{ v: 'easy', label: 'Easy' }, { v: 'normal', label: 'Normal' }, { v: 'hard', label: 'Hard' }], !isHost, (v) => set({ botDifficulty: v })),
-      select('Starting resources', st.startResources, [{ v: 'low', label: 'Low (×0.5)' }, { v: 'normal', label: 'Normal' }, { v: 'high', label: 'High (×2.5)' }], !isHost, (v) => set({ startResources: v })),
+      st.mode === 'sandbox' ? null : select('Starting resources', st.startResources, [{ v: 'low', label: 'Low (×0.5)' }, { v: 'normal', label: 'Normal' }, { v: 'high', label: 'High (×2.5)' }], !isHost, (v) => set({ startResources: v })),
       select('Front speed', st.frontSpeed, [{ v: 0.5, label: 'Slow' }, { v: 1, label: 'Normal' }, { v: 2, label: 'Fast' }], !isHost, (v) => set({ frontSpeed: v as 0.5 | 1 | 2 })),
       toggle('Fog of war', st.fogOfWar, !isHost, (v) => set({ fogOfWar: v })),
     );
@@ -71,23 +79,28 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
   };
 
   async function refresh(force = false) {
-    if (stopped) return;
+    if (stopped || viewingProfile) return;
     if (editing && !force) return;
     const rooms = await api.rooms();
     const mine = rooms.find((r) => r.slots.some((x) => x.id === s.user.id));
-    if (mine?.status === 'playing' && mine.matchId) {
+    if (mine?.status === 'playing' && mine.matchId && mine.matchId === cb.leftMatch) {
+      // the player pressed Leave: stay in the lobby and let them choose
       clear(body);
       body.append(
-        h('div', { class: 'card', style: { textAlign: 'center' } },
-          h('h2', {}, mine.name),
-          h('p', { class: 'muted' }, 'У вас есть матч в процессе игры.'),
-          h('div', { class: 'row', style: { justifyContent: 'center', gap: '8px' } },
-            h('button', { class: 'primary', onClick: () => { stopped = true; cb.onMatch(mine.matchId!); } }, 'Войти в игру'),
-            h('button', { onClick: () => guard(() => api.leaveAll()) }, 'Покинуть матч'),
+        h('div', { class: 'card' },
+          h('h2', {}, 'Match in progress'),
+          h('p', { class: 'muted' }, `${mine.name} is still running. Your units hold their positions while you are away.`),
+          h('div', { class: 'row' },
+            h('button', { class: 'primary', onClick: () => ((stopped = true), cb.onMatch(mine.matchId!)) }, 'Rejoin match'),
+            h('button', { onClick: () => guard(() => api.leave(mine.id)) }, 'Abandon match'),
           ),
         ),
       );
       return;
+    }
+    if (mine?.status === 'playing' && mine.matchId) {
+      stopped = true;
+      return cb.onMatch(mine.matchId);
     }
     clear(body);
     if (mine) {
@@ -99,7 +112,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
             h('div', { class: 'teams' }, teamColumn(mine, 0, isHost), teamColumn(mine, 1, isHost)),
             settingsPanel(mine, isHost),
           ),
-          h('p', { class: 'muted' }, mine.settings.fillBots ? `Empty slots are filled with ${mine.settings.botDifficulty} bots at start.` : 'Only players and bots you add will play (each side gets at least one bot).'),
+          h('p', { class: 'muted' }, mine.settings.fillBots ? `Empty slots are filled with ${mine.settings.botDifficulty} bots at start.` : 'No bots are added automatically: only the players and the bots listed above will play.'),
           h('div', { class: 'row' },
             isHost ? h('button', { class: 'primary', onClick: () => guard(() => api.start(mine.id)) }, 'Start match') : h('span', { class: 'muted' }, 'Waiting for host…'),
             h('button', { onClick: () => guard(() => api.leave(mine.id)) }, 'Leave'),
@@ -113,9 +126,14 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
           rooms.length === 0 ? h('p', { class: 'muted' }, 'No rooms yet. Create one.') : null,
           ...rooms.map((r) =>
             h('div', { class: 'room' },
-              h('span', {}, r.name),
-              h('span', { class: 'muted' }, `${r.slots.filter((x) => !x.bot).length} players · ${r.settings.teamSize}v${r.settings.teamSize} · ${r.status}`),
-              h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, r.status === 'open' ? 'Join' : 'Rejoin'),
+              h('span', {}, r.name, r.settings.mode === 'sandbox' ? h('span', { class: 'tag' }, 'SANDBOX') : null),
+              h('span', { class: 'muted' }, `${r.slots.filter((x) => !x.bot).length} players · ${r.settings.teamSize}v${r.settings.teamSize} · ${r.settings.peaceMinutes ? `${r.settings.peaceMinutes} min ceasefire · ` : ''}${r.status}`),
+              // a running match can only be re-entered by someone who was in it when it started
+              r.status === 'open'
+                ? h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, 'Join')
+                : r.slots.some((x) => x.id === s.user.id)
+                  ? h('button', { onClick: () => guard(() => api.join(r.id, 0)) }, 'Rejoin')
+                  : h('span', { class: 'muted' }, 'in progress'),
             ),
           ),
         ),
@@ -127,7 +145,18 @@ export function showLobby(app: HTMLElement, s: Session, cb: { onLogout(): void; 
     h('div', { class: 'lobby' },
       h('div', { class: 'row between topbar' },
         h('div', { class: 'logo small' }, 'MALA TOKMACHKA', h('span', {}, 'ONLINE')),
-        h('div', { class: 'row' }, h('span', { class: 'muted' }, s.user.name), h('button', { onClick: () => ((stopped = true), cb.onLogout()) }, 'Sign out')),
+        h('div', { class: 'row' },
+          h('button', { title: 'Your statistics', onClick: () => {
+            viewingProfile = true;
+            void showProfile(body, s, () => {
+              viewingProfile = false;
+              void refresh(true);
+            });
+          } }, `${s.user.name} · Profile`),
+          langControl(),
+          uiScaleControl(),
+          h('button', { title: 'How to play', onClick: () => openGuide() }, 'Guide'),
+          h('button', { onClick: () => ((stopped = true), cb.onLogout()) }, 'Sign out')),
       ),
       body, msg,
     ),

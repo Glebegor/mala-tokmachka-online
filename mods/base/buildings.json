@@ -1,69 +1,577 @@
 [
-  { "id": "power_plant", "name": "Power Plant", "category": "civil", "icon": "ϟ",
-    "description": "Электростанция: вырабатывает энергию и подключается электролиниями к зданиям в радиусе 100 км по дорогам, давая +25% к скорости производства.",
-    "cost": { "money": 300 }, "buildTime": 14, "hp": 400, "produces": { "energy": 8 }, "aura": { "radiusKm": 100, "outputMult": 1.25 }, "vision": 3 },
-  { "id": "housing", "name": "Жилой дом", "category": "civil", "icon": "▥",
-    "description": "Жилой дом: граждане платят налоги и пополняют людские резервы. Строится только в границах городов (максимум 20 домов на город). При подключении к электросети приносит x1.5 дохода.",
-    "cost": { "money": 200 }, "buildTime": 10, "hp": 500,
-    "produces": { "money": 0.8, "people": 0.12 }, "consumes": { "energy": 0.5 }, "vision": 3 },
-  { "id": "mine", "name": "Ore Mine", "category": "civil", "icon": "◭",
-    "description": "Extracts raw ore.",
-    "cost": { "money": 250 }, "buildTime": 12, "hp": 350,
-    "produces": { "ore": 1.0 }, "consumes": { "energy": 1.5 }, "vision": 3 },
-  { "id": "metalworks", "name": "Metal Works", "category": "civil", "icon": "❖",
-    "description": "Smelts ore into steel.",
-    "cost": { "money": 400 }, "buildTime": 16, "hp": 450,
-    "produces": { "metal": 0.6 }, "consumes": { "ore": 1.0, "energy": 2 }, "vision": 3 },
-  { "id": "oil_refinery", "name": "Нефтеперерабатывающий завод", "category": "civil", "icon": "🏭",
-    "description": "Производство топлива для снабжения фронта и техники. В Кременчуге дает бонус x1.5 к производству топлива.",
-    "cost": { "money": 450, "metal": 35 }, "buildTime": 16, "hp": 550,
-    "produces": { "fuel": 2.5 }, "consumes": { "energy": 2.0 }, "vision": 4 },
-  { "id": "gas_station", "name": "АЗС (Заправка)", "category": "civil", "icon": "⛽",
-    "description": "Автозаправочная станция (емкость 20,000 л). Заправляет подъехавшие танки и технику из своего резервуара. Топливо доставляется автоцистернами с нефтезавода.",
-    "cost": { "money": 220, "metal": 15 }, "buildTime": 10, "hp": 350,
-    "storageCap": 20000, "vision": 4 },
-  { "id": "rail_station", "name": "Rail Hub", "category": "civil", "icon": "⇄",
-    "description": "Logistics: +25% output for every building within 25 km.",
-    "cost": { "money": 500, "metal": 30 }, "buildTime": 20, "hp": 400,
-    "consumes": { "energy": 1.5 }, "aura": { "radiusKm": 25, "outputMult": 1.25 }, "vision": 5 },
-  { "id": "machine_factory", "name": "Машиностроительный завод", "category": "civil", "icon": "⚙",
-    "description": "Производство автотранспорта: пикапы, грузовики, топливозаправщики и спасатели.",
-    "cost": { "money": 500, "metal": 40 }, "buildTime": 18, "hp": 600, "vision": 5, "trains": ["pickup", "truck", "fuel_truck", "rescuers"] },
-  { "id": "warehouse", "name": "Склад", "category": "civil", "icon": "▤",
-    "description": "Складской логистический комплекс хранения сырья и ресурсов.",
-    "cost": { "money": 280, "metal": 20 }, "buildTime": 12, "hp": 500, "vision": 4 },
-
-  { "id": "trench", "name": "Trench Line", "category": "military", "icon": "≋",
-    "description": "Cheap fortification. Reduces damage and slows the front within 6 km.",
-    "cost": { "money": 80, "people": 5 }, "buildTime": 8, "hp": 300,
-    "defense": { "radiusKm": 6, "mult": 0.25 }, "vision": 3 },
-  { "id": "bunker", "name": "Bunker", "category": "military", "icon": "▣",
-    "description": "Hardened position. Strong defence within 8 km.",
-    "cost": { "money": 220, "metal": 25 }, "buildTime": 18, "hp": 900,
-    "defense": { "radiusKm": 8, "mult": 0.6 }, "vision": 4 },
-  { "id": "signal_station", "name": "Signal Station", "category": "military", "icon": "◉",
-    "description": "Long-range radio and recon. Reveals enemy movement within 35 km.",
-    "cost": { "money": 300, "metal": 10 }, "buildTime": 14, "hp": 300,
-    "consumes": { "energy": 1.5 }, "vision": 35 },
-  { "id": "drone_factory", "name": "Завод дронов", "category": "military", "icon": "✈",
-    "description": "Производственный комплекс БПЛА и беспилотных систем. В ОЭЗ «Алабуга» дает бонус x1.5 к скорости производства дронов.",
-    "cost": { "money": 650, "metal": 45 }, "buildTime": 22, "hp": 800, "vision": 6, "trains": ["drone_shahed", "drone_orion", "drone_liutyi", "drone_pd2", "drone_mini_shark", "drone_fire_point"] },
-  { "id": "missile_factory", "name": "Ракетный завод", "category": "military", "icon": "▲",
-    "description": "Завод по производству ракетных комплексов и боеприпасов.",
-    "cost": { "money": 850, "metal": 75 }, "buildTime": 28, "hp": 1100, "vision": 6 },
-  { "id": "military_base", "name": "Военная база", "category": "military", "icon": "🎖",
-    "description": "Главный командно-гарнизонный комплекс. Осуществляет подготовку всех видов пехоты, разведки, штурмовых групп, ПТРК, танков и артиллерии.",
-    "cost": { "money": 800, "metal": 60 }, "buildTime": 25, "hp": 1500,
-    "produces": { "money": 1.0 }, "vision": 15,
-    "trains": ["infantry", "infantry_recon", "infantry_assault", "infantry_at", "tank", "artillery"],
-    "maxPerPlayer": 3 },
-  { "id": "airfield", "name": "Аэродром", "category": "military", "icon": "◈",
-    "description": "Военный аэродром базирования и обслуживания тактической авиации и дронов (резервуар до 20,000 л авиатоплива). Место хранения, запуска авиации и дозаправки БПЛА.",
-    "cost": { "money": 900, "metal": 50 }, "buildTime": 30, "hp": 1200, "storageCap": 20000, "vision": 25 },
-  { "id": "launch_pad", "name": "Пусковая площадка", "category": "military", "icon": "🚀",
-    "description": "Специализированная площадка для хранения, подготовки к старту и запуска разведывательных и ударных БПЛА, а также дозаправки разведдронов (резервуар до 5,000 л топлива).",
-    "cost": { "money": 450, "metal": 25 }, "buildTime": 16, "hp": 650, "storageCap": 5000, "vision": 15 },
-  { "id": "aircraft_plant", "name": "Авиационный завод", "category": "military", "icon": "🛩",
-    "description": "Авиастроительный завод по производству самолётов и вертолётов. Промышленный комплекс для будущей авиации.",
-    "cost": { "money": 850, "metal": 70 }, "buildTime": 26, "hp": 1100, "vision": 8, "trains": [] }
+  {
+    "id": "hq",
+    "name": "Military Base (HQ)",
+    "category": "military",
+    "icon": "⌖",
+    "description": "Command centre and barracks: trains infantry of every kind (including MANPADS teams and medics), tanks and artillery, earns a little money and backs the front. All your goods (metal, fuel, ore, ammo) are kept here and in your warehouses: building and upgrades are paid from them, training draws on this store. Lose all your bases and you are out. Units within 8 km refill their ammunition from its store.",
+    "cost": {
+      "money": 900,
+      "metal": 60
+    },
+    "buildTime": 25,
+    "hp": 1500,
+    "produces": {
+      "money": 1.0
+    },
+    "vision": 15,
+    "trains": [
+      "infantry",
+      "infantry_recon",
+      "infantry_assault",
+      "infantry_at",
+      "manpads",
+      "medic",
+      "apc",
+      "ifv",
+      "tank",
+      "artillery"
+    ],
+    "maxPerPlayer": 3,
+    "supply": {
+      "radiusKm": 8,
+      "rounds": 5
+    }
+  },
+  {
+    "id": "power_plant",
+    "name": "Power Plant",
+    "category": "civil",
+    "icon": "ϟ",
+    "description": "Generates energy for your side's grid. Every building within 100 km of a power plant works 25% faster (housing earns 50% more). Select it to see its power lines.",
+    "cost": {
+      "money": 300
+    },
+    "buildTime": 14,
+    "hp": 400,
+    "produces": {
+      "energy": 8
+    },
+    "vision": 3
+  },
+  {
+    "id": "housing",
+    "name": "Housing Block",
+    "category": "civil",
+    "icon": "▥",
+    "description": "Only inside a city your side holds, at most 10 per city. Citizens pay taxes (money) and enlist (people), shared between teammates. 50% more income on the power grid.",
+    "cost": {
+      "money": 200
+    },
+    "buildTime": 10,
+    "hp": 500,
+    "produces": {
+      "money": 0.8,
+      "people": 0.12
+    },
+    "consumes": {
+      "energy": 0.5
+    },
+    "vision": 3
+  },
+  {
+    "id": "mine",
+    "name": "Ore Mine",
+    "category": "civil",
+    "icon": "◭",
+    "description": "Extracts ore into its own store. Truck the ore to a metal works.",
+    "cost": {
+      "money": 250
+    },
+    "buildTime": 12,
+    "hp": 350,
+    "produces": {
+      "ore": 2.0
+    },
+    "consumes": {
+      "energy": 1.5
+    },
+    "vision": 3,
+    "spacedFrom": [
+      "metalworks"
+    ],
+    "sameKindKm": 2.9
+  },
+  {
+    "id": "metalworks",
+    "name": "Metal Works",
+    "category": "civil",
+    "icon": "❖",
+    "description": "Smelts ore into metal. Needs ore delivered into its store by truck; the metal it makes stays on site until trucked away.",
+    "cost": {
+      "money": 400
+    },
+    "buildTime": 16,
+    "hp": 450,
+    "produces": {
+      "metal": 1.2
+    },
+    "consumes": {
+      "ore": 2.0,
+      "energy": 2
+    },
+    "vision": 3,
+    "sameKindKm": 2.9
+  },
+  {
+    "id": "oil_refinery",
+    "name": "Oil Refinery",
+    "category": "civil",
+    "icon": "⬣",
+    "description": "Refines fuel (5/s) into its tank. Fuel trucks take it to filling stations, airfields and bases. Built in the Kremenchuk zone (Ukraine only) it makes 50% more.",
+    "cost": {
+      "money": 450,
+      "metal": 35
+    },
+    "buildTime": 16,
+    "hp": 550,
+    "produces": {
+      "fuel": 5.0
+    },
+    "consumes": {
+      "energy": 2.0
+    },
+    "vision": 4,
+    "sameKindKm": 4.4
+  },
+  {
+    "id": "gas_station",
+    "name": "Filling Station",
+    "category": "civil",
+    "icon": "⬢",
+    "description": "Fuel depot (20,000). Vehicles within 8 km refuel here automatically; keep it supplied with a fuel truck. Never shown to the enemy.",
+    "cost": {
+      "money": 220,
+      "metal": 15
+    },
+    "buildTime": 10,
+    "hp": 350,
+    "storageCap": 20000,
+    "vision": 4
+  },
+  {
+    "id": "rail_station",
+    "name": "Railway Station",
+    "category": "civil",
+    "icon": "⊟",
+    "description": "Rail freight terminal: stores metal, fuel, ore and ammo (30,000 each), builds trains and refuels them. Connect stations with Railway track; trains then carry 20,000 at a time between them, far faster than trucks.",
+    "cost": {
+      "money": 600,
+      "metal": 50
+    },
+    "buildTime": 25,
+    "hp": 900,
+    "vision": 5,
+    "storageCap": 30000,
+    "trains": [
+      "train"
+    ]
+  },
+  {
+    "id": "railway",
+    "name": "Railway",
+    "category": "civil",
+    "icon": "═",
+    "description": "Railway track: drag on the map (0.5–40 km); ends within 1.5 km of a station or other track join up. It cannot cross water. Trains run only on track; drones, missiles and artillery can cut it.",
+    "cost": {
+      "money": 60,
+      "metal": 8
+    },
+    "buildTime": 12,
+    "hp": 500,
+    "vision": 2,
+    "line": {
+      "minKm": 0.5,
+      "maxKm": 40
+    },
+    "rail": true
+  },
+  {
+    "id": "machine_factory",
+    "name": "Machine Factory",
+    "category": "civil",
+    "icon": "⚙",
+    "description": "Builds pickups, trucks, fuel trucks, rescue crews and mechanic crews. Metal and fuel come from its own store (a new factory has enough for two vehicles; deliver more by truck).",
+    "cost": {
+      "money": 500,
+      "metal": 40
+    },
+    "buildTime": 18,
+    "hp": 600,
+    "vision": 5,
+    "trains": [
+      "pickup",
+      "truck",
+      "fuel_truck",
+      "rescuers",
+      "mechanic"
+    ]
+  },
+  {
+    "id": "warehouse",
+    "name": "Warehouse",
+    "category": "civil",
+    "icon": "▦",
+    "description": "Stores metal, fuel and ore (up to 30,000 each) as a hub for delivery routes.",
+    "cost": {
+      "money": 280,
+      "metal": 20
+    },
+    "buildTime": 12,
+    "hp": 500,
+    "vision": 4
+  },
+  {
+    "id": "trench",
+    "name": "Trench Line",
+    "category": "military",
+    "icon": "≋",
+    "description": "Dug-in line: drag on the map to draw it, 0.3 to 10 km long (a click gives 1 km along the front). Friendly troops and buildings within 1.5 km of it take less damage and the front is harder to push there. Cost and digging time are per km. Overlapping trenches do not add up: upgrade one instead (3 levels).",
+    "cost": {
+      "money": 50,
+      "people": 3
+    },
+    "buildTime": 6,
+    "hp": 300,
+    "defense": {
+      "radiusKm": 1.5,
+      "mult": 0.25
+    },
+    "vision": 3,
+    "levels": [
+      {
+        "cost": {
+          "money": 60,
+          "people": 3
+        },
+        "time": 8,
+        "defenseMult": 0.4,
+        "hp": 450
+      },
+      {
+        "cost": {
+          "money": 110,
+          "metal": 5
+        },
+        "time": 12,
+        "defenseMult": 0.55,
+        "hp": 650
+      }
+    ],
+    "fieldWork": true,
+    "line": {
+      "minKm": 0.3,
+      "maxKm": 10
+    }
+  },
+  {
+    "id": "bunker",
+    "name": "Bunker",
+    "category": "military",
+    "icon": "▣",
+    "description": "Hardened position: up to 4 armed squads on foot can man it (select them, right click the bunker). They fire out of it, cannot be hit until it falls, and the front is very hard to push past it. Shelled down by artillery, missiles or drones, the garrison dies with it; stormed by troops, they stumble out shaken (8 s: cannot fire, take 25% more damage). Also gives cover within 8 km. Bunkers do not add up: upgrade one instead.",
+    "cost": {
+      "money": 220,
+      "metal": 25
+    },
+    "buildTime": 18,
+    "hp": 1400,
+    "defense": {
+      "radiusKm": 8,
+      "mult": 0.6
+    },
+    "vision": 4,
+    "levels": [
+      {
+        "cost": {
+          "money": 300,
+          "metal": 40
+        },
+        "time": 16,
+        "defenseMult": 0.85,
+        "hp": 1400
+      },
+      {
+        "cost": {
+          "money": 500,
+          "metal": 80
+        },
+        "time": 22,
+        "defenseMult": 1.1,
+        "hp": 2000
+      }
+    ],
+    "fieldWork": true,
+    "garrison": {
+      "capacity": 4
+    }
+  },
+  {
+    "id": "signal_station",
+    "name": "Signal Station",
+    "category": "military",
+    "icon": "◉",
+    "description": "Radio and recon post. Reveals enemy units and buildings within 35 km through the fog of war. Uses energy.",
+    "cost": {
+      "money": 300,
+      "metal": 10
+    },
+    "buildTime": 14,
+    "hp": 300,
+    "consumes": {
+      "energy": 1.5
+    },
+    "vision": 35,
+    "fieldWork": true
+  },
+  {
+    "id": "boat_crossing",
+    "name": "Pontoon Crossing",
+    "category": "military",
+    "icon": "≈",
+    "description": "Boats and pontoons on a river bank. Your ground units can cross the river within 6 km. Without it rivers are crossed only on road bridges.",
+    "cost": {
+      "money": 260,
+      "metal": 30
+    },
+    "buildTime": 16,
+    "hp": 350,
+    "vision": 4,
+    "crossing": {
+      "radiusKm": 6,
+      "speed": 0.5
+    },
+    "needsWaterWithinKm": 3,
+    "fieldWork": true
+  },
+  {
+    "id": "bridge",
+    "name": "Bridge",
+    "category": "military",
+    "icon": "⌇",
+    "description": "A real bridge: drag across a river (up to 2 km) with both ends on your dry ground. Takes minutes to build (1 min plus 3 min per km). Your troops cross on it at road speed. Strike drones, missiles and artillery can bring it down.",
+    "cost": {
+      "money": 300,
+      "metal": 60
+    },
+    "buildTime": 180,
+    "hp": 900,
+    "vision": 3,
+    "line": {
+      "minKm": 0.15,
+      "maxKm": 2
+    },
+    "spansWater": true,
+    "crossing": {
+      "radiusKm": 0.35,
+      "speed": 1
+    }
+  },
+  {
+    "id": "antiair",
+    "name": "Anti-Air Station",
+    "category": "military",
+    "icon": "⟁",
+    "description": "Shoots down enemy drones and missiles within 14 km. Only anti-air stations and MANPADS teams can engage aircraft; other troops cannot. Uses energy.",
+    "cost": {
+      "money": 320,
+      "metal": 35
+    },
+    "buildTime": 16,
+    "hp": 400,
+    "consumes": {
+      "energy": 1.5
+    },
+    "vision": 16,
+    "attack": {
+      "range": 14,
+      "damage": 22,
+      "targets": "air",
+      "fx": "missile",
+      "missRate": 0.25
+    },
+    "fieldWork": true
+  },
+  {
+    "id": "training_center",
+    "name": "Training Centre",
+    "category": "military",
+    "icon": "⚑",
+    "description": "Send ground units inside (select them, right click the centre). With at least 3 inside you can pay for a course: after the wait they come out one rank higher and at full strength. A course to Regular takes 75 s, every rank above that 45 s more. Recruits can always be trained; from the second rank on a unit needs at least one kill since its last course. Holds 12.",
+    "cost": {
+      "money": 450,
+      "metal": 20
+    },
+    "buildTime": 22,
+    "hp": 600,
+    "consumes": {
+      "energy": 1
+    },
+    "vision": 5,
+    "maxPerPlayer": 2,
+    "training": {
+      "minUnits": 3,
+      "capacity": 12,
+      "baseTime": 30,
+      "timePerRank": 45
+    }
+  },
+  {
+    "id": "med_center",
+    "name": "Field Hospital",
+    "category": "military",
+    "icon": "✚",
+    "description": "Treats the wounded: troops on foot within 6 km get back 3% of their strength a second once they have been out of the fight for 10 s. Send battered squads back to it.",
+    "cost": {
+      "money": 350,
+      "metal": 20
+    },
+    "buildTime": 14,
+    "hp": 450,
+    "vision": 4,
+    "fieldWork": true,
+    "heals": {
+      "radiusKm": 6,
+      "perSecond": 0.03,
+      "targets": "foot"
+    }
+  },
+  {
+    "id": "drone_factory",
+    "name": "Drone Factory",
+    "category": "military",
+    "icon": "✣",
+    "description": "Builds your side's drones. A finished drone is delivered to the nearest launcher: recon drones to an Airfield, strike drones to a Launch Site (small ones can also be loaded on a pickup there). Built in the Alabuga zone (Russia only) it works 50% faster.",
+    "cost": {
+      "money": 650,
+      "metal": 45
+    },
+    "buildTime": 22,
+    "hp": 800,
+    "vision": 6,
+    "trains": [
+      "drone_shahed",
+      "drone_orion",
+      "drone_liutyi",
+      "drone_pd2",
+      "drone_mini_shark",
+      "drone_fire_point",
+      "drone_lancet",
+      "drone_zala"
+    ]
+  },
+  {
+    "id": "ammo_factory",
+    "name": "Ammo Factory",
+    "category": "military",
+    "icon": "✸",
+    "description": "Turns metal into ammunition (6/s) in its own store. Trucks carry the ammo to depots near the front. Needs metal delivered and energy.",
+    "cost": {
+      "money": 600,
+      "metal": 50
+    },
+    "buildTime": 24,
+    "hp": 900,
+    "vision": 5,
+    "produces": {
+      "ammo": 6
+    },
+    "consumes": {
+      "metal": 1.2,
+      "energy": 1
+    }
+  },
+  {
+    "id": "ammo_depot",
+    "name": "Ammo Depot",
+    "category": "military",
+    "icon": "⊞",
+    "description": "Field ammunition store (6,000). Your units within 18.75 km refill their rounds from it (up to 10 a second each; a tank shell costs 4 ammo, an artillery shell 6, an anti-tank missile 3). Can be set up inside your grey zones, even behind the enemy line, and stands as long as the grey zone does. Keep it stocked by truck from an ammo factory.",
+    "cost": {
+      "money": 180,
+      "metal": 15
+    },
+    "buildTime": 10,
+    "hp": 350,
+    "vision": 4,
+    "storageCap": 6000,
+    "fieldWork": true,
+    "buildInGrey": true,
+    "supply": {
+      "radiusKm": 18.75,
+      "rounds": 10
+    }
+  },
+  {
+    "id": "missile_factory",
+    "name": "Missile Factory",
+    "category": "military",
+    "icon": "⇑",
+    "description": "Builds your side's missiles: Iskander-M and Kh-101 for Russia, Neptune and Flamingo for Ukraine. A finished missile is delivered to the nearest Launch Site and launched from there. Metal and fuel come from the factory's own store.",
+    "cost": {
+      "money": 850,
+      "metal": 75
+    },
+    "buildTime": 28,
+    "hp": 1100,
+    "vision": 6,
+    "trains": [
+      "missile_iskander",
+      "missile_kh101",
+      "missile_neptune",
+      "missile_flamingo"
+    ]
+  },
+  {
+    "id": "launch_site",
+    "name": "Launch Site",
+    "category": "military",
+    "icon": "⇪",
+    "description": "Launch pad for strike drones and missiles: they wait here after being built and take off from here at your order (select the site, Launch at…, click the target).",
+    "cost": {
+      "money": 400,
+      "metal": 30
+    },
+    "buildTime": 18,
+    "hp": 600,
+    "vision": 5,
+    "storageCap": 5000,
+    "launches": [
+      "strike",
+      "recon"
+    ]
+  },
+  {
+    "id": "airfield",
+    "name": "Airfield",
+    "category": "military",
+    "icon": "✈",
+    "description": "Base for recon drones: new recon drones wait here and take off from here (launch them from this panel), and refuel here (within 12 km) from its fuel tank (20,000). Sees 20 km.",
+    "cost": {
+      "money": 900,
+      "metal": 50
+    },
+    "buildTime": 30,
+    "hp": 1200,
+    "storageCap": 20000,
+    "vision": 25,
+    "launches": [
+      "recon"
+    ]
+  },
+  {
+    "id": "aircraft_plant",
+    "name": "Aircraft Plant",
+    "category": "military",
+    "icon": "⛭",
+    "description": "Factory for manned aircraft and helicopters. Not in the game yet: this site is ready for a coming update.",
+    "cost": {
+      "money": 850,
+      "metal": 70
+    },
+    "buildTime": 26,
+    "hp": 1100,
+    "vision": 8,
+    "trains": []
+  }
 ]

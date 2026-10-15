@@ -3,6 +3,11 @@ import { api, session } from './api';
 import { h, clear } from './dom';
 import { showLobby } from './lobby';
 import { startGame } from './game';
+import { setUiScale, uiScale } from './uiScale';
+import { langControl, startTranslation } from './i18n';
+
+setUiScale(uiScale());
+startTranslation();
 
 const app = document.getElementById('app')!;
 
@@ -23,7 +28,7 @@ function showLogin(error = '') {
   app.append(
     h('div', { class: 'center' },
       h('div', { class: 'card login' },
-        h('div', { class: 'logo' }, 'MALA TOKMACHKA', h('span', {}, 'ONLINE')),
+        h('div', { class: 'row between' }, h('div', { class: 'logo' }, 'MALA TOKMACHKA', h('span', {}, 'ONLINE')), langControl()),
         name, pass, err,
         h('div', { class: 'row' },
           h('button', { class: 'primary', onClick: () => go(false) }, 'Sign in'),
@@ -35,14 +40,23 @@ function showLogin(error = '') {
   pass.addEventListener('keydown', (e) => e.key === 'Enter' && go(false));
 }
 
-export function route() {
+/** `leftMatch`: a running match the player just stepped out of; the lobby offers to rejoin instead of jumping back in. */
+export function route(leftMatch?: string) {
   const s = session.get();
   if (!s) return showLogin();
   showLobby(app, s, {
+    leftMatch,
     onLogout: () => (session.set(null), showLogin()),
     onMatch: (matchId) => {
       clear(app);
-      startGame(app, s, matchId, () => route());
+      startGame(app, s, matchId, async (finished) => {
+        if (finished) {
+          // a finished match frees the player's slot so the lobby shows the room list again
+          const mine = (await api.rooms().catch(() => [])).find((r) => r.matchId === matchId);
+          if (mine) await api.leave(mine.id).catch(() => {});
+          route();
+        } else route(matchId);
+      });
     },
   });
 }

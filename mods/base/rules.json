@@ -1,11 +1,17 @@
 {
   "matchSeconds": 1800,
-  "frontPush": 0.0012,
-  "frontMaxSpeed": 0.08,
-  "frontSmoothing": 0.5,
-  "frontInfluenceKm": 7.2,
-  "frontNodeSpacingKm": 1.5,
-  "minBuildSpacing": 35,
-  "roadSpeedMult": 1.2,
-  "startUnits": ["infantry", "infantry", "infantry", "infantry", "drone"]
+  "frontPush": 0.0024,
+  "frontMaxSpeed": 0.11,
+  "frontNodeSpacingKm": 9,
+  "xpPerKill": 25,
+  "startUnits": [
+    "infantry",
+    "infantry",
+    "infantry",
+    "infantry",
+    "drone"
+  ],
+  "minBuildSpacing": 17.5,
+  "fieldWorkSpacing": 0.6,
+  "civilSpacing": 5
 }

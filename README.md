@@ -7,10 +7,20 @@ Build civil and war infrastructure, command units by hand, and push a living fro
 
 ```
 npm install
-npm run dev        # auth :4001, lobby :4002, game :4003, gateway :8080, client :5173
+npm run dev        # auth :4001, lobby :4002, game :4003, profile :4004, gateway :8080, client :5173
 ```
 
-Open http://localhost:5173, register, create a room, start (empty slots are filled with bots).
+Production (Docker, reachable over the LAN and Tailscale, e.g. http://100.122.0.1:5173):
+
+```sh
+npm run docker-prod:run    # builds, starts with generated secrets (.env.prod), prints the URLs
+npm run docker-prod:logs   # follow the logs
+npm run docker-prod:stop   # stop everything (data is kept in Docker volumes)
+```
+
+Open http://localhost:5173, register, create a room, add bots with `+ Bot` if you want opponents, and start.
+In the room settings, *Game type: Sandbox* opens a test range (endless resources, ten times faster building and training,
+no victory), and *Ceasefire at start* gives everyone time to build up before the front opens (15 min by default).
 The basemap uses CARTO's free dark tiles, so it needs internet access.
 
 `npm test` runs a headless 8v8 bot match against the simulation (`npm test -- zaporizhzhia` for the small map).
@@ -19,13 +29,28 @@ The basemap uses CARTO's free dark tiles, so it needs internet access.
 
 | Action | Input |
 | --- | --- |
-| Select unit / formation / building | left click (Shift+click adds) |
+| Select unit / formation / building | left click (Shift+click adds or removes) |
 | Box select | Shift + drag |
-| Move (uses roads when faster) | right click |
+| Move by the fastest route (roads in transport mode, bridges over rivers) | right click |
+| Add a waypoint to the current orders | Shift + right click |
+| Move straight across country, combat-ready | Alt + right click |
 | Stop | S |
 | Group / ungroup selection | G / U |
 | Numbered group: assign / select / jump to | Ctrl+1-9 / 1-9 / press again |
 | Terrain overlay | T |
+| Real map on / off | M |
+| Delivery route for a truck | select it, *Set delivery route*, click the loading then the unloading building |
+| Artillery barrage | select guns, *Barrage area*, click the target |
+| Cancel a training order (full refund) | × on its card in the Production panel (beside the building window) |
+| Fire a missile | select it at the missile factory, right click the target |
+| Drones on a pickup | select small drones next to a pickup, *Load*; select the pickup, *Launch at…* and click the target |
+| Ping the map for your team | P (choose with 1–4, click), or Alt+click for "look here" |
+| Guidebook | Guide button, or H in the game |
+| Give fuel to another vehicle | select a vehicle or tanker, *Give fuel…*, click the vehicle (yours or an ally's) |
+| Supply troops with ammo | units refill near an Ammo Depot or the base; truck *Ammo* from an Ammo Factory to the depots |
+| Shoot down drones and missiles | Anti-Air Station, or a MANPADS Team (trained at the base) |
+| Keep your buildings from teammates | top bar *Buildings: shared / private* |
+| Send units into a Training Centre | select them, right click the centre |
 | Place building | pick from left panel, click your territory (Shift = keep placing, Esc = cancel) |
 
 Hover the map to see the terrain under the cursor and how it affects each kind of unit.
@@ -36,7 +61,8 @@ See [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md), [docs/MODDING.md](docs/MODDING
 
 ## Map data
 
-Roads and urban areas: Natural Earth (public domain). Forest/water classification and basemap: © OpenStreetMap contributors (ODbL).
+Roads, rivers and urban areas: Natural Earth (public domain). Forest/water classification and basemap: © OpenStreetMap contributors (ODbL).
+Hills, mountains and relief shading: Mapzen / AWS Terrain Tiles (open data).
 Rebuild with `tools/build-roads.mjs` and `tools/build-terrain.mjs`; validate with `npm run check:maps`.
 
 ## Docker

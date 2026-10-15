@@ -1,7 +1,11 @@
+node_modules
 node_modules/
+dist
 dist/
 apps/client/dist/
 data/
+data/*.json
 .env
 *.log
 .DS_Store
+.env.prod

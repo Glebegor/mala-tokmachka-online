@@ -5,6 +5,8 @@ import { addSlot, fillWithBots, nameBots, newBot, sanitizeSettings, slotsOf, typ
 
 export interface MatchLauncher {
   launch(room: Room): Promise<string>;
+  /** Is the match still running on the game service? */
+  running(matchId: string): Promise<boolean>;
   maps(): Promise<{ id: string; name: string }[]>;
 }
 
@@ -21,6 +23,15 @@ export class LobbyService {
     return this.launcher.maps();
   }
 
+  /** Rooms whose match has ended or been closed (everyone left) are removed. */
+  async sweep() {
+    for (const room of [...this.rooms.values()]) {
+      if (room.status !== 'playing' || !room.matchId) continue;
+      const alive = await this.launcher.running(room.matchId).catch(() => true); // keep the room if the game service is unreachable
+      if (!alive) this.rooms.delete(room.id);
+    }
+  }
+
   list() {
     return [...this.rooms.values()];
   }
@@ -32,7 +43,7 @@ export class LobbyService {
   }
 
   create(who: Identity, name: string, settings: Partial<RoomSettings> | undefined, team: 0 | 1) {
-    this.leaveAll(who.id);
+    this.leaveAll(who.id, true);
     const room: Room = { id: randomUUID().slice(0, 8), name: String(name || `${who.name}'s room`).slice(0, 32), host: who.id, settings: sanitizeSettings(settings, DEFAULT_SETTINGS), slots: [], status: 'open' };
     addSlot(room, { id: who.id, name: who.name, team, bot: false });
     this.rooms.set(room.id, room);
@@ -50,13 +61,16 @@ export class LobbyService {
       if (existing.team !== team && slotsOf(room, team).length < room.settings.teamSize) existing.team = team;
       return room;
     }
-    this.leaveAll(who.id);
+    this.leaveAll(who.id, true);
     if (!addSlot(room, { id: who.id, name: who.name, team, bot: false })) throw new HttpError(409, 'team is full');
     return room;
   }
 
-  leaveAll(playerId: string) {
+  /** Leave every room. A match in progress is only abandoned when `abandon` is set (the player can otherwise rejoin). */
+  leaveAll(playerId: string, abandon = false) {
     for (const room of this.rooms.values()) {
+      if (room.status === 'playing' && !abandon) continue;
+      if (!room.slots.some((s) => s.id === playerId)) continue;
       room.slots = room.slots.filter((s) => s.id !== playerId);
       if (!room.slots.some((s) => !s.bot)) this.rooms.delete(room.id);
       else if (room.host === playerId) room.host = room.slots.find((s) => !s.bot)!.id;

@@ -19,10 +19,188 @@
 - **Veterancy**: Recruit → Regular → Veteran → Elite → Guards, earned in combat or bought.
 - **Fire animation**: distinct per unit (burst, shell, arc, beam), with cosmetic misses.
 
-## M3 — Depth (next)
+## M3 — Manoeuvre (done, v0.3.0)
+- **Transport mode**: move orders are planned for the shortest travel time. On road legs ground units drive in column
+  (×2.4 speed, wheels under the marker), cannot fire and take +50% damage; a column that meets the enemy halts and deploys.
+- **Rivers**: the major rivers (Dnipro, Donets, Desna, Southern Bug, Dniester, Don…) and the sea are barriers.
+  Ground units cross only on road bridges or at a **Pontoon Crossing** you build on the bank (6 km radius). Small streams stay fordable.
+- **Waypoints**: Shift+right click queues up to 8 legs; Alt+right click moves straight across country without mounting up.
+- **Anti-Air Station**: static air defence (14 km). Ground weapons now do only 0–30% damage to aircraft.
+- **Spawns and balance**: 12 mirrored spawn pairs, every one 60 km from the front on a road; players are spread evenly and
+  face their opposite number. Capture point value is equal per side (31 / 31).
+- **Frontline look**: crisp cased line with sharp corners and a hard-edged contact zone; arrowheads show where and which way
+  it is moving. The line is re-spaced locally, so its corners are no longer rounded off over time.
+- **NATO markers**: standard light fill with black frame and icon.
+
+## M4 — Training, relief, presentation (done, v0.4.0)
+- **Training Centre**: ground units walk inside (off the map). With at least 3 inside you pay for a course; after the wait
+  the class comes out one rank higher and at full strength. Holds 12, two per player. Instant paid promotion is gone:
+  ranks now come from combat (25 XP per kill plus XP for damage) or from courses.
+- **Terrain at twice the resolution** (~0.8 km cells) with two new types from real elevation data: **hills** and **mountains**
+  (see further, some cover, slow or nearly closed to vehicles off-road).
+- **Descriptions** for every building and unit: hover a build or train button for what it does and its numbers.
+- **Map**: near-monochrome dark basemap with real relief shading, hatched occupied territory, vignette.
+- **Attack arrows** in situation-map style: bold tapered arrows across the stretches of front that are moving, animated.
+- **Markers**: echelon on top of the frame, rank chevrons on the right, transport wheels below.
+
+## M5 — Encirclement (done, v0.5.0)
+- **Cauldrons**: when two stretches of the front close to within 3.5 km of each other, the loop between them is cut off
+  as a pocket. Ground inside still belongs to the encircled side, but its units are cut off: 60% damage, losing 0.4% of
+  their strength per second, no economic support for the pocket's front. A pocket squeezed below 40 km² (or left without
+  defenders) collapses: the garrison is lost and the besiegers score. This also stops the front from ever crossing itself.
+- **Faster front**: four times the push and roughly twice the top speed.
+- **Battle arrows**: attack arrows are drawn only where units are actually shooting at each other, and only for fights
+  you can see through the fog of war.
+- **Training is paid as it runs**: 0.1 money per unit per tick (1/s), plus 0.05 per tick for every rank the unit already
+  holds. Nothing up front; the course pauses if the money runs out.
+- **Terrain at ~0.2 km cells** (four times finer than before) with a smoother, clearer overlay.
+
+- **Buffs and debuffs** (v0.5.1): green up-triangles (buffs) and red down-triangles (debuffs) on the left of every unit
+  marker; the unit panel lists each effect with an icon and exactly what it does.
+
+## M6 — Profiles and polish (done, v0.6.0)
+- **Profile service** (new microservice, :4004): career statistics per player (matches, wins/losses/draws, units destroyed
+  and lost, buildings, damage, time played, last 10 matches) and a top-10 leaderboard. The game service reports every
+  finished match; the lobby has a Profile button.
+- **No automatic bots**: a room starts with exactly the players and bots listed. "Fill empty slots with bots" is still
+  there as an option, off by default.
+- **Start of match**: the server waits until every player's map is drawn, then counts 3-2-1. The camera opens on your
+  headquarters with a big "YOU START HERE" arrow. Nothing moves and no orders are accepted before GO.
+- **Fortifications**: trenches do not stack with trenches, bunkers do not stack with bunkers (a trench and a bunker still
+  add up). Both can be upgraded to level 3 for resources (trench +25/40/55%, bunker +60/85/110%).
+- **Zones**: blue tint on ground held by Ukraine, red on occupied ground, and **grey zones**: a ground unit that stays
+  10 s behind the enemy line with no enemy within 6 km turns a 5 km patch grey. Nobody can build there, the front is
+  easier to push at that spot, and the patch fades 20 s after the troops leave.
+
+## Merge of `akira` (v0.7.0)
+Taken from akira: the expanded Eastern Europe map (DeepState line of contact, 200 cities as capture points, Sea of
+Azov cut-out), the full OpenStreetMap road network (25k roads), state borders with country labels, real city
+boundaries, fuel-station data, the map-building tools, Windows path fixes, "Until victory" (no time limit), and the
+anti-tank / assault NATO icons. Kept from hlib where both branches did the same thing differently: the simulation
+core (cauldrons, roads/rivers routing, training, fortifications, grey zones), the client game screen, buildings,
+units, rules and economy, lobby flow. Spawns were regenerated as 12 mirrored pairs on the new front and
+capture-point value equalised per side (196 / 196).
+
+Not taken (they live inside akira's version of the simulation and client, which conflicts with hlib's): logistics
+(trucks, warehouses, fuel supply), military base and new infantry types, side-specific drones with sprites and
+loitering, artillery bombardment, aviation plant, power lines, city HP / housing limits / rescuers, special zones
+(Kremenchuk, Alabuga), shared team buildings, the fog-of-war overlay. The drone sprites are in
+`mods/base/assets/drones` for when those features are ported.
+
+## M7 — akira's gameplay, ported (v0.8.0)
+Everything from the akira branch now runs on hlib's core:
+- **Logistics economy**: goods (ore, metal, fuel) pile up in the building that makes them and must be trucked.
+  Trucks and fuel trucks run standing delivery routes (click the loading site, then the unloading site). Training takes
+  metal and fuel from the factory's own store; money and people are shared by the whole team.
+- **New buildings**: oil refinery, filling station, machine factory, warehouse, drone factory, airfield, missile factory and
+  aircraft plant (the last two are placeholders). The HQ is now the Military Base and trains every infantry type.
+  Industrial sites must be 35 km apart; field works (trenches, bunkers, air defence, signal posts, crossings) are exempt.
+  Housing only inside cities your side holds, at most 10 per city.
+- **New units**: recon team, assault infantry, anti-tank team, pickup, truck, fuel truck, rescue crew, and side-specific
+  drones (Shahed, Orion, Liutyi, PD-2, Mini Shark, FP-2).
+- **Fuel, stamina, sprint, fire discipline**: vehicles and drones burn fuel (refuel at filling stations, fuel trucks, the
+  base; recon drones only at airfields; strike drones are one-way). Infantry can sprint on stamina. Fire at will / return
+  fire / hold fire.
+- **Drones**: recon drones circle their area; strike drones dive on the target, explode (units, buildings, city
+  structure) and leave smoke. Drawn as turning sprites.
+- **Artillery**: 3–20 km, fires only at what your side can see, barrage a chosen area, never drives up to the front.
+- **Cities and repair**: cities have structure points that strikes wear down; rescue crews repair cities, housing and
+  buildings. Defenders near their own cities take up to 50% less damage.
+- **Power grid**: a power plant powers everything within 100 km (+25% output and training speed, +50% for housing);
+  select a plant to see its power lines along the roads.
+- **Special zones**: Kremenchuk refinery (Ukraine, +50% fuel) and Alabuga (Russia, drones 50% faster).
+- **Theatre limits**: nobody can enter Belarus, Moldova or the EU.
+- **Client**: Map ON/OFF filter (M), visible fog of war, bottom command panel, route lines along the planned path,
+  arrival times, building stores, smooth 60 fps unit movement.
+- **Lobby**: Rejoin is only offered to players who were in the match when it started.
+
+## M7.1 — Modes, ceasefire, missiles (v0.9.0)
+- **Sandbox game type** (lobby): a test range with full treasuries and stores, building, upgrades, courses and training
+  ten times faster, and no victory or time limit.
+- **Ceasefire at the start** (lobby, default 15 min): build and deploy, but nobody shoots, nobody may cross the front (ground
+  units halt at the line, drones turn back), the front stands still and nothing is captured. The match clock starts when
+  it ends; a banner counts it down and "THE WAR BEGINS" marks the end.
+- **Private buildings**: the top bar toggle "Buildings: shared / private" decides whether teammates may train at, supply,
+  school at, upgrade or refuel at your buildings. Closing them also stops teammates' standing deliveries to and from them.
+  Only the owner may demolish a building.
+- **Missiles**: the missile factory builds Iskander-M (ballistic) and Kh-101 (cruise) for Russia, R-360 Neptune and FP-5
+  Flamingo (cruise) for Ukraine. A missile waits on the launcher until it gets a target, flies there and explodes. Ballistic
+  missiles are fast and rarely intercepted; cruise missiles are slower and anti-air stations shoot many of them down.
+- **Drones from pickups**: a pickup carries two small drones (generic recon drone, Mini Shark, FP-2, and the new Russian
+  Lancet and ZALA). Select the drones next to it and press *Load*, then *Launch at…* (click the target) or *Launch here*.
+- **Markers**: own units blue, allies green, the enemy red (aircraft sprites too). Vehicles carry the APP-6 mobility
+  indicator (two wheels, or a track); in column it turns yellow with a ». The supply bar reads properly on enemy markers.
+- The attack arrows were removed.
+- **Training queue view**: a Production panel beside the building's description window shows the queue as columns, one
+  card per order (unit icon, name, time left or when it will be ready, a live bar on the one in training, × to cancel your
+  own orders with a full refund) and dashed cards for the free slots. A production strip
+  over the map shows everything training for you (click a chip to open the building); building markers get a progress bar
+  and an order count; train buttons show how many are queued; a message announces each finished unit.
+
+## M7.2 — Territory, logistics, ammo (v0.10.0)
+- **Fix: buildings vanishing far from the front.** The server decided which side held the ground by the nearest stretch of
+  front, which went wrong far from the line (e.g. western Ukraine was counted as Russian once the front had moved) and
+  "overran" buildings there. It now uses exactly the occupied area the map paints (indexed by latitude bands, fast).
+- **Spacing** only between supply-chain partners (35 km): ore mine ↔ metal works, metal works ↔ machine factory, machine
+  factory ↔ war factories (HQ, training centre, drone/missile/ammo factory, airfield, aircraft plant), oil refinery ↔
+  filling station. Everything else (power plants, rail hubs, warehouses, field works…) only needs its own 1.2 km patch.
+- **Liberated ground**: ground the front passes over turns grey (contested) for the side that took it and only becomes
+  theirs once their ground troops have spent 30 s on it; it cannot be built on until then (except ammo depots).
+- **Fuel**: ground vehicles burn 0.3 per km (was 0.04). *Give fuel…* sends a vehicle to another one (yours or an ally's)
+  to hand fuel across (tankers from their load, others from their own tank keeping a quarter). Fuel trucks top up allies.
+- **Ammo**: new resource. The ammo factory turns metal into ammo; trucks carry it (*Ammo* cargo) to ammo depots. A stocked
+  depot gives friendly units within 15 km +30% damage (1 ammo per shot, artillery 4). Depots can also be set up in your
+  grey zones, even behind the enemy line, and stand as long as the zone does.
+- Bots: at most 6 of each field work, train before they build, run supply trucks (ammo routes too).
+
+## M7.3 — DeepState map, ammo, anti-air (v0.11.0)
+- **Colours by nation**: your own units in your nation's colour (Ukraine blue, Russia red), allies green, the enemy in
+  theirs, whichever side you play.
+- **Empty matches close**: a match nobody has been connected to for 60 s is removed, and the lobby drops its room.
+- **DeepState-style territory**: free ground is no longer tinted. Ground the front passes over turns grey; once no enemy
+  ground troops have been within 3 km of it for 30 s, a Ukrainian gain turns blue (liberated) and a Russian one plain
+  occupied. Drawn as smooth outlined areas traced from the grid.
+- **Ammunition**: every armed unit carries rounds (infantry 150, recon 100, assault 120, anti-tank 12 missiles, pickup 200,
+  tank 40 shells, artillery 30 shells, MANPADS 6 missiles); with none left it cannot fire. Units near an ammo depot (15 km)
+  or their base (8 km) refill from its store (a tank shell costs 4 ammo, an artillery shell 6, a missile 3–8).
+- **Anti-air**: only anti-air stations and the new MANPADS team engage drones and missiles; MANPADS cannot hit ground
+  targets. Ballistic missiles are still hard to intercept.
+- **Training centre**: courses take 75 s to Regular and 45 s more per rank; above Recruit a unit needs at least one kill
+  since its last course; ranks are much stronger (Guards ×2.1 damage, ×1.75 health).
+- **Delivery routes fixed**: the cargo type no longer defaults to Ore; routes only carry what the destination takes
+  ("Any cargo" picks it), a truck waits at an empty source instead of driving empty laps, and a truck that loses its way
+  plans again instead of unloading where it stands.
+
+## M7.4 — Team play, logistics, statistics, performance (v0.12.0)
+- **Map pings**: P opens Going here / Defend here / Danger here / Look here, Alt+click is a quick "look here". The whole
+  side sees a pulsing mark with the sender's name, hears a tone and can click the message to fly there.
+- **Goods live in buildings**: money, people and energy are the treasury; ore, metal, fuel and ammo exist only in building
+  stores. The HQ holds the starting goods; building and upgrades are paid from the HQ and warehouses (what the top bar
+  shows). New buildings no longer come with free stock (factories get materials for two units to get going).
+- **Healing**: Medic Team (troops on foot, 2 km), Mechanic Crew (vehicles, 2 km), Field Hospital (troops on foot, 6 km);
+  nobody heals within 10 s of being hit.
+- **Ammo per shot**: every unit has explicit ammo values (rounds, rounds per shot, refill cost); a unit with fewer rounds
+  than one shot needs cannot fire.
+- **Shift+click** adds units, groups and formations to the selection (or takes them out).
+- **Statistics**: a full report of every finished match (every player including bots, a 30 s timeline of score, army,
+  buildings and cities) is shown at the end with charts and a player table, and stored in a SQLite database
+  (`data/profiles.sqlite`, imported from the old profiles.json); open any past match from Profile → Recent matches.
+- **Guidebook**: Guide button in the lobby and in the game (H): how to win, controls, the map, economy and logistics,
+  the army, team play, plus live tables of every unit and building in-game.
+- **Performance**: marker images are drawn as a base plus overlays (a few dozen images instead of one per combination),
+  sprites are cached while they are being made, ground markers are not fed to the map while zoomed out, unit and fog
+  redraws are capped at ~20 a second; the client went from 91% to 27% main-thread time on a busy 8v8. Game traffic is
+  compressed (permessage-deflate) and static files gzipped.
+- **Fix**: a match with a ceasefire no longer ends on the clients at the plain match length.
+- **Production**: `npm run docker-prod:run` builds and starts everything with generated secrets, restart policies and the
+  client on every interface (LAN and Tailscale), waits until it answers and prints the URLs.
+
+## M8 — Depth (next)
+- Breaking a cauldron from outside (re-joining a pocket to the main front).
 - Supply lines: units and forward buildings need a road link back to an HQ; cutting roads matters.
-- Bridges as destructible objects; engineers; river crossings as a real operation.
-- Terrain-aware pathfinding off-road (currently only roads are routed; cross-country legs are straight).
+- Bridges as destructible objects; engineers.
+- Terrain-aware pathfinding off-road (cross-country legs are straight lines; units route around rivers only via roads and crossings).
+- Choosing your spawn in the lobby.
 - Game modes: capture the flag, destruction; ranked matchmaking; spectators and replays.
 - Persistence: Postgres for accounts/match history, reconnect after game-service restart.
 - More units via mods: air defence, mechanized infantry, supply trucks, engineers (icons already exist).

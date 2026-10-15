@@ -1,10 +1,100 @@
 [
-  { "id": "field", "name": "Open field", "color": "#d8cf9a",
-    "speed": { "foot": 1.0, "tracked": 1.0, "wheeled": 0.85 }, "cover": 0, "concealment": 1.0, "frontResist": 0 },
-  { "id": "forest", "name": "Forest", "color": "#3f8f4a",
-    "speed": { "foot": 0.7, "tracked": 0.45, "wheeled": 0.3 }, "cover": 0.35, "concealment": 0.5, "frontResist": 0.3 },
-  { "id": "city", "name": "Urban area", "color": "#c9584f",
-    "speed": { "foot": 0.85, "tracked": 0.55, "wheeled": 0.75 }, "cover": 0.5, "concealment": 0.6, "frontResist": 0.5 },
-  { "id": "water", "name": "River / water", "color": "#4a7fd0",
-    "speed": { "foot": 0.25, "tracked": 0.15, "wheeled": 0.1 }, "cover": -0.3, "concealment": 1.2, "frontResist": 0.65 }
+  {
+    "id": "field",
+    "name": "Open field",
+    "color": "#d8cf9a",
+    "description": "Fast going, no protection.",
+    "speed": {
+      "foot": 1.0,
+      "tracked": 1.0,
+      "wheeled": 0.85
+    },
+    "cover": 0,
+    "concealment": 1.0,
+    "frontResist": 0,
+    "vision": 1.0
+  },
+  {
+    "id": "forest",
+    "name": "Forest",
+    "color": "#2e8f4e",
+    "description": "Slow for vehicles. Good cover and concealment, short sight lines.",
+    "speed": {
+      "foot": 0.7,
+      "tracked": 0.45,
+      "wheeled": 0.3
+    },
+    "cover": 0.35,
+    "concealment": 0.5,
+    "frontResist": 0.3,
+    "vision": 0.8
+  },
+  {
+    "id": "city",
+    "name": "Urban area",
+    "color": "#e0564c",
+    "description": "Best cover. Hard to spot defenders, hard to push the front through.",
+    "speed": {
+      "foot": 0.85,
+      "tracked": 0.55,
+      "wheeled": 0.75
+    },
+    "cover": 0.5,
+    "concealment": 0.6,
+    "frontResist": 0.5,
+    "vision": 0.9
+  },
+  {
+    "id": "water",
+    "name": "Water",
+    "color": "#3d82e0",
+    "description": "Streams can be forded slowly. Rivers and the sea need a bridge or a pontoon crossing.",
+    "speed": {
+      "foot": 0.25,
+      "tracked": 0.15,
+      "wheeled": 0.1
+    },
+    "cover": -0.3,
+    "concealment": 1.2,
+    "frontResist": 0.65,
+    "vision": 1.0,
+    "barrier": {
+      "minCells": 1500,
+      "mobility": [
+        "foot",
+        "tracked",
+        "wheeled"
+      ]
+    }
+  },
+  {
+    "id": "hill",
+    "name": "Hills",
+    "color": "#c9984f",
+    "description": "High ground: see 25% further, some cover. Vehicles slow down.",
+    "speed": {
+      "foot": 0.85,
+      "tracked": 0.7,
+      "wheeled": 0.6
+    },
+    "cover": 0.15,
+    "concealment": 0.85,
+    "frontResist": 0.2,
+    "vision": 1.25
+  },
+  {
+    "id": "mountain",
+    "name": "Mountains",
+    "color": "#7d5a43",
+    "description": "Very slow, nearly closed to vehicles off the roads. See 45% further, strong cover, the front barely moves here.",
+    "speed": {
+      "foot": 0.5,
+      "tracked": 0.2,
+      "wheeled": 0.15
+    },
+    "cover": 0.4,
+    "concealment": 0.7,
+    "frontResist": 0.55,
+    "vision": 1.45
+  }
 ]

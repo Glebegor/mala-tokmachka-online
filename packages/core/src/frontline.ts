@@ -1,7 +1,6 @@
 import type { LngLat } from './geo';
 import { distKm, kmPerDegLng } from './geo';
 import type { FrontNode, Pocket, Team } from './state';
-import { isAlabugaDroneZone, isKremenchukRefinery } from './specialZones';
 
 const KM = 111.32;
 
@@ -9,7 +8,7 @@ const KM = 111.32;
 export function buildFront(line: LngLat[], spacingKm: number): FrontNode[] {
   let total = 0;
   for (let i = 1; i < line.length; i++) total += distKm(line[i - 1], line[i]);
-  const count = Math.max(8, Math.min(2500, Math.round(total / spacingKm) + 1));
+  const count = Math.max(8, Math.min(600, Math.round(total / spacingKm) + 1));
   return resample(line.map((p) => ({ lng: p[0], lat: p[1], v: 0 })), count);
 }
 
@@ -28,6 +27,29 @@ export function resample(nodes: FrontNode[], count = nodes.length): FrontNode[] 
     const len = cum[seg + 1] - cum[seg];
     const t = len > 0 ? Math.min(1, Math.max(0, (d - cum[seg]) / len)) : 0;
     out.push({ lng: a.lng + (b.lng - a.lng) * t, lat: a.lat + (b.lat - a.lat) * t, v: a.v + (b.v - a.v) * t });
+  }
+  return out;
+}
+
+/**
+ * Keep node spacing healthy without moving nodes that are fine: split segments that stretched too far and drop nodes
+ * that bunched up. Unlike a global resample this never rounds off the corners of the line.
+ */
+export function respace(nodes: FrontNode[], spacingKm: number): FrontNode[] {
+  const out: FrontNode[] = [nodes[0]];
+  for (let i = 1; i < nodes.length; i++) {
+    const cur = nodes[i];
+    const last = out[out.length - 1];
+    const next = nodes[i + 1];
+    // drop a node squeezed between two close neighbours
+    if (next && distKm([last.lng, last.lat], [next.lng, next.lat]) < spacingKm) continue;
+    const gap = distKm([last.lng, last.lat], [cur.lng, cur.lat]);
+    const parts = Math.min(8, Math.ceil(gap / (spacingKm * 1.7)));
+    for (let k = 1; k < parts; k++) {
+      const t = k / parts;
+      out.push({ lng: last.lng + (cur.lng - last.lng) * t, lat: last.lat + (cur.lat - last.lat) * t, v: last.v + (cur.v - last.v) * t });
+    }
+    out.push(cur);
   }
   return out;
 }
@@ -59,11 +81,7 @@ export function distToFrontKm(front: FrontNode[], p: LngLat): number {
       if (d2 < best - 1e-9 || (Math.abs(d2 - best) <= 1e-9 && perp > bestPerp)) {
         best = d2;
         bestPerp = perp;
-        if (i === 1 && t === 0 && p[0] < front[0].lng) {
-          side = 1;
-        } else {
-          side = cross >= 0 ? 1 : -1;
-        }
+        side = cross >= 0 ? 1 : -1;
       }
     }
     ax = bx;
@@ -72,38 +90,69 @@ export function distToFrontKm(front: FrontNode[], p: LngLat): number {
   return Math.sqrt(best) * side;
 }
 
-/** Which team holds the ground at this position. */
+/** Which team holds the ground at this position, by the side of the nearest stretch of front (reliable near the line only). */
 export function sideOf(front: FrontNode[], p: LngLat): Team {
   return distToFrontKm(front, p) >= 0 ? 0 : 1;
 }
 
-/** Check if point p is inside a closed polygon ring using ray-casting. */
-export function pointInPolygon(p: LngLat, ring: (FrontNode | LngLat)[]): boolean {
+/**
+ * Is p inside team 1's area: the ring made of the front line followed by the map's closure points (exactly what the client
+ * paints red)? Ray casting over the nodes and the closure without building the ring.
+ */
+export function inOccupied(front: FrontNode[], closure: LngLat[], p: LngLat): boolean {
+  const n = front.length + closure.length;
+  const at = (i: number): [number, number] => (i < front.length ? [front[i].lng, front[i].lat] : closure[i - front.length]);
   let inside = false;
-  const x = p[0], y = p[1];
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const pi = Array.isArray(ring[i]) ? (ring[i] as LngLat) : [(ring[i] as FrontNode).lng, (ring[i] as FrontNode).lat];
-    const pj = Array.isArray(ring[j]) ? (ring[j] as LngLat) : [(ring[j] as FrontNode).lng, (ring[j] as FrontNode).lat];
-    const xi = pi[0], yi = pi[1];
-    const xj = pj[0], yj = pj[1];
-    const intersect = yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi;
-    if (intersect) inside = !inside;
+  let [jx, jy] = at(n - 1);
+  for (let i = 0; i < n; i++) {
+    const [ix, iy] = at(i);
+    if (iy > p[1] !== jy > p[1] && p[0] < ((jx - ix) * (p[1] - iy)) / (jy - iy) + ix) inside = !inside;
+    jx = ix;
+    jy = iy;
   }
   return inside;
 }
 
-/** Which team holds ground at position p, accounting for isolated military cauldrons ("котлы") and special zones. */
-export function sideOfWithPockets(front: FrontNode[], pockets: Pocket[] | undefined, p: LngLat): Team {
-  if (isAlabugaDroneZone(p)) return 1;
-  if (isKremenchukRefinery(p)) return 0;
-  if (pockets && pockets.length > 0) {
-    for (const pkt of pockets) {
-      if (pointInPolygon(p, pkt.nodes)) {
-        return pkt.team;
-      }
+/**
+ * `inOccupied` for many queries: the ring's segments bucketed into latitude bands, so a ray cast only looks at the few
+ * segments that cross the query's latitude. Rebuild it whenever the front moves.
+ */
+export class OccupiedIndex {
+  private bands: number[][] = [];
+  private xs: Float64Array;
+  private ys: Float64Array;
+  private y0 = 0;
+  private static readonly H = 0.05; // degrees of latitude per band
+  constructor(front: FrontNode[], closure: LngLat[]) {
+    const n = front.length + closure.length;
+    this.xs = new Float64Array(n);
+    this.ys = new Float64Array(n);
+    for (let i = 0; i < n; i++) {
+      const q = i < front.length ? [front[i].lng, front[i].lat] : closure[i - front.length];
+      this.xs[i] = q[0];
+      this.ys[i] = q[1];
+    }
+    let lo = Infinity;
+    for (let i = 0; i < n; i++) lo = Math.min(lo, this.ys[i]);
+    this.y0 = lo;
+    for (let i = 0, j = n - 1; i < n; j = i++) {
+      const a = Math.floor((Math.min(this.ys[i], this.ys[j]) - lo) / OccupiedIndex.H);
+      const b = Math.floor((Math.max(this.ys[i], this.ys[j]) - lo) / OccupiedIndex.H);
+      for (let k = a; k <= b; k++) (this.bands[k] ??= []).push(i);
     }
   }
-  return sideOf(front, p);
+  contains(p: LngLat): boolean {
+    const segs = this.bands[Math.floor((p[1] - this.y0) / OccupiedIndex.H)];
+    if (!segs) return false;
+    const { xs, ys } = this;
+    const n = xs.length;
+    let inside = false;
+    for (const i of segs) {
+      const j = i === 0 ? n - 1 : i - 1;
+      if (ys[i] > p[1] !== ys[j] > p[1] && p[0] < ((xs[j] - xs[i]) * (p[1] - ys[i])) / (ys[j] - ys[i]) + xs[i]) inside = !inside;
+    }
+    return inside;
+  }
 }
 
 /** Index of the front node closest to a position. */
@@ -130,87 +179,62 @@ export function normalAt(front: FrontNode[], i: number): [number, number] {
   return [ty / len, -tx / len];
 }
 
-/** Intersection of line segment AB and CD in (lng, lat) space. */
-export function lineSegmentIntersection(
-  a: [number, number],
-  b: [number, number],
-  c: [number, number],
-  d: [number, number]
-): [number, number] | null {
-  const dx1 = b[0] - a[0], dy1 = b[1] - a[1];
-  const dx2 = d[0] - c[0], dy2 = d[1] - c[1];
-  const det = dx1 * dy2 - dy1 * dx2;
-  if (Math.abs(det) < 1e-12) return null;
-  const s = ((c[0] - a[0]) * dy2 - (c[1] - a[1]) * dx2) / det;
-  const t = ((c[0] - a[0]) * dy1 - (c[1] - a[1]) * dx1) / det;
-  if (s >= 0.02 && s <= 0.98 && t >= 0.02 && t <= 0.98) {
-    return [a[0] + dx1 * s, a[1] + dy1 * s];
+/** Unit normal at `cur` pointing to the right of the direction prev→next (team 1's side), in km space. */
+export function normalOf(prev: FrontNode, cur: FrontNode, next: FrontNode): [number, number] {
+  const tx = (next.lng - prev.lng) * kmPerDegLng(cur.lat);
+  const ty = (next.lat - prev.lat) * KM;
+  const len = Math.hypot(tx, ty) || 1;
+  return [ty / len, -tx / len];
+}
+
+/** Signed area of a closed ring in km² (positive = counter-clockwise, i.e. its inside is on the left). */
+export function ringAreaKm2(nodes: FrontNode[]): number {
+  if (nodes.length < 3) return 0;
+  const k = kmPerDegLng(nodes[0].lat);
+  let a = 0;
+  for (let i = 0; i < nodes.length; i++) {
+    const p = nodes[i];
+    const q = nodes[(i + 1) % nodes.length];
+    a += p.lng * k * (q.lat * KM) - q.lng * k * (p.lat * KM);
   }
+  return a / 2;
+}
+
+export function pointInRing(nodes: { lng: number; lat: number }[], p: LngLat): boolean {
+  let inside = false;
+  for (let i = 0, j = nodes.length - 1; i < nodes.length; j = i++) {
+    const a = nodes[i];
+    const b = nodes[j];
+    if (a.lat > p[1] !== b.lat > p[1] && p[0] < ((b.lng - a.lng) * (p[1] - a.lat)) / (b.lat - a.lat) + a.lng) inside = !inside;
+  }
+  return inside;
+}
+
+/** The pocket (cauldron) this position is inside, if any. */
+export function pocketAt(pockets: Pocket[], p: LngLat): Pocket | null {
+  for (const pocket of pockets) if (pointInRing(pocket.nodes, p)) return pocket;
   return null;
 }
 
-export function pocketCentroid(nodes: FrontNode[]): LngLat {
-  let slng = 0, slat = 0;
-  for (const n of nodes) {
-    slng += n.lng;
-    slat += n.lat;
-  }
-  return [slng / nodes.length, slat / nodes.length];
-}
-
-export function pocketRadiusKm(nodes: FrontNode[]): number {
-  const c = pocketCentroid(nodes);
-  let maxD = 0;
-  for (const n of nodes) {
-    const d = distKm(c, [n.lng, n.lat]);
-    if (d > maxD) maxD = d;
-  }
-  return maxD;
-}
-
 /**
- * Detects pinching salients or self-intersections along the frontline.
- * Separates isolated cauldrons ("котлы") into independent closed loops,
- * and reconnects the main frontline cleanly without self-intersections.
+ * Look for two stretches of the line that have closed to within `maxKm` of each other (the jaws of a pincer meeting).
+ * Returns the node range [from, to] that would be cut off as a loop, or null. `minGap` ignores neighbours.
  */
-export function resolveFrontLoops(nodes: FrontNode[], pinchDistKm = 4.0): { main: FrontNode[]; loops: FrontNode[][] } {
-  let cur = [...nodes];
-  const loops: FrontNode[][] = [];
-  let found = true;
-  let guard = 0;
-  while (found && guard++ < 12) {
-    found = false;
-    for (let i = 0; i < cur.length - 2 && !found; i++) {
-      const pA: [number, number] = [cur[i].lng, cur[i].lat];
-      const pB: [number, number] = [cur[i + 1].lng, cur[i + 1].lat];
-      for (let j = i + 2; j < cur.length - 1 && !found; j++) {
-        const pC: [number, number] = [cur[j].lng, cur[j].lat];
-        const pD: [number, number] = [cur[j + 1].lng, cur[j + 1].lat];
-
-        let inter = lineSegmentIntersection(pA, pB, pC, pD);
-        if (!inter && j >= i + 8) {
-          const d = distKm(pA, pC);
-          if (d < pinchDistKm) {
-            inter = [(pA[0] + pC[0]) / 2, (pA[1] + pC[1]) / 2];
-          }
-        }
-
-        if (inter) {
-          found = true;
-          const midNode: FrontNode = { lng: inter[0], lat: inter[1], v: 0 };
-          const span = j - i;
-          if (span >= 10) {
-            // Significant pocket ("котёл")
-            const loop = [midNode, ...cur.slice(i + 1, j + 1), midNode];
-            loops.push(resample(loop, Math.max(12, Math.min(100, span + 2))));
-          }
-          // The main frontline bypasses the loop/knot and reconnects cleanly without self-intersections
-          cur = [...cur.slice(0, i + 1), midNode, ...cur.slice(j + 1)];
-          cur = resample(cur, Math.max(8, cur.length));
-        }
-      }
+export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { from: number; to: number } | null {
+  let best: { from: number; to: number; d: number } | null = null;
+  for (let i = 0; i < nodes.length; i++) {
+    const kx = kmPerDegLng(nodes[i].lat);
+    for (let j = i + minGap; j < nodes.length - 1; j++) {
+      // quick reject on latitude before the exact point-to-segment test
+      if (Math.min(Math.abs(nodes[j].lat - nodes[i].lat), Math.abs(nodes[j + 1].lat - nodes[i].lat)) * KM > maxKm * 3) continue;
+      const ax = (nodes[j].lng - nodes[i].lng) * kx, ay = (nodes[j].lat - nodes[i].lat) * KM;
+      const bx = (nodes[j + 1].lng - nodes[i].lng) * kx, by = (nodes[j + 1].lat - nodes[i].lat) * KM;
+      const dx = bx - ax, dy = by - ay;
+      const len2 = dx * dx + dy * dy || 1e-9;
+      const t = Math.min(1, Math.max(0, -(ax * dx + ay * dy) / len2));
+      const d = Math.hypot(ax + dx * t, ay + dy * t);
+      if (d <= maxKm && (!best || d < best.d)) best = { from: i + 1, to: t < 0.5 ? j : j + 1, d };
     }
   }
-
-  return { main: cur, loops };
+  return best && best.to - best.from >= 2 ? { from: best.from, to: best.to } : null;
 }

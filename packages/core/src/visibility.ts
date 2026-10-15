@@ -10,7 +10,7 @@ const p4 = (p: LngLat): LngLat => [r4(p[0]), r4(p[1])];
  * Fog of war: own side is fully visible, enemy objects only inside friendly vision/signal radius.
  * Ground units in concealing terrain (forest, city) must be approached closer to be spotted.
  */
-export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[] = []): SnapMsg {
+export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[] = [], countdown = 0, liberated = true): SnapMsg {
   const w = sim.world;
   const fog = sim.ruleset.rules.fogOfWar;
   const watchers: { pos: LngLat; r: number }[] = [];
@@ -19,74 +19,105 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       if (b.team === team && b.progress >= 1) watchers.push({ pos: b.pos, r: sim.defs.b.get(b.def)!.vision ?? 6 });
     }
     for (const u of w.units) {
-      if (u.team === team) watchers.push({ pos: u.pos, r: sim.defs.u.get(u.def)!.vision });
+      if (u.team !== team || u.embarkedIn) continue;
+      const d = sim.defs.u.get(u.def)!;
+      watchers.push({ pos: u.pos, r: d.vision * (d.kind === 'air' ? 1 : sim.terrainAt(u.pos).vision ?? 1) });
     }
   }
-  const seen = (p: LngLat, conceal = 1) => !fog || watchers.some((s) => distKm(s.pos, p) <= s.r * conceal);
+  // watchers bucketed by ~0.25° cells (each in every cell its sight touches): an object only checks the watchers of its cell
+  const CELL = 0.25;
+  const grid = new Map<number, { pos: LngLat; r: number }[]>();
+  const key = (x: number, y: number) => x * 100000 + y;
+  for (const s of watchers) {
+    const ry = Math.ceil(s.r / 111 / CELL), rx = Math.ceil(s.r / (111 * Math.cos((s.pos[1] * Math.PI) / 180)) / CELL);
+    const cx = Math.floor(s.pos[0] / CELL), cy = Math.floor(s.pos[1] / CELL);
+    for (let x = cx - rx; x <= cx + rx; x++) for (let y = cy - ry; y <= cy + ry; y++) {
+      const k = key(x, y);
+      const l = grid.get(k);
+      l ? l.push(s) : grid.set(k, [s]);
+    }
+  }
+  const seen = (p: LngLat, conceal = 1) => {
+    if (!fog) return true;
+    const l = grid.get(key(Math.floor(p[0] / CELL), Math.floor(p[1] / CELL)));
+    return !!l && l.some((s) => distKm(s.pos, p) <= s.r * conceal);
+  };
   const me = w.players.find((p) => p.id === playerId);
 
   return {
     t: 'snap',
     time: Math.round(w.time * 10) / 10,
-    res: me ? { ...me.res } : {},
+    countdown,
+    // treasury plus the goods in the player's HQ and warehouses (what they can spend)
+    res: me ? { ...me.res, ...sim.goods(me) } : {},
     energyNet: sim.energyNet.get(playerId) ?? 0,
     rates: { ...(sim.income.get(playerId) ?? {}) },
     buildings: w.buildings
-      .filter((b) => (b.team === team || seen(b.pos)) && !(b.def === 'gas_station' && b.team !== team))
+      // enemy filling stations are never shown; everything else enemy only when seen
+      .filter((b) => b.team === team || (seen(b.pos) && b.def !== 'gas_station'))
       .map((b) => ({
-      ...b,
-      pos: p4(b.pos),
-      hp: Math.round(b.hp),
-      storage: b.team === team ? b.storage : undefined,
-      storedDrones: b.team === team ? b.storedDrones : undefined,
-    })),
+        id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), line: b.line ? [p4(b.line[0]), p4(b.line[1])] as [LngLat, LngLat] : undefined, size: b.size, hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0, level: b.level,
+        rally: b.team === team ? b.rally : undefined,
+        repeat: b.team === team ? b.repeat : undefined,
+        upgrade: b.team === team && b.upgrade ? { remaining: Math.ceil(b.upgrade.remaining), total: b.upgrade.total } : null,
+        course: b.team === team && b.course ? { remaining: Math.ceil(b.course.remaining), total: b.course.total } : null,
+        inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank, ready: sim.canTrain(u) })) : undefined,
+        storage: b.team === team && b.storage ? Object.fromEntries(Object.entries(b.storage).map(([k, v]) => [k, Math.floor(v)])) : undefined,
+      })),
     units: w.units
       .filter((u) => {
-        if (u.embarkedIn) return false;
+        if (u.embarkedIn && u.team !== team) return false; // riders are inside their vehicle
+        if (u.parkedAt !== undefined && u.team !== team) return false; // grounded at a launcher
         if (u.team === team) return true;
-        const ud = sim.defs.u.get(u.def)!;
-        const unitStealth = ud.stealth ?? (ud.kind === 'air' ? 1.0 : ud.mobility === 'foot' ? 1.0 : 1.35);
-        const terrainConceal = ud.kind === 'air' ? 1.0 : sim.terrainAt(u.pos).concealment;
-        return seen(u.pos, terrainConceal * unitStealth);
+        const d = sim.defs.u.get(u.def)!;
+        if (d.kind === 'air') return seen(u.pos);
+        // vehicles are louder than men on foot; terrain hides both
+        const stealth = d.stealth ?? ((d.mobility ?? 'foot') === 'foot' ? 1 : 1.35);
+        return seen(u.pos, sim.terrainAt(u.pos).concealment * stealth);
       })
-      .map((u) => ({
-        id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp),
-        target: u.team === team ? u.target : null,
-        path: u.team === team && u.path.length ? u.path.map((wp) => p4(wp.p)) : undefined,
-        bearing: u.bearing !== undefined ? Math.round(u.bearing) : undefined,
-        cooldown: 0, xp: Math.round(u.xp), rank: u.rank,
-        stamina: u.team === team && u.stamina !== undefined ? Math.round(u.stamina) : undefined,
-        sprint: u.sprint,
-        fireMode: u.team === team ? u.fireMode : undefined,
-        fuel: u.fuel !== undefined ? Math.round(u.fuel) : undefined,
-        maxFuel: u.maxFuel,
-        cargo: u.team === team ? u.cargo : undefined,
-        route: u.team === team ? u.route : undefined,
-        loiterCenter: u.team === team && u.loiterCenter ? p4(u.loiterCenter) : undefined,
-        loiterRadius: u.team === team ? u.loiterRadius : undefined,
-        isLoitering: u.team === team ? u.isLoitering : undefined,
-        bombardTarget: u.team === team && u.bombardTarget ? p4(u.bombardTarget) : undefined,
-      })),
+      .map((u) => {
+        const own = u.team === team;
+        const mine = u.owner === playerId;
+        return {
+          id: u.id, def: u.def, owner: u.owner, team: u.team, pos: p4(u.pos), hp: Math.round(u.hp),
+          target: own ? u.target : null, cooldown: 0, xp: Math.round(u.xp), rank: u.rank, transport: u.transport, encircled: u.encircled, status: u.status,
+          bearing: u.bearing !== undefined ? Math.round(u.bearing) : undefined,
+          entering: mine && u.enter ? u.enter : undefined,
+          route: mine && u.path.length ? u.path.filter((w) => w.end).map((w) => p4(w.p)) : undefined,
+          // the planned path (thinned to ~60 points) for route lines and arrival times
+          path: mine && u.path.length && !u.isLoitering ? u.path.filter((_, i, a) => a.length <= 60 || i % Math.ceil(a.length / 60) === 0 || i === a.length - 1).map((w) => p4(w.p)) : undefined,
+          stamina: own && u.stamina !== undefined ? Math.round(u.stamina) : undefined,
+          sprint: u.sprint,
+          fireMode: own ? u.fireMode : undefined,
+          stance: mine ? u.stance : undefined,
+          retreatAt: mine ? u.retreatAt : undefined,
+          retreating: mine ? u.retreating : undefined,
+          attackMove: mine ? u.attackMove : undefined,
+          fuel: own && u.fuel !== undefined ? Math.round(u.fuel) : undefined,
+          maxFuel: own ? u.maxFuel : undefined,
+          ammo: own && u.ammo !== undefined ? Math.floor(u.ammo) : undefined,
+          morale: own && u.morale !== undefined ? Math.round(u.morale) : undefined,
+          combat: mine ? u.combat ?? 0 : undefined,
+          cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers, drones: u.cargo.drones } : undefined,
+          haul: own ? u.haul : undefined,
+          fuelTo: mine ? u.fuelTo : undefined,
+          parkedAt: own ? u.parkedAt : undefined,
+          embarkedIn: own ? u.embarkedIn : undefined,
+          loiterCenter: own && u.loiterCenter ? p4(u.loiterCenter) : undefined,
+          loiterRadius: own ? u.loiterRadius : undefined,
+          isLoitering: own ? u.isLoitering : undefined,
+          bombardTarget: own && u.bombardTarget ? p4(u.bombardTarget) : undefined,
+        };
+      }),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
     front: w.front.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: Math.round(n.v * 1e4) / 1e4 })),
-    pockets: w.pockets?.length
-      ? w.pockets.map((pkt) => ({ id: pkt.id, team: pkt.team, nodes: pkt.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat), v: 0 })) }))
-      : undefined,
+    smokes: w.smokes.filter((x) => seen(x.pos, 2.5)).map((x) => ({ id: x.id, pos: p4(x.pos), expiresAt: Math.round(x.expiresAt) })),
+    liberated: liberated ? sim.liberatedRuns() : undefined,
+    grey: w.grey.map((z) => ({ team: z.team, pos: p4(z.pos), r: z.r })),
+    pockets: w.pockets.map((p) => ({ id: p.id, team: p.team, nodes: p.nodes.map((n) => ({ lng: r4(n.lng), lat: r4(n.lat) })) })),
     points: w.points,
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
-    queue: w.queue
-      .filter((q) => {
-        const b = w.buildings.find((x) => x.id === q.building);
-        return b ? b.team === team : q.owner === playerId;
-      })
-      .map((q) => ({ building: q.building, unit: q.unit, remaining: Math.round(q.remaining) })),
-    smokes: (w.smokes ?? [])
-      .filter((s) => seen(s.pos, 2.5))
-      .map((s) => ({
-        id: s.id,
-        pos: p4(s.pos),
-        createdAt: Math.round(s.createdAt * 10) / 10,
-        expiresAt: Math.round(s.expiresAt * 10) / 10,
-      })),
+    closed: w.players.filter((p) => p.team === team && !p.share).map((p) => p.id),
+    queue: w.queue.filter((q) => w.buildings.find((b) => b.id === q.building)?.team === team).map((q) => ({ id: q.id, building: q.building, unit: q.unit, owner: q.owner, remaining: Math.round(q.remaining * 10) / 10, total: q.total })),
   };
 }

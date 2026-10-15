@@ -82,7 +82,7 @@ const pairs: [[string, [number, number]], [string, [number, number]]][] = [
 
 for (const [[fromName, fromPos], [toName, toPos]] of pairs) {
   const t0 = Date.now();
-  const route = net.route(fromPos, toPos, 1.8);
+  const route = net.routeTimed(fromPos, toPos, { roadSpeed: 1.8, offSpeed: 1, clear: () => true });
   const ms = Date.now() - t0;
-  console.log(`Route ${fromName} -> ${toName}: ${route.length} waypoints in ${ms}ms`);
+  console.log(`Route ${fromName} -> ${toName}: ${route ? route.points.length : 0} waypoints in ${ms}ms`);
 }
