@@ -16,7 +16,7 @@ import { cellsToMultiPolygon } from './contours';
 import { statsView } from './stats';
 import { openGuide } from './guide';
 import { uiScale, uiScaleControl } from './uiScale';
-import { langControl } from './i18n';
+import { langControl, tr } from './i18n';
 import { ProductionDock, QueueList, type QueueContext } from './queue';
 
 /**
@@ -101,6 +101,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const terrainChip = h('div', { class: 'terrain-chip' });
   const toasts = h('div', { class: 'toasts' });
   const hint = h('div', { class: 'hint' }, 'Connecting…');
+  const idleHint = () => hint.textContent === HINT || hint.textContent === tr(HINT);
+  // with messages off the standing help line is hidden too (placement hints still show)
+  new MutationObserver(() => hint.classList.toggle('idle', quiet && idleHint())).observe(hint, { childList: true, characterData: true, subtree: true });
   const boxEl = h('div', { class: 'selbox' });
   const countEl = h('div', { class: 'countdown' });
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
@@ -117,6 +120,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let marking: MarkKind | null = null;
   const markMenu = h('div', { class: 'mark-menu', style: { display: 'none' } },
     ...(Object.keys(MARKS) as MarkKind[]).map((k, i) => h('button', { class: `mk mk-${k}`, title: `${MARKS[k].label} (${i + 1})`, onClick: () => chooseMark(k) }, h('i', {}, MARKS[k].icon), h('span', {}, MARKS[k].label), h('em', {}, String(i + 1)))));
+  /** Messages on or off (remembered): off hides the info messages and team ping messages; refused orders still show. */
+  let quiet = (() => { try { return localStorage.getItem('mto.msgs') === 'off'; } catch { return false; } })();
+  const msgBtn = h('button', { class: 'ghost', title: 'Show or hide the messages on the right (errors still show)', onClick: () => {
+    quiet = !quiet;
+    try { localStorage.setItem('mto.msgs', quiet ? 'off' : 'on'); } catch { /* private mode */ }
+    msgBtn.textContent = `Msgs: ${quiet ? 'OFF' : 'ON'}`;
+    if (quiet) toasts.querySelectorAll('.toast:not(.bad)').forEach((t) => t.remove());
+    hint.classList.toggle('idle', quiet && idleHint());
+  } }, `Msgs: ${quiet ? 'OFF' : 'ON'}`);
   const markBtn = h('button', { class: 'ghost', title: 'Mark a spot for your team (P). Alt+click on the map: quick "look here".', onClick: () => toggleMarkMenu() }, 'Ping (P)');
   function toggleMarkMenu(open = markMenu.style.display === 'none') {
     markMenu.style.display = open ? 'flex' : 'none';
@@ -159,7 +171,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     setTimeout(() => el.classList.add('gone'), 7400);
     setTimeout(() => marker.remove(), 8000);
     beep(def.tone);
-    if (m.from !== me) {
+    if (m.from !== me && !quiet) {
       const t = h('div', { class: `toast mark-toast mk-${m.kind}`, title: 'Click to look' }, `${def.icon} ${who}: ${def.label}`);
       t.addEventListener('click', () => map.easeTo({ center: m.pos, zoom: Math.max(map.getZoom(), 7.5) }));
       toasts.append(t);
@@ -227,7 +239,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let topBar!: HTMLElement;
   app.append(
     h('div', { class: 'game' }, mapEl, dock.el, queueSlot, effectsSlot,
-      topBar = h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, langControl('ghost'), uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      topBar = h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, langControl('ghost'), uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), msgBtn, markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner, markMenu),
   );
 
@@ -238,6 +250,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   const send = (cmd: Command) => ws.readyState === ws.OPEN && ws.send(JSON.stringify({ t: 'cmd', cmd } satisfies ClientMsg));
   const toast = (text: string, bad = false) => {
+    if (quiet && !bad) return;
     const el = h('div', { class: 'toast' + (bad ? ' bad' : '') }, text);
     toasts.append(el);
     setTimeout(() => el.remove(), 4200);
@@ -558,9 +571,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'ghost-fill', type: 'fill', source: 'ghost', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 } });
       map.addLayer({ id: 'ghost-line', type: 'line', source: 'ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [3, 2] } });
       // where the selected units are going: a bright dashed line on a dark casing, readable over any terrain
-      map.addLayer({ id: 'sel-case', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#0b0d10', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3, 10, 5], 'line-opacity': 0.55 } });
-      map.addLayer({ id: 'sel-line', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffe45c', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.4, 10, 2.4], 'line-opacity': 0.95, 'line-dasharray': [2, 1.5] } });
-      map.addLayer({ id: 'sel-pts', type: 'circle', source: 'sel', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#0b0d10', 'circle-stroke-color': '#ffe45c', 'circle-stroke-width': 2 } });
+      map.addLayer({ id: 'sel-case', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#0b1220', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.2, 10, 5.2], 'line-opacity': 0.35 } });
+      map.addLayer({ id: 'sel-line', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#5aa9ff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.5, 10, 2.6], 'line-opacity': 0.75, 'line-blur': 0.4 } });
+      map.addLayer({ id: 'sel-pts', type: 'circle', source: 'sel', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 4, 'circle-color': '#0b1220', 'circle-stroke-color': '#5aa9ff', 'circle-stroke-width': 1.6, 'circle-opacity': 0.8, 'circle-stroke-opacity': 0.85 } });
 
       const iconSize: any = ['interpolate', ['linear'], ['zoom'], 5, 0.4, 8, 0.58, 11, 0.85];
       // a marker = base image + overlays (rank, pips, echelon, cauldron ring) drawn on the same spot by extra layers
