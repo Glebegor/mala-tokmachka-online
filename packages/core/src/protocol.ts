@@ -1,6 +1,6 @@
 import type { Command } from './commands';
 import type { MapDef, Ruleset } from './defs';
-import type { BuildingView, FrontNode, Player, PlayerStats, Shot, Team, TimelinePoint, UnitView, CapturePoint } from './state';
+import type { BuildingView, FrontNode, Player, PlayerStats, Shot, Team, TimelinePoint, UnitView, CapturePoint, FrontPost } from './state';
 
 /** `ready`: the client has drawn the map; the start countdown waits for it. */
 /** Map marks a player shows their team: where they are going, what to hold, where there is trouble, what to look at. */
@@ -52,6 +52,8 @@ export interface SnapMsg {
   queue: { id: number; building: number; unit: string; owner: string; remaining: number; total: number }[];
   /** Players who keep their buildings to themselves (teammates cannot use them). */
   closed: string[];
+  /** Fortified garrison posts along the front line. */
+  posts?: FrontPost[];
 }
 
 export type ServerMsg =

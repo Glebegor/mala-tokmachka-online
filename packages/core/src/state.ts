@@ -172,6 +172,10 @@ export interface Unit {
   path: Waypoint[];
   /** Speed cap in km/s when ordered to move in formation, 0 = none. */
   cap: number;
+  /** ID of the frontline garrison post this unit is assigned to. */
+  frontPost?: number;
+  /** ID of the frontline garrison post this unit is ordered to move to and garrison. */
+  targetPost?: number;
 }
 
 /**
@@ -232,6 +236,17 @@ export interface Pocket {
   id: number;
   team: Team;
   nodes: FrontNode[];
+}
+
+/** A fortified garrison post along the front line. */
+export interface FrontPost {
+  id: number;
+  team: Team;
+  pos: LngLat;
+  nodeIdx: number;
+  garrison: number[]; // IDs of units holding this post
+  cap: number; // max units
+  advancing?: boolean; // currently pushing forward
 }
 
 /** Contested ground: a patch behind the front where one side's troops have sat unopposed. */
@@ -308,6 +323,7 @@ export interface World {
   stats: Record<string, PlayerStats>;
   smokes: SmokeCloud[];
   timeline: TimelinePoint[];
+  posts: FrontPost[];
 }
 
 export interface SlotInit {

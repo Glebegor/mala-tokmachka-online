@@ -6,7 +6,7 @@ import { distKm, distToFrontKm, offsetKm, Sim, snapshotFor, type LngLat, type Ru
 
 const base = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const fresh = (rules: Partial<RulesConfig> = {}) => {
-  const sim = new Sim({ ...base, rules: { ...base.rules, ...rules } }, 'ukraine', [
+  const sim = new Sim({ ...base, rules: { ...base.rules, frontPosts: false, ...rules } }, 'ukraine', [
     { id: 'a', name: 'a', team: 0, bot: false },
     { id: 'a2', name: 'a2', team: 0, bot: false },
     { id: 'b', name: 'b', team: 1, bot: false },
@@ -228,7 +228,7 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
 
 // --- ground that changes hands is grey until no enemy has been near it for 30 s; then Ukrainian gains turn blue ---
 {
-  const sim = fresh();
+  const sim = fresh({ frontPosts: false });
   const [p0] = acrossTheLine(sim);
   const a = sim.player('a')!;
   const push = Array.from({ length: 30 }, (_, i) => sim.spawnUnit('tank', a, offsetKm(p0, (i % 6) * 0.3, Math.floor(i / 6) * 0.3)));

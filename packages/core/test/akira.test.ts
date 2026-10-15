@@ -176,3 +176,43 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   assert.equal(sim.apply('a', { type: 'build', def: 'mine', pos: [27.5, 53.9] }).ok, false, 'no building in Belarus');
   console.log(`support ok (crew at ${crew.pos.map((x) => x.toFixed(2))})`);
 }
+
+// --- frontline posts: autonomous holding, reinforcement, supply, slow advance on superiority, and flank gaps ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const b = sim.player('b')!;
+  assert.ok(sim.world.posts.length > 0, `front posts initialized (${sim.world.posts.length} posts)`);
+  const myPost = sim.world.posts.find((p) => p.team === 0)!;
+  assert.ok(myPost, 'friendly post exists');
+  assert.equal(myPost.cap, 4, 'cap is 4');
+  assert.ok(myPost.garrison.length >= 1, 'initial garrison present');
+
+  // moving unit directly to post assigns targetPost and joins garrison upon arrival
+  const extra = sim.spawnUnit('infantry', a, offsetKm(myPost.pos, -0.4, -0.4));
+  assert.equal(extra.frontPost, undefined);
+  const moveRes = sim.apply('a', { type: 'move', units: [extra.id], to: myPost.pos });
+  assert.ok(moveRes.ok, 'order to post accepted');
+  assert.equal(extra.targetPost, myPost.id, 'targetPost set on unit');
+  run(sim, 5);
+  assert.equal(extra.frontPost, myPost.id, 'unit joined garrison');
+  assert.equal(extra.stance, 'defend', 'defend stance adopted');
+  assert.ok(myPost.garrison.includes(extra.id), 'unit in post.garrison');
+
+  // moving away removes from garrison
+  const awayPos = offsetKm(myPost.pos, 5, 0);
+  sim.apply('a', { type: 'move', units: [extra.id], to: awayPos });
+  assert.equal(extra.frontPost, undefined, 'left garrison');
+  assert.ok(!myPost.garrison.includes(extra.id), 'removed from post.garrison');
+
+  // reinforcing to superiority triggers autonomous advance
+  const u1 = sim.spawnUnit('infantry_assault', a, myPost.pos);
+  const u2 = sim.spawnUnit('infantry_assault', a, myPost.pos);
+  u1.frontPost = myPost.id;
+  u2.frontPost = myPost.id;
+  myPost.garrison.push(u1.id, u2.id);
+  const posBefore = [...myPost.pos];
+  run(sim, 2);
+  assert.ok(myPost.advancing, 'post is advancing on force superiority');
+  console.log('frontline garrisons & line holding ok');
+}

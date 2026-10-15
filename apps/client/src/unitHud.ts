@@ -112,6 +112,11 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     lines.push('Patrolling a 4 km circle');
   } else if (d0.missile && !first.target) {
     lines.push('On the launcher: right click a target to fire');
+  } else if (first.frontPost !== undefined) {
+    const p = c.snap.posts?.find((x) => x.id === first.frontPost);
+    lines.push(p?.advancing ? '⚔️ Наступ рубежу (гарнізон просуває фронт)' : '🛡️ На рубежі (гарнізон фронту, +35% захист)');
+  } else if (first.targetPost !== undefined) {
+    lines.push('🛡️ Висувається на рубіж оборони');
   } else {
     const etas = list.map((u) => etaSeconds(u, c.defU.get(u.def)!, c.roadMult, c.pos(u)) ?? 0);
     const eta = Math.max(...etas);

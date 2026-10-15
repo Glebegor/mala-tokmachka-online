@@ -1,11 +1,11 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, formationSpot, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
-import { buildFront, distToFrontKm, findPinch, nearestNode, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
+import { buildFront, distToFrontKm, findPinch, nearestNode, normalAt, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
-import { LIBERATED_CELL, type Building, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
+import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -148,6 +148,7 @@ export class Sim {
       stats: Object.fromEntries(players.map((p) => [p.id, { kills: 0, losses: 0, buildingsBuilt: 0, buildingsDestroyed: 0, unitsTrained: 0, damage: 0 }])),
       smokes: [],
       timeline: [],
+      posts: [],
     };
     this.world = w;
     const counters: [number, number] = [0, 0];
@@ -164,6 +165,35 @@ export class Sim {
       const pos: LngLat = [base[0] + lap * 0.09, base[1] + lap * 0.05];
       this.spawnBuilding('hq', p, pos, true);
       r.startUnits.forEach((u, i) => this.spawnUnit(u, p, [pos[0] + 0.035 * Math.cos(i * 1.3), pos[1] + 0.025 * Math.sin(i * 1.3)]));
+    }
+    // spawn initial frontline garrison posts along the front line
+    const p0 = players.find((p) => p.team === 0);
+    const p1 = players.find((p) => p.team === 1);
+    if (r.frontPosts && p0 && p1) {
+      const stepNodes = Math.max(3, Math.round(27 / (r.frontNodeSpacingKm || 9)));
+      for (let i = 1; i < w.front.length - 1; i += stepNodes) {
+        const node = w.front[i];
+        const [nx, ny] = normalAt(w.front, i);
+        const pos0: LngLat = offsetKm([node.lng, node.lat], -nx * 0.45, -ny * 0.45);
+        const pos1: LngLat = offsetKm([node.lng, node.lat], nx * 0.45, ny * 0.45);
+        if (!this.terrain?.isBarrier(pos0) && !this.terrain?.isBarrier(pos1)) {
+          const post0: FrontPost = { id: w.nextId++, team: 0, pos: pos0, nodeIdx: i, garrison: [], cap: 4 };
+          const post1: FrontPost = { id: w.nextId++, team: 1, pos: pos1, nodeIdx: i, garrison: [], cap: 4 };
+          const u0 = this.spawnUnit('infantry', p0, pos0);
+          u0.frontPost = post0.id;
+          u0.stance = 'defend';
+          u0.post = [pos0[0], pos0[1]];
+          post0.garrison.push(u0.id);
+
+          const u1 = this.spawnUnit('infantry', p1, pos1);
+          u1.frontPost = post1.id;
+          u1.stance = 'defend';
+          u1.post = [pos1[0], pos1[1]];
+          post1.garrison.push(u1.id);
+
+          w.posts.push(post0, post1);
+        }
+      }
     }
     this.map.capturePoints.forEach((cp, i) => (w.points[i].owner = this.side(cp.pos)));
     this.occ.tick = -1; // the territory index is rebuilt from the live front on first use
@@ -695,11 +725,30 @@ export class Sim {
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
         if (all.length && !mine.length) return fail('launch it from its launcher (or load it on a pickup)');
         if (mine.length && mine.every((u) => this.defs.u.get(u.def)!.railOnly)) return fail('trains only run delivery routes between railway stations');
-        for (const u of mine) (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false); // a manual order cancels a delivery round or a fuel run
+        const targetPost = w.posts?.find((post) => post.team === p.team && distKm(post.pos, cmd.to) <= 1.8);
+        for (const u of mine) {
+          (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false);
+          if (targetPost) {
+            if (u.frontPost && u.frontPost !== targetPost.id) {
+              const prev = w.posts.find((x) => x.id === u.frontPost);
+              if (prev) prev.garrison = prev.garrison.filter((x) => x !== u.id);
+            }
+            u.targetPost = targetPost.id;
+            u.frontPost = undefined;
+          } else {
+            if (u.frontPost) {
+              const prev = w.posts.find((x) => x.id === u.frontPost);
+              if (prev) prev.garrison = prev.garrison.filter((x) => x !== u.id);
+            }
+            u.frontPost = undefined;
+            u.targetPost = undefined;
+          }
+        }
         const formation = (['spread', 'line', 'column', 'wedge'] as const).includes(cmd.formation as never) ? cmd.formation : 'spread';
         // the way the front of the formation faces (degrees from north, clockwise); otherwise the way it travels
         const facing = typeof cmd.facing === 'number' && Number.isFinite(cmd.facing) ? ((cmd.facing % 360) + 360) % 360 : undefined;
-        const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation, facing);
+        const targetPos = targetPost ? targetPost.pos : cmd.to;
+        const moved = this.orderMove(mine, targetPos, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation, facing);
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
       }
       case 'rally': {
@@ -1258,6 +1307,7 @@ export class Sim {
     if (w.tick % r.tickRate === 0) this.healing();
     if (w.tick % r.tickRate === 3) this.morale();
     if (w.tick % r.tickRate === 7) this.repeats();
+    if (w.tick % r.tickRate === 0) this.frontlineGarrisons(1.0);
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
     if (!peace) this.frontline(dt), (this.occ.tick = -1); // the line moved: territory index is stale
     if (!peace && w.tick % r.tickRate === 5 && this.breakthrough()) this.occ.tick = -1;
@@ -1835,7 +1885,8 @@ export class Sim {
     const cover = air ? 0 : this.terrainAt(target.pos).cover;
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
     const shaken = ((target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1) * (air ? 1 : this.crowdTaken(target));
-    const dealt = (raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
+    const postBonus = target.frontPost !== undefined ? 0.65 : 1;
+    const dealt = ((raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos))) * postBonus;
     target.hp -= dealt;
     target.lastHit = this.world.time;
     // being hit shakes a unit (more the harder the blow)
@@ -2770,8 +2821,115 @@ export class Sim {
         if (u.fuel <= 0) u.sprint = false;
       }
     }
-    if (!u.path.length) (u.target = null), (u.cap = 0), (u.transport = false), (u.attackMove = false), (u.post = [u.pos[0], u.pos[1]]);
-    else u.target = u.path[u.path.length - 1].p;
+    if (!u.path.length) {
+      (u.target = null), (u.cap = 0), (u.transport = false), (u.attackMove = false), (u.post = [u.pos[0], u.pos[1]]);
+      if (u.targetPost !== undefined) {
+        const post = this.world.posts?.find((p) => p.id === u.targetPost);
+        if (post && distKm(u.pos, post.pos) <= 1.0) {
+          if (!post.garrison.includes(u.id) && post.garrison.length < post.cap) {
+            post.garrison.push(u.id);
+            u.frontPost = post.id;
+            u.targetPost = undefined;
+            u.stance = 'defend';
+            u.post = [post.pos[0], post.pos[1]];
+          }
+        }
+      }
+    } else u.target = u.path[u.path.length - 1].p;
+  }
+
+  /** Frontline garrison posts: autonomous holding, reinforcement, supply, slow advance on superiority, and flank gaps. */
+  private frontlineGarrisons(dt: number) {
+    const w = this.world;
+    if (!w.posts?.length) return;
+    const peace = this.peaceLeft() > 0;
+
+    // 1. Maintain garrisons (clean up dead / detached units, tether idle units to post)
+    for (const p of w.posts) {
+      p.garrison = p.garrison.filter((id) => {
+        const u = this.unitById.get(id);
+        return u && u.hp > 0 && !u.embarkedIn && u.frontPost === p.id;
+      });
+      for (const id of p.garrison) {
+        const u = this.unitById.get(id);
+        if (u && !u.target && u.path.length === 0 && distKm(u.pos, p.pos) > 0.8) {
+          this.orderMove([u], p.pos, false, false, false);
+        }
+      }
+    }
+
+    // 2. Autonomous advance when force superiority exists (Requirement 4)
+    for (const p of w.posts) {
+      if (p.garrison.length < 2 || peace) {
+        p.advancing = false;
+        continue;
+      }
+      let friendlyPower = 0;
+      let hasAmmo = true;
+      for (const id of p.garrison) {
+        const u = this.unitById.get(id);
+        if (!u || u.hp <= 0) continue;
+        const d = this.defs.u.get(u.def)!;
+        if (d.maxAmmo && (u.ammo ?? 0) <= 0) hasAmmo = false;
+        friendlyPower += (u.hp / this.maxHp(u)) * d.damage;
+      }
+      let enemyPower = 0;
+      this.near(this.unitGrid, p.pos, 5.0, (e) => {
+        if (e.team === p.team || e.hp <= 0 || e.embarkedIn || this.defs.u.get(e.def)!.kind === 'air') return;
+        if (distKm(e.pos, p.pos) <= 5.0) {
+          const ed = this.defs.u.get(e.def)!;
+          enemyPower += (e.hp / this.maxHp(e)) * ed.damage;
+        }
+      });
+      if (hasAmmo && friendlyPower > enemyPower * 1.35) {
+        p.advancing = true;
+        const ni = nearestNode(w.front, p.pos);
+        const [nx, ny] = normalAt(w.front, ni);
+        const dir: [number, number] = p.team === 0 ? [nx, ny] : [-nx, -ny];
+        const step = 0.035 * dt;
+        const nextPos = offsetKm(p.pos, dir[0] * step, dir[1] * step);
+        if (!this.terrain?.isBarrier(nextPos)) {
+          p.pos = nextPos;
+          p.nodeIdx = ni;
+          for (const id of p.garrison) {
+            const u = this.unitById.get(id);
+            if (u && !u.target && u.path.length === 0) {
+              u.pos = offsetKm(u.pos, dir[0] * step, dir[1] * step);
+              u.post = [p.pos[0], p.pos[1]];
+            }
+          }
+          w.front[ni].v += p.team === 0 ? 0.03 : -0.03;
+        }
+      } else {
+        p.advancing = false;
+      }
+    }
+
+    // 3. Gap detection: when posts push and distance between posts expands, create new empty posts (Requirement 4)
+    if (w.tick % (this.ruleset.rules.tickRate * 5) === 0) {
+      for (const team of [0, 1] as const) {
+        const teamPosts = w.posts.filter((p) => p.team === team).sort((a, b) => a.nodeIdx - b.nodeIdx);
+        if (teamPosts.length >= 35) continue;
+        for (let i = 0; i < teamPosts.length - 1; i++) {
+          const a = teamPosts[i];
+          const b = teamPosts[i + 1];
+          if ((a.advancing || b.advancing) && distKm(a.pos, b.pos) > 36.0) {
+            const midPos: LngLat = [(a.pos[0] + b.pos[0]) / 2, (a.pos[1] + b.pos[1]) / 2];
+            if (!this.terrain?.isBarrier(midPos)) {
+              w.posts.push({
+                id: w.nextId++,
+                team,
+                pos: midPos,
+                nodeIdx: nearestNode(w.front, midPos),
+                garrison: [],
+                cap: 4,
+              });
+              break;
+            }
+          }
+        }
+      }
+    }
   }
 
   /** The "abstract war": economy and local force balance push every front node along its normal. */
@@ -2791,25 +2949,37 @@ export class Sim {
 
     const speedAt = (node: FrontNode, base: [number, number]): number => {
       const pos: LngLat = [node.lng, node.lat];
-      const force: [number, number] = [base[0], base[1]];
+      const push: [number, number] = [base[0], base[1]];
+      const holdDef: [number, number] = [0, 0];
       this.near(this.unitGrid, pos, R, (u) => {
         const d = distKm(u.pos, pos);
         if (d > R || u.embarkedIn || u.hp <= 0) return;
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') return; // only ground troops hold or take ground
-        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
+        const pwr = ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
+        if (u.frontPost !== undefined) {
+          const post = w.posts?.find((p) => p.id === u.frontPost);
+          if (post?.advancing) push[u.team] += pwr;
+          else {
+            const ammoFactor = ud.maxAmmo && (u.ammo ?? 0) <= 0 ? 0.25 : 1.0;
+            holdDef[u.team] += pwr * ammoFactor;
+          }
+        } else {
+          push[u.team] += pwr;
+        }
       });
       // a manned bunker anchors the line: its garrison counts double
       for (const b of this.garrisons()) {
         const d = distKm(b.pos, pos);
         if (d > R) continue;
-        for (const g of b.inside) force[g.team] += this.defs.u.get(g.def)!.damage * 2 * (1 - d / R);
+        for (const g of b.inside) holdDef[g.team] += this.defs.u.get(g.def)!.damage * 2 * (1 - d / R);
       }
       // troops sitting unopposed behind the line loosen it
-      for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) force[z.team] += r.greyZonePush;
+      for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) push[z.team] += r.greyZonePush;
+      const effPush: [number, number] = [Math.max(0, push[0] - holdDef[1]), Math.max(0, push[1] - holdDef[0])];
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
-      return clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
+      return clamp((effPush[0] * hold[0] - effPush[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
     };
 
     // neighbours share speed so the line bends instead of spiking

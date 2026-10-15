@@ -273,6 +273,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const groups = new Map<number, Group>();
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
   const pMarkers = new Map<string, HTMLElement>();
+  const postMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker }>();
   /** Enemy buildings seen before, kept where they were last seen (see rememberBuildings). */
   const lastKnown = new Map<number, { b: BuildingView; at: number }>();
   let staleBuildings: { b: BuildingView; at: number }[] = [];
@@ -1928,6 +1929,50 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.title = `${Math.round(p.hp!)} / ${p.maxHp} structure`;
       }
     });
+
+    // Frontline garrison posts (Requirements 1, 3, 4, 5, 6)
+    const alivePosts = new Set<number>();
+    for (const p of snap.posts ?? []) {
+      alivePosts.add(p.id);
+      let m = postMarkers.get(p.id);
+      const isFriendly = p.team === myTeam;
+      const empty = p.garrison.length === 0;
+      if (!m) {
+        const el = h('div', {
+          class: `post-marker ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`,
+          title: empty
+            ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
+            : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`,
+          onClick: (e: MouseEvent) => {
+            e.stopPropagation();
+            if (isFriendly && selUnits.size) moveOrder(p.pos, e);
+          },
+          onContextmenu: (e: MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            if (isFriendly && selUnits.size) moveOrder(p.pos, e);
+          },
+        });
+        el.innerHTML = `<span class="post-icon">${empty ? '⛊' : '🛡️'}</span><span class="post-badge">${empty ? '!' : `${p.garrison.length}/${p.cap}`}</span>${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
+        const marker = new maplibregl.Marker({ element: el }).setLngLat(p.pos).addTo(map);
+        m = { el, marker };
+        postMarkers.set(p.id, m);
+      } else {
+        m.marker.setLngLat(p.pos);
+        m.el.className = `post-marker ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`;
+        m.el.title = empty
+          ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
+          : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`;
+        m.el.innerHTML = `<span class="post-icon">${empty ? '⛊' : '🛡️'}</span><span class="post-badge">${empty ? '!' : `${p.garrison.length}/${p.cap}`}</span>${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
+      }
+    }
+    for (const [id, m] of postMarkers) {
+      if (!alivePosts.has(id)) {
+        m.marker.remove();
+        postMarkers.delete(id);
+      }
+    }
+
     drawFog();
   }
 

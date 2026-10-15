@@ -254,6 +254,7 @@ export interface RulesConfig {
   sandbox: boolean; // test mode: endless resources, stocked stores, no victory or time limit
   buildTimeMult: number; // multiplies every build, upgrade and course time
   trainTimeMult: number; // multiplies every training time
+  frontPosts?: boolean; // spawn frontline garrison posts along the front line
 }
 
 export interface ScriptSource {
@@ -326,4 +327,5 @@ export const DEFAULT_RULES: RulesConfig = {
   sandbox: false,
   buildTimeMult: 1,
   trainTimeMult: 1,
+  frontPosts: true,
 };

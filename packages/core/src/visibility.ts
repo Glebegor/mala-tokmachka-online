@@ -107,6 +107,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           loiterRadius: own ? u.loiterRadius : undefined,
           isLoitering: own ? u.isLoitering : undefined,
           bombardTarget: own && u.bombardTarget ? p4(u.bombardTarget) : undefined,
+          frontPost: u.frontPost,
         };
       }),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),
@@ -119,5 +120,6 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
     scores: [Math.round(w.scores[0]), Math.round(w.scores[1])],
     closed: w.players.filter((p) => p.team === team && !p.share).map((p) => p.id),
     queue: w.queue.filter((q) => w.buildings.find((b) => b.id === q.building)?.team === team).map((q) => ({ id: q.id, building: q.building, unit: q.unit, owner: q.owner, remaining: Math.round(q.remaining * 10) / 10, total: q.total })),
+    posts: (w.posts ?? []).filter((p) => p.team === team || seen(p.pos, 5)).map((p) => ({ id: p.id, team: p.team, pos: p4(p.pos), nodeIdx: p.nodeIdx, garrison: p.garrison, cap: p.cap, advancing: p.advancing })),
   };
 }
