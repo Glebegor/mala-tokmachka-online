@@ -56,7 +56,7 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 .bld small { color: var(--muted); font-size: 10px; }
 .stat { font-size: 12px; }
 .hint { position: absolute; left: 50%; bottom: 14px; transform: translateX(-50%); color: var(--muted); font-size: 11px; background: var(--panel); padding: 5px 10px; border: 1px solid var(--line); pointer-events: none; white-space: nowrap; }
-.toasts { position: absolute; left: 12px; bottom: 14px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
+.toasts { position: absolute; left: 12px; bottom: 48px; display: flex; flex-direction: column; gap: 6px; pointer-events: none; }
 .toast { background: var(--panel); border-left: 2px solid var(--accent); padding: 6px 10px; animation: in .25s; }
 .toast.bad { border-color: #ff5a5a; }
 .selbox { position: fixed; display: none; border: 1px solid #fff; background: rgba(255,255,255,.07); pointer-events: none; z-index: 5; }
