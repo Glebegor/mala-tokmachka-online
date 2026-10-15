@@ -1,8 +1,8 @@
 import { type BotDifficulty, type Building, distKm, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
-  'power_plant', 'housing', 'machine_factory', 'mine', 'drone_factory', 'metalworks', 'oil_refinery', 'trench', 'gas_station', 'housing',
-  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'rail_station', 'trench', 'warehouse', 'bunker', 'ammo_factory', 'ammo_depot', 'missile_factory', 'ammo_depot',
+  'power_plant', 'housing', 'machine_factory', 'mine', 'drone_factory', 'launch_site', 'metalworks', 'oil_refinery', 'trench', 'gas_station', 'housing',
+  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'trench', 'warehouse', 'bunker', 'ammo_factory', 'ammo_depot', 'missile_factory', 'ammo_depot',
 ];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
@@ -146,17 +146,19 @@ export class Bot {
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchor: LngLat = hq?.pos ?? sim.map.center;
 
-    // strike drones go for enemy sites, recon drones scout over the enemy side
-    for (const u of w.units.filter((x) => x.owner === p.id && isStrikeDrone(sim.defs.u.get(x.def)) && !x.target)) {
+    // strike drones and missiles go for enemy sites, recon drones scout over the enemy side (from their launchers)
+    const send = (u: Unit, to: LngLat) =>
+      u.parkedAt !== undefined ? sim.apply(p.id, { type: 'launchFrom', building: u.parkedAt, units: [u.id], target: to }) : sim.apply(p.id, { type: 'move', units: [u.id], to });
+    for (const u of w.units.filter((x) => x.owner === p.id && isStrikeDrone(sim.defs.u.get(x.def)) && !x.target && !x.embarkedIn)) {
       const targets = w.buildings.filter((b) => b.team !== p.team);
       const t = targets[Math.floor(Math.random() * targets.length)];
-      if (t) sim.apply(p.id, { type: 'move', units: [u.id], to: t.pos });
+      if (t) send(u, t.pos);
     }
-    for (const u of w.units.filter((x) => x.owner === p.id && isReconDrone(sim.defs.u.get(x.def)))) {
+    for (const u of w.units.filter((x) => x.owner === p.id && isReconDrone(sim.defs.u.get(x.def)) && !x.embarkedIn)) {
       if (u.target && !u.isLoitering) continue;
       if (u.isLoitering && Math.random() > 0.05) continue; // circle a while before moving on
       const cp = enemyPoints[Math.floor(Math.random() * enemyPoints.length)];
-      if (cp) sim.apply(p.id, { type: 'move', units: [u.id], to: offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20) });
+      if (cp) send(u, offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20));
     }
 
     // schooling: with spare money, send a squad that is not on a mission through the training centre

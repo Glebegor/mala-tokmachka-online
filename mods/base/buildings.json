@@ -22,6 +22,8 @@
       "infantry_at",
       "manpads",
       "medic",
+      "apc",
+      "ifv",
       "tank",
       "artillery"
     ],
@@ -88,7 +90,7 @@
     "spacedFrom": [
       "metalworks"
     ],
-    "sameKindKm": 11.7
+    "sameKindKm": 2.9
   },
   {
     "id": "metalworks",
@@ -109,10 +111,7 @@
       "energy": 2
     },
     "vision": 3,
-    "spacedFrom": [
-      "machine_factory"
-    ],
-    "sameKindKm": 11.7
+    "sameKindKm": 2.9
   },
   {
     "id": "oil_refinery",
@@ -133,9 +132,7 @@
       "energy": 2.0
     },
     "vision": 4,
-    "spacedFrom": [
-      "gas_station"
-    ]
+    "sameKindKm": 4.4
   },
   {
     "id": "gas_station",
@@ -154,24 +151,40 @@
   },
   {
     "id": "rail_station",
-    "name": "Rail Hub",
+    "name": "Railway Station",
     "category": "civil",
-    "icon": "⇄",
-    "description": "Logistics hub: every friendly building within 25 km produces 25% more. Uses energy.",
+    "icon": "⊟",
+    "description": "Rail freight terminal: stores metal, fuel, ore and ammo (30,000 each), builds trains and refuels them. Connect stations with Railway track; trains then carry 20,000 at a time between them, far faster than trucks.",
     "cost": {
-      "money": 500,
-      "metal": 30
+      "money": 600,
+      "metal": 50
     },
-    "buildTime": 20,
-    "hp": 400,
-    "consumes": {
-      "energy": 1.5
+    "buildTime": 25,
+    "hp": 900,
+    "vision": 5,
+    "storageCap": 30000,
+    "trains": [
+      "train"
+    ]
+  },
+  {
+    "id": "railway",
+    "name": "Railway",
+    "category": "civil",
+    "icon": "═",
+    "description": "Railway track: drag on the map (0.5–40 km); ends within 1.5 km of a station or other track join up. It cannot cross water. Trains run only on track; drones, missiles and artillery can cut it.",
+    "cost": {
+      "money": 60,
+      "metal": 8
     },
-    "aura": {
-      "radiusKm": 25,
-      "outputMult": 1.25
+    "buildTime": 12,
+    "hp": 500,
+    "vision": 2,
+    "line": {
+      "minKm": 0.5,
+      "maxKm": 40
     },
-    "vision": 5
+    "rail": true
   },
   {
     "id": "machine_factory",
@@ -192,15 +205,6 @@
       "fuel_truck",
       "rescuers",
       "mechanic"
-    ],
-    "spacedFrom": [
-      "hq",
-      "training_center",
-      "drone_factory",
-      "missile_factory",
-      "airfield",
-      "aircraft_plant",
-      "ammo_factory"
     ]
   },
   {
@@ -434,7 +438,7 @@
     "name": "Drone Factory",
     "category": "military",
     "icon": "✣",
-    "description": "Builds your side's drones: strike drones that dive on a target and explode, and recon drones that circle an area. Built in the Alabuga zone (Russia only) it works 50% faster.",
+    "description": "Builds your side's drones. A finished drone is delivered to the nearest launcher: recon drones to an Airfield, strike drones to a Launch Site (small ones can also be loaded on a pickup there). Built in the Alabuga zone (Russia only) it works 50% faster.",
     "cost": {
       "money": 650,
       "metal": 45
@@ -500,7 +504,7 @@
     "name": "Missile Factory",
     "category": "military",
     "icon": "⇑",
-    "description": "Builds your side's missiles: Iskander-M and Kh-101 for Russia, Neptune and Flamingo for Ukraine. A finished missile waits at the factory: select it and right click a target to launch. Metal and fuel come from the factory's own store.",
+    "description": "Builds your side's missiles: Iskander-M and Kh-101 for Russia, Neptune and Flamingo for Ukraine. A finished missile is delivered to the nearest Launch Site and launched from there. Metal and fuel come from the factory's own store.",
     "cost": {
       "money": 850,
       "metal": 75
@@ -516,11 +520,28 @@
     ]
   },
   {
+    "id": "launch_site",
+    "name": "Launch Site",
+    "category": "military",
+    "icon": "⇪",
+    "description": "Launch pad for strike drones and missiles: they wait here after being built and take off from here at your order (select the site, Launch at…, click the target).",
+    "cost": {
+      "money": 400,
+      "metal": 30
+    },
+    "buildTime": 18,
+    "hp": 600,
+    "vision": 5,
+    "launches": [
+      "strike"
+    ]
+  },
+  {
     "id": "airfield",
     "name": "Airfield",
     "category": "military",
     "icon": "✈",
-    "description": "Base for recon drones: they refuel here (within 12 km) from its fuel tank (20,000). Sees 25 km.",
+    "description": "Base for recon drones: new recon drones wait here and take off from here (launch them from this panel), and refuel here (within 12 km) from its fuel tank (20,000). Sees 20 km.",
     "cost": {
       "money": 900,
       "metal": 50
@@ -528,7 +549,10 @@
     "buildTime": 30,
     "hp": 1200,
     "storageCap": 20000,
-    "vision": 25
+    "vision": 25,
+    "launches": [
+      "recon"
+    ]
   },
   {
     "id": "aircraft_plant",

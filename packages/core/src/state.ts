@@ -29,6 +29,10 @@ export interface Building {
   /** Line structures (trenches): the two ends, and the length in km (cost, build time and upgrades scale with it). */
   line?: [LngLat, LngLat];
   size?: number;
+  /** Production buildings: where new units walk to (none = they stay at the building). */
+  rally?: LngLat;
+  /** Keeps training this unit whenever its queue is empty and the resources are there. */
+  repeat?: string;
   /** Upgrade level, starting at 1. */
   level: number;
   /** Upgrade to the next level in progress. */
@@ -70,6 +74,10 @@ export interface Haul {
   timer?: number;
   /** At a loading stop, waiting for enough goods. */
   waiting?: boolean;
+  /** A train with no track to its next stop: it waits until there is a connection. */
+  noTrack?: boolean;
+  /** Track segments the current leg runs on (a train re-plans when one is cut). */
+  railSegs?: number[];
 }
 
 export type Stance = 'hold' | 'defend' | 'aggressive';
@@ -95,6 +103,8 @@ export interface Unit {
   rank: number; // index into ruleset.ranks
   /** 0–100. Falls when encircled, out of ammo or under fire; below 50 it fights worse; encircled at 0 it surrenders. */
   morale?: number;
+  /** Seconds it has stood still (digging in: the longer, the better protected). */
+  still?: number;
   /** Sim time it last took damage (healing waits until it has been out of the fight for a while). */
   lastHit?: number;
   /** A medic, mechanic or hospital is patching it up (server side, shown as a status). */
@@ -126,6 +136,8 @@ export interface Unit {
   cargo?: UnitCargo;
   haul?: Haul;
   embarkedIn?: number; // the transport this unit rides in
+  /** Drones and missiles waiting at a launcher (or their factory) for a launch order. */
+  parkedAt?: number;
   /** Driving over to another vehicle to hand it fuel (unit id). */
   fuelTo?: number;
   loiterCenter?: LngLat;
@@ -160,6 +172,8 @@ export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'e
 export interface Waypoint {
   p: LngLat;
   road: boolean;
+  /** On railway track (trains): full speed, no terrain. */
+  rail?: boolean;
   /** Last waypoint of one move order (orders can be queued). */
   end?: boolean;
 }

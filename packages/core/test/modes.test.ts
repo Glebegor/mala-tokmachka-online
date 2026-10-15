@@ -703,3 +703,92 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(truck.hp < sim.defs.u.get('truck')!.hp, 'it hit the moving truck');
   console.log('strike drone accuracy ok');
 }
+
+// --- railways: stations joined by track; trains haul big loads fast; a cut line stops them ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  hq.storage!.metal = 50000;
+  const station = (pos: LngLat, metal: number) => {
+    const b = { ...hq, id: sim.world.nextId++, def: 'rail_station', hp: 900, pos, storage: { metal, fuel: 1000, ore: 0, ammo: 0 }, inside: [], course: null, upgrade: null };
+    sim.world.buildings.push(b);
+    return b;
+  };
+  // a straight stretch of dry ground on our side, ~50 km long (searching east–west)
+  let A: LngLat | null = null, B: LngLat | null = null;
+  const dry = (p: LngLat) => sim.isPlayableGround(p) && sim.side(p) === 0 && sim.terrainAt(p).id !== 'water' && !sim.liberatedAt(p);
+  for (let y = 48.6; y < 50.5 && !A; y += 0.1) for (let x = 28; x < 34 && !A; x += 0.1) {
+    const p: LngLat = [x, y], q = offsetKm(p, 50, 0);
+    let ok = true;
+    for (let k = 0; k <= 250 && ok; k++) ok = dry(offsetKm(p, k * 0.2, 0));
+    if (ok) (A = p), (B = q);
+  }
+  assert.ok(A && B, 'found 50 km of dry ground');
+  const sa = station(A!, 20000), sb = station(B!, 0);
+  const mid = offsetKm(A!, 25, 0);
+  assert.equal(sim.apply('a', { type: 'build', def: 'railway', pos: A!, to: B! }).ok, false, 'at most 40 km of track at once');
+  assert.ok(sim.apply('a', { type: 'build', def: 'railway', pos: A!, to: mid }).ok);
+  assert.ok(sim.apply('a', { type: 'build', def: 'railway', pos: offsetKm(mid, 0.5, 0), to: B! }).ok, 'ends within 1.5 km join up');
+  for (const b of sim.world.buildings) if (b.def === 'railway') b.progress = 1;
+  assert.ok(sim.railPath(0, A!, B!), 'the stations are connected');
+  const train = sim.spawnUnit('train', a, A!);
+  assert.equal(sim.apply('a', { type: 'move', units: [train.id], to: B! }).ok, false, 'trains only run routes');
+  assert.equal(sim.apply('a', { type: 'setRoute', unit: train.id, fromBuilding: sa.id, toBuilding: hq.id }).ok, false, 'only between stations');
+  assert.ok(sim.apply('a', { type: 'setRoute', unit: train.id, fromBuilding: sa.id, toBuilding: sb.id, resType: 'metal' }).ok);
+  let t = 0;
+  while ((sb.storage.metal ?? 0) < 1 && t < 1500) sim.step(0.1), t++;
+  assert.ok(sb.storage.metal >= 19000, `a train load arrived (${Math.round(sb.storage.metal)})`);
+  assert.ok(t / 10 < 70, `50 km in ${(t / 10).toFixed(0)} s (load and unload included)`);
+  // cut the line: the train cannot go on
+  const seg = sim.world.buildings.find((b) => b.def === 'railway')!;
+  seg.hp = 0;
+  run(sim, 3);
+  sa.storage.metal = 20000;
+  run(sim, 30);
+  assert.ok(train.haul?.noTrack || train.haul?.state !== 'moving' || !sim.railPath(0, train.pos, A!), 'no connection: it waits');
+  assert.equal(sim.railPath(0, A!, B!), null, 'the network is cut');
+  console.log(`railways ok: 50 km in ${(t / 10).toFixed(0)} s with 20,000 metal`);
+}
+
+// --- launchers, rally points and repeat production ---
+{
+  const sim = fresh({ peaceSeconds: 0, trainTimeMult: 0.05 });
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const site = (def: string, dx: number, storage?: Record<string, number>) => {
+    const b = { ...hq, id: sim.world.nextId++, def, hp: 600, pos: offsetKm(hq.pos, dx, -6), storage, inside: [], course: null, upgrade: null };
+    sim.world.buildings.push(b);
+    return b;
+  };
+  const df = site('drone_factory', 10, { metal: 5000, fuel: 5000 });
+  sim.apply('a', { type: 'train', building: df.id, unit: 'drone_liutyi' });
+  run(sim, 2);
+  const d1 = sim.world.units.find((u) => u.def === 'drone_liutyi')!;
+  assert.equal(d1.parkedAt, df.id, 'no launch site yet: it waits at the factory');
+  assert.equal(sim.apply('a', { type: 'move', units: [d1.id], to: offsetKm(hq.pos, 30, 30) }).ok, false, 'it cannot just fly off');
+  const ls = site('launch_site', 20);
+  run(sim, 3);
+  assert.equal(d1.parkedAt, ls.id, 'delivered to the new launch site');
+  const af = site('airfield', 30, { fuel: 1000 });
+  sim.apply('a', { type: 'train', building: df.id, unit: 'drone_pd2' });
+  run(sim, 2);
+  const rec = sim.world.units.find((u) => u.def === 'drone_pd2')!;
+  assert.equal(rec.parkedAt, af.id, 'recon drones go to the airfield');
+  assert.equal(sim.apply('a', { type: 'launchFrom', building: ls.id, units: [rec.id], target: hq.pos }).ok, false, 'not from the launch site');
+  assert.ok(sim.apply('a', { type: 'launchFrom', building: ls.id, units: [d1.id], target: offsetKm(hq.pos, 40, 10) }).ok);
+  assert.ok(d1.parkedAt === undefined && d1.path.length > 0, 'launched');
+  // rally point and repeat
+  assert.ok(sim.apply('a', { type: 'rally', building: hq.id, pos: offsetKm(hq.pos, 5, 5) }).ok);
+  assert.ok(sim.apply('a', { type: 'repeat', building: hq.id, unit: 'infantry' }).ok);
+  const before = sim.world.units.filter((u) => u.def === 'infantry').length;
+  run(sim, 6);
+  const fresh2 = sim.world.units.filter((u) => u.def === 'infantry').slice(before);
+  assert.ok(fresh2.length >= 2, `repeat keeps training (${fresh2.length} new)`);
+  assert.ok(fresh2.every((u) => u.path.length || distKm(u.pos, offsetKm(hq.pos, 5, 5)) < 0.6), 'new units head for the rally point');
+  a.res.money = 0;
+  const n = sim.world.units.length;
+  run(sim, 4);
+  assert.ok(sim.world.units.length <= n + 1, 'no money, no more');
+  console.log('launchers, rally points, repeat ok');
+}

@@ -232,6 +232,33 @@
     "maxAmmo": 0
   },
   {
+    "id": "train",
+    "name": "Freight Train",
+    "kind": "ground",
+    "cost": {
+      "money": 800,
+      "metal": 80,
+      "fuel": 40
+    },
+    "trainTime": 40,
+    "hp": 500,
+    "speed": 1.2,
+    "range": 0.5,
+    "damage": 0,
+    "vision": 4,
+    "mobility": "rail",
+    "symbol": "supply",
+    "fx": "burst",
+    "missRate": 0.5,
+    "airDamage": 0,
+    "maxAmmo": 0,
+    "cargoCap": 20000,
+    "passengerCap": 0,
+    "maxFuel": 400,
+    "railOnly": true,
+    "description": "Carries 20,000 goods on a delivery route between railway stations, at 72 km/min. Runs only on your track; if the track is cut it waits for a connection. Refuels at stations."
+  },
+  {
     "id": "rescuers",
     "name": "Rescue Crew",
     "kind": "ground",
@@ -285,6 +312,65 @@
     },
     "description": "Recovery and repair crew: tanks, artillery and other vehicles within 2 km get back 2% of their strength a second once they have been out of the fight for 10 s. Unarmed.",
     "maxAmmo": 0
+  },
+  {
+    "id": "apc",
+    "name": "APC (BTR / M113)",
+    "kind": "ground",
+    "cost": {
+      "money": 260,
+      "metal": 30,
+      "fuel": 15,
+      "people": 2
+    },
+    "trainTime": 14,
+    "hp": 260,
+    "speed": 0.36,
+    "range": 1.2,
+    "damage": 12,
+    "vision": 5,
+    "mobility": "wheeled",
+    "symbol": "mechanized",
+    "fx": "burst",
+    "missRate": 0.35,
+    "airDamage": 0,
+    "maxAmmo": 400,
+    "ammoPerShot": 4,
+    "maxFuel": 120,
+    "cargoCap": 0,
+    "passengerCap": 2,
+    "stealth": 1.3,
+    "description": "Armoured personnel carrier: brings two infantry squads to the front under armour (Board from the infantry's panel). A heavy machine gun; weak against tanks and anti-tank teams."
+  },
+  {
+    "id": "ifv",
+    "name": "IFV (BMP / Bradley)",
+    "kind": "ground",
+    "cost": {
+      "money": 320,
+      "metal": 40,
+      "fuel": 20,
+      "people": 3
+    },
+    "trainTime": 18,
+    "hp": 340,
+    "speed": 0.32,
+    "range": 2.0,
+    "damage": 26,
+    "vision": 5,
+    "mobility": "tracked",
+    "symbol": "mechanized",
+    "fx": "shell",
+    "missRate": 0.3,
+    "airDamage": 0,
+    "maxAmmo": 120,
+    "ammoPerShot": 2,
+    "ammoCost": 2,
+    "maxFuel": 110,
+    "cargoCap": 0,
+    "passengerCap": 1,
+    "stealth": 1.3,
+    "description": "Infantry fighting vehicle: carries one squad and backs it with an autocannon (2 km). Tracked: copes with fields and mud better than an APC."
   },
   {
     "id": "tank",
@@ -391,7 +477,8 @@
     "maxFuel": 100,
     "airDamage": 0,
     "description": "Strike drone (one-way): flies to the target and explodes, wrecking units, buildings and city structure nearby. Cannot refuel.",
-    "maxAmmo": 0
+    "maxAmmo": 0,
+    "blastKm": 2.7
   },
   {
     "id": "drone_orion",
@@ -443,7 +530,8 @@
     "maxFuel": 100,
     "airDamage": 0,
     "description": "Strike drone (one-way): flies to the target and explodes, wrecking units, buildings and city structure nearby. Cannot refuel.",
-    "maxAmmo": 0
+    "maxAmmo": 0,
+    "blastKm": 2.7
   },
   {
     "id": "drone_pd2",
@@ -523,7 +611,7 @@
     "airDamage": 0,
     "description": "Strike drone (one-way): flies to the target and explodes, wrecking units, buildings and city structure nearby. Cannot refuel. Small enough to ride on a pickup's launcher.",
     "launchable": true,
-    "blastKm": 1.2,
+    "blastKm": 1.8,
     "maxAmmo": 0
   },
   {
@@ -549,7 +637,7 @@
     "missRate": 0,
     "maxFuel": 10,
     "airDamage": 0,
-    "blastKm": 0.8,
+    "blastKm": 1.2,
     "launchable": true,
     "description": "Loitering munition (one-way): short range (about 125 km), small blast, cheap. Rides on a pickup's launcher and is launched from the field.",
     "maxAmmo": 0
@@ -605,7 +693,7 @@
     "missRate": 0,
     "maxFuel": 40,
     "airDamage": 0,
-    "blastKm": 2.4,
+    "blastKm": 3.6,
     "turnRate": 360,
     "interceptChance": 0.2,
     "description": "Ballistic missile (one-way, about 500 km): very fast and hard to intercept, heavy blast. Waits at the factory until you give it a target.",
@@ -635,7 +723,7 @@
     "missRate": 0,
     "maxFuel": 200,
     "airDamage": 0,
-    "blastKm": 2.0,
+    "blastKm": 3.0,
     "turnRate": 45,
     "interceptChance": 0.55,
     "description": "Cruise missile (one-way, about 2,500 km): flies low and can be shot down by anti-air. Waits at the factory until you give it a target.",
@@ -665,7 +753,7 @@
     "missRate": 0,
     "maxFuel": 48,
     "airDamage": 0,
-    "blastKm": 1.8,
+    "blastKm": 2.7,
     "turnRate": 50,
     "interceptChance": 0.55,
     "description": "Cruise missile (one-way, about 600 km): flies low and can be shot down by anti-air. Waits at the factory until you give it a target.",
@@ -695,7 +783,7 @@
     "missRate": 0,
     "maxFuel": 240,
     "airDamage": 0,
-    "blastKm": 2.8,
+    "blastKm": 4.2,
     "turnRate": 40,
     "interceptChance": 0.45,
     "description": "Heavy long-range cruise missile (one-way, about 3,000 km): the biggest warhead in the game. Can be shot down by anti-air. Waits at the factory until you give it a target.",

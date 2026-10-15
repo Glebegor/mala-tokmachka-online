@@ -302,7 +302,7 @@ export class Sim {
 
   /** Physical goods a building keeps on site: what it makes, what it uses, and what its trainees cost. */
   storageFor(d: BuildingDef): string[] {
-    const fixed: Record<string, string[]> = { hq: ['metal', 'fuel', 'ore', 'ammo'], gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
+    const fixed: Record<string, string[]> = { hq: ['metal', 'fuel', 'ore', 'ammo'], rail_station: ['metal', 'fuel', 'ore', 'ammo'], gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
     if (fixed[d.id]) return fixed[d.id];
     const global = new Set(['money', 'people', 'energy']);
     const out = new Set<string>();
@@ -546,6 +546,8 @@ export class Sim {
     const o = this.defs.b.get(other);
     if (o && this.chained(d, o) && !inZone) return r.minBuildSpacing;
     if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
+    // two civil sites keep a building gap; military sites and lines only need their own ground
+    if (o && !inZone && d.category === 'civil' && o.category === 'civil' && !d.line && !o.line && d.id !== 'housing' && o.id !== 'housing') return r.civilSpacing;
     return r.fieldWorkSpacing;
   }
 
@@ -628,7 +630,8 @@ export class Sim {
           const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
           if (clash) {
             const other = this.defs.b.get(clash.def)!;
-            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : other.id === d.id && d.sameKindKm ? `keep ${d.sameKindKm} km from the next ${d.name}` : 'space occupied');
+            const gap = this.spacingBetween(d, other.id, !!zone);
+            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied');
           }
         }
         if (!this.canPay(p, d.cost)) return fail(Object.keys(d.cost).some((k) => this.isGood(k)) ? 'not enough resources (materials come from your HQ and warehouses)' : 'not enough resources');
@@ -676,12 +679,49 @@ export class Sim {
       case 'move': {
         if (!isFinitePos(cmd.to) || !Array.isArray(cmd.units) || cmd.units.length > 300) return fail('bad order');
         const set = new Set(cmd.units);
-        const mine = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
+        const all = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
+        const mine = all.filter((u) => u.parkedAt === undefined);
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
+        if (all.length && !mine.length) return fail('launch it from its launcher (or load it on a pickup)');
+        if (mine.length && mine.every((u) => this.defs.u.get(u.def)!.railOnly)) return fail('trains only run delivery routes between railway stations');
         for (const u of mine) (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false); // a manual order cancels a delivery round or a fuel run
         const formation = (['spread', 'line', 'column', 'wedge'] as const).includes(cmd.formation as never) ? cmd.formation : 'spread';
         const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation);
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
+      }
+      case 'rally': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
+        if (!b || !this.defs.b.get(b.def)!.trains?.length) return fail('not a production building');
+        if (!this.usable(b, p.id)) return fail('a teammate keeps this building to themselves');
+        if (cmd.pos && (!isFinitePos(cmd.pos) || !inBounds(this.map, cmd.pos))) return fail('bad rally point');
+        b.rally = cmd.pos ? [cmd.pos[0], cmd.pos[1]] : undefined;
+        return ok();
+      }
+      case 'repeat': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
+        if (!b || b.owner !== p.id) return fail('only the owner can set repeat production');
+        if (cmd.unit && !this.defs.b.get(b.def)!.trains?.includes(cmd.unit)) return fail('cannot train that here');
+        b.repeat = cmd.unit ?? undefined;
+        return ok();
+      }
+      case 'launchFrom': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team && x.progress >= 1);
+        if (!b) return fail('launcher unavailable');
+        if (!isFinitePos(cmd.target)) return fail('bad target');
+        if (this.peaceLeft() > 0 && this.side(cmd.target) !== p.team) return fail('ceasefire: nobody may cross the front yet');
+        const set = new Set(cmd.units);
+        const craft = w.units.filter((u) => set.has(u.id) && u.owner === p.id && u.parkedAt === b.id);
+        if (!craft.length) return fail('nothing waiting here');
+        const kinds = this.defs.b.get(b.def)!.launches ?? [];
+        let sent = 0;
+        for (const u of craft) {
+          if (!kinds.includes(this.launchKind(this.defs.u.get(u.def)!))) continue;
+          u.parkedAt = undefined;
+          u.pos = [b.pos[0], b.pos[1]];
+          this.orderMove([u], cmd.target, false, false, false);
+          sent++;
+        }
+        return sent ? ok() : fail(`this site cannot launch it: recon drones fly from an airfield, strike drones and missiles from a launch site`);
       }
       case 'stance': {
         if (!['hold', 'defend', 'aggressive'].includes(cmd.stance)) return fail('bad stance');
@@ -741,6 +781,7 @@ export class Sim {
           if (!this.usable(b, p.id)) return fail('a teammate keeps that building to themselves');
           stops.push({ action: st.action, building: b.id });
         }
+        if (ud.railOnly && stops.some((x) => x.action === 'via' || w.buildings.find((b) => b.id === x.building)?.def !== 'rail_station')) return fail('a train only stops at railway stations');
         const loads = stops.filter((x) => x.action === 'load'), unloads = stops.filter((x) => x.action === 'unload');
         if (!loads.length || !unloads.length) return fail('a route needs somewhere to load and somewhere to unload');
         if (cmd.fromBuilding !== undefined && !cmd.stops?.length && cmd.fromBuilding === cmd.toBuilding) return fail('pick two different buildings of your side');
@@ -764,7 +805,7 @@ export class Sim {
       }
       case 'board': {
         const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id && !x.embarkedIn);
-        const t = w.units.find((x) => x.id === cmd.transport && x.owner === p.id);
+        const t = w.units.find((x) => x.id === cmd.transport && x.owner === p.id && x.parkedAt === undefined);
         if (!u || !t || u === t) return fail('unit not found');
         const td = this.defs.u.get(t.def)!;
         const ud = this.defs.u.get(u.def)!;
@@ -776,6 +817,7 @@ export class Sim {
           t.cargo.drones ??= [];
           if (t.cargo.drones.length >= td.droneCap) return fail('launcher full');
           if (distKm(u.pos, t.pos) > 10) return fail('too far from the vehicle');
+          u.parkedAt = undefined; // a pickup can take drones off a launcher
           u.embarkedIn = t.id;
           (u.path = []), (u.target = null), (u.pos = [t.pos[0], t.pos[1]]), (u.isLoitering = false), (u.loiterCenter = undefined);
           t.cargo.drones.push(u.id);
@@ -1148,6 +1190,7 @@ export class Sim {
     this.repairs(dt);
     if (w.tick % r.tickRate === 0) this.healing();
     if (w.tick % r.tickRate === 3) this.morale();
+    if (w.tick % r.tickRate === 7) this.repeats();
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
     if (!peace) this.frontline(dt), (this.occ.tick = -1); // the line moved: territory index is stale
     if (!peace && w.tick % r.tickRate === 5 && this.breakthrough()) this.occ.tick = -1;
@@ -1378,6 +1421,7 @@ export class Sim {
       }
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
+      if (this.dugIn(u) > 0) s.push(['dugin', this.dugIn(u)]);
       if (u.morale !== undefined && u.morale < 25) s.push(['broken', u.morale / 100]);
       else if (u.morale !== undefined && u.morale < 50) s.push(['lowmorale', this.moraleMult(u)]);
       if (u.ammo !== undefined && d.maxAmmo) {
@@ -1526,11 +1570,44 @@ export class Sim {
       const p = this.player(q.owner)!;
       if (!p) return false;
       const n = w.units.length;
-      this.spawnUnit(q.unit, p, [b.pos[0] + 0.03 * Math.cos(n * 1.9), b.pos[1] + 0.02 * Math.sin(n * 1.9)]);
+      const u = this.spawnUnit(q.unit, p, [b.pos[0] + 0.03 * Math.cos(n * 1.9), b.pos[1] + 0.02 * Math.sin(n * 1.9)]);
+      if (this.defs.u.get(u.def)!.kind === 'air') this.park(u, b);
+      else if (b.rally) this.orderMove([u], b.rally, false, false, false); // off to the rally point
       this.stat(q.owner).unitsTrained++;
       this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit });
       return false;
     });
+  }
+
+  /** Which launcher kind a craft needs: recon drones fly from airfields, strike drones and missiles from launch sites. */
+  private launchKind(d: UnitDef): 'recon' | 'strike' {
+    return isReconDrone(d) ? 'recon' : 'strike';
+  }
+
+  /**
+   * A new drone or missile waits at the nearest launcher of its kind on its side (delivered there), or at the building
+   * that made it until there is one.
+   */
+  private park(u: Unit, made: Building) {
+    const kind = this.launchKind(this.defs.u.get(u.def)!);
+    let best: Building | null = null;
+    for (const b of this.world.buildings) {
+      if (b.team !== u.team || b.progress < 1 || !this.defs.b.get(b.def)!.launches?.includes(kind) || !this.usable(b, u.owner)) continue;
+      if (!best || distKm(b.pos, made.pos) < distKm(best.pos, made.pos)) best = b;
+    }
+    const at = best ?? made;
+    u.parkedAt = at.id;
+    u.pos = [at.pos[0], at.pos[1]];
+    (u.path = []), (u.target = null), (u.isLoitering = false), (u.loiterCenter = undefined);
+  }
+
+  /** Production buildings set to repeat: when their queue is empty, order the next one (if the owner can pay). */
+  private repeats() {
+    const w = this.world;
+    for (const b of w.buildings) {
+      if (!b.repeat || b.progress < 1 || w.queue.some((q) => q.building === b.id)) continue;
+      this.apply(b.owner, { type: 'train', building: b.id, unit: b.repeat });
+    }
   }
 
   /** Record how the match stands now (for the end-of-match charts); one point per 30 s, the last one replaced at the end. */
@@ -1600,6 +1677,7 @@ export class Sim {
     this.unitGrid.clear();
     this.buildingGrid.clear();
     for (const u of this.world.units) {
+      if (u.parkedAt !== undefined) continue; // grounded at a launcher: not on the battlefield
       const k = Sim.key(Math.floor(u.pos[0] / C), Math.floor(u.pos[1] / C));
       const b = this.unitGrid.get(k);
       b ? b.push(u) : this.unitGrid.set(k, [u]);
@@ -1650,7 +1728,7 @@ export class Sim {
     const air = td.kind === 'air';
     const cover = air ? 0 : this.terrainAt(target.pos).cover;
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
-    const dealt = (raw * (1 - cover) * (1 - city) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
+    const dealt = (raw * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
     target.lastHit = this.world.time;
     // being hit shakes a unit (more the harder the blow)
@@ -1675,7 +1753,7 @@ export class Sim {
   private blast(attacker: Unit, at: LngLat, radius: number, damage: number, hitsCities: boolean): number {
     let total = 0;
     for (const e of this.world.units) {
-      if (e.team === attacker.team || e.embarkedIn || e.hp <= 0 || this.defs.u.get(e.def)!.kind === 'air') continue;
+      if (e.team === attacker.team || e.embarkedIn || e.parkedAt !== undefined || e.hp <= 0 || this.defs.u.get(e.def)!.kind === 'air') continue;
       const d = distKm(at, e.pos);
       if (d <= radius) total += this.hitUnit(attacker, e, damage * (1 - d / radius));
     }
@@ -1714,7 +1792,7 @@ export class Sim {
       return false;
     };
     if (isReconDrone(d)) return void fromStore(['airfield'], 12, 30);
-    if (fromStore(['gas_station'], 8, 30)) return;
+    if (fromStore(d.railOnly ? ['rail_station'] : ['gas_station'], 8, 30)) return;
     for (const t of this.world.units) {
       if (t === u || t.team !== u.team || !this.defs.u.get(t.def)!.fuelOnly || distKm(u.pos, t.pos) > 5) continue;
       const have = t.cargo?.res.fuel ?? 0;
@@ -1765,11 +1843,118 @@ export class Sim {
     return this.world.buildings.find((x) => x.id === st.building)?.pos ?? null;
   }
 
-  /** Head for the current stop of the route. */
+  /** Head for the current stop of the route (trains along the track). */
   private haulGo(u: Unit) {
     const h = u.haul!;
     const at = this.stopPos(h.stops[h.idx]);
-    if (at) this.orderMove([u], at, false, false, false);
+    if (!at) return;
+    if (!this.defs.u.get(u.def)!.railOnly) return void this.orderMove([u], at, false, false, false);
+    const way = this.railRoute(u.team, u.pos, at);
+    h.noTrack = !way;
+    h.railSegs = way?.segs;
+    u.path = way ? way.pts.map((p, i) => ({ p, road: false, rail: true, end: i === way.pts.length - 1 })) : [];
+    u.target = way ? at : null;
+  }
+
+  // ---------- railways ----------
+  private rail: { sig: string; team: Team; pts: LngLat[]; adj: Map<number, { to: number; km: number; seg: number }[]> }[] = [];
+  /**
+   * The railway network of a side: stations and the ends of finished track are nodes (anything within 1.5 km is the same
+   * node), finished track segments are edges. Rebuilt when track or stations change.
+   */
+  private railNet(team: Team) {
+    const w = this.world;
+    const parts = w.buildings.filter((b) => b.team === team && b.progress >= 1 && (this.defs.b.get(b.def)!.rail || b.def === 'rail_station'));
+    const sig = parts.map((b) => b.id).join(',');
+    const cached = this.rail.find((x) => x.team === team);
+    if (cached && cached.sig === sig) return cached;
+    const pts: LngLat[] = [];
+    const node = (p: LngLat) => {
+      const i = pts.findIndex((q) => distKm(q, p) <= 1.5);
+      if (i >= 0) return i;
+      pts.push(p);
+      return pts.length - 1;
+    };
+    for (const b of parts) if (b.def === 'rail_station') node(b.pos); // stations first: track ends snap to them
+    const adj = new Map<number, { to: number; km: number; seg: number }[]>();
+    for (const b of parts) {
+      if (!b.line) continue;
+      const i = node(b.line[0]), j = node(b.line[1]);
+      if (i === j) continue;
+      const km = distKm(b.line[0], b.line[1]);
+      (adj.get(i) ?? adj.set(i, []).get(i)!).push({ to: j, km, seg: b.id });
+      (adj.get(j) ?? adj.set(j, []).get(j)!).push({ to: i, km, seg: b.id });
+    }
+    const net = { sig, team, pts, adj };
+    this.rail = [...this.rail.filter((x) => x.team !== team), net];
+    return net;
+  }
+
+  /** Shortest way along your track from `from` to the station at `to` (the points to pass), or null. */
+  railPath(team: Team, from: LngLat, to: LngLat): LngLat[] | null {
+    return this.railRoute(team, from, to)?.pts ?? null;
+  }
+
+  /**
+   * Shortest way along the track: from a station or junction near `from`, or from wherever on a stretch of track the
+   * train stands (both ends of that stretch are starting points), to the node of the station at `to`. Returns the points
+   * to pass and the track segments used (to notice when one is cut).
+   */
+  railRoute(team: Team, from: LngLat, to: LngLat): { pts: LngLat[]; segs: number[] } | null {
+    const net = this.railNet(team);
+    if (!net.pts.length) return null;
+    let goal = -1, dg = 1.6;
+    net.pts.forEach((p, i) => {
+      const b = distKm(p, to);
+      if (b < dg) (dg = b), (goal = i);
+    });
+    if (goal < 0) return null;
+    // starting points with their distance from the train
+    const dist = new Map<number, number>();
+    const prevSeg = new Map<number, number>();
+    net.pts.forEach((p, i) => {
+      const a = distKm(p, from);
+      if (a < 2.5) dist.set(i, a);
+    });
+    if (!dist.size) {
+      for (const b of this.world.buildings) {
+        if (b.team !== team || b.progress < 1 || !b.line || !this.defs.b.get(b.def)!.rail || this.reachKm(b, from) > 0.5) continue;
+        for (const end of b.line) {
+          const i = net.pts.findIndex((q) => distKm(q, end) <= 1.5);
+          if (i >= 0 && distKm(end, from) < (dist.get(i) ?? Infinity)) (dist.set(i, distKm(end, from)), prevSeg.set(i, b.id));
+        }
+      }
+    }
+    if (!dist.size) return null;
+    const prev = new Map<number, { node: number; seg: number }>();
+    const open = new Set<number>(dist.keys());
+    const done = new Set<number>();
+    while (open.size) {
+      let cur = -1, best = Infinity;
+      for (const n of open) if ((dist.get(n) ?? Infinity) < best) (best = dist.get(n)!), (cur = n);
+      open.delete(cur);
+      done.add(cur);
+      if (cur === goal) break;
+      for (const e of net.adj.get(cur) ?? []) {
+        if (done.has(e.to)) continue;
+        const nd = best + e.km;
+        if (nd < (dist.get(e.to) ?? Infinity)) (dist.set(e.to, nd), prev.set(e.to, { node: cur, seg: e.seg }), open.add(e.to));
+      }
+    }
+    if (!dist.has(goal)) return null;
+    const pts: LngLat[] = [];
+    const segs: number[] = [];
+    let n: number | undefined = goal;
+    for (; n !== undefined; ) {
+      pts.unshift(net.pts[n]);
+      const pv = prev.get(n);
+      if (!pv) break;
+      segs.push(pv.seg);
+      n = pv.node;
+    }
+    if (n !== undefined && prevSeg.has(n)) segs.push(prevSeg.get(n)!);
+    pts.push(to);
+    return { pts, segs };
   }
 
   /**
@@ -1796,7 +1981,11 @@ export class Sim {
           u.path = [];
           if (st.action === 'via') return next();
           (h.state = st.action === 'load' ? 'loading' : 'unloading'), (h.timer = st.action === 'load' ? 5 : 4);
-        } else if (!u.path.length && (u.id + w.tick) % 20 === 0) this.haulGo(u); // lost the way: plan again
+        } else if ((u.id + w.tick) % 20 === 0) {
+          // lost the way, or (trains) a stretch of its track was cut: plan again
+          const cut = d.railOnly && (h.railSegs ?? []).some((id) => !w.buildings.some((b) => b.id === id && b.progress >= 1));
+          if (!u.path.length || cut) this.haulGo(u);
+        }
         break;
       }
       case 'loading': {
@@ -1855,6 +2044,19 @@ export class Sim {
     const peace = this.peaceLeft() > 0;
     this.indexWorld();
     for (const u of w.units) {
+      if (u.parkedAt !== undefined) {
+        // waiting at a launcher: lost with it; moved on to a proper launcher once there is one
+        const at = w.buildings.find((b) => b.id === u.parkedAt);
+        if (!at) {
+          u.hp = 0;
+          continue;
+        }
+        u.pos = [at.pos[0], at.pos[1]];
+        const d = this.defs.u.get(u.def)!;
+        if ((u.id + w.tick) % 20 === 0 && !this.defs.b.get(at.def)!.launches?.includes(this.launchKind(d))) this.park(u, at);
+        if (isReconDrone(d) && u.fuel !== undefined && u.maxFuel && this.defs.b.get(at.def)!.launches?.includes('recon')) u.fuel = Math.min(u.maxFuel, u.fuel + 5 * dt);
+        continue;
+      }
       if (u.embarkedIn) {
         // riding along: go wherever the vehicle goes
         const t = w.units.find((x) => x.id === u.embarkedIn);
@@ -1981,6 +2183,7 @@ export class Sim {
       }
 
       // movement: aircraft fly their own way; ground orders follow their route; idle troops close with enemies they see
+      const was0 = u.pos[0], was1 = u.pos[1];
       if (d.kind === 'air') {
         this.advanceAir(u, d, dt);
       } else if (u.path.length) {
@@ -2004,6 +2207,7 @@ export class Sim {
         if (chase && this.isPlayableGround(chase)) this.stepOffRoad(u, d, chase, d.speed * dt * ((u.fuel ?? 1) > 0 ? 1 : 0.2));
         else if (!chase && u.stance === 'defend' && distKm(u.pos, post) > 0.3) this.stepOffRoad(u, d, post, d.speed * dt);
       }
+      if (d.kind !== 'air') u.still = u.pos[0] === was0 && u.pos[1] === was1 ? (u.still ?? 0) + dt : 0;
       if (!u.path.length && !tu && !tb && u.retreatAt && !u.retreating && d.kind !== 'air' && w.tick % r.tickRate === u.id % r.tickRate && u.hp < this.maxHp(u) * u.retreatAt) this.fallBack(u);
     }
 
@@ -2016,7 +2220,7 @@ export class Sim {
       let tgt: Unit | null = null;
       let best = a.range;
       for (const e of w.units) {
-        if (e.team === b.team || e.hp <= 0 || e.embarkedIn) continue;
+        if (e.team === b.team || e.hp <= 0 || e.embarkedIn || e.parkedAt !== undefined) continue;
         const air = this.defs.u.get(e.def)!.kind === 'air';
         if ((a.targets === 'air' && !air) || (a.targets === 'ground' && air)) continue;
         const dist = distKm(b.pos, e.pos);
@@ -2154,6 +2358,11 @@ export class Sim {
    * Rescuers: inside a city they repair the city and its housing at once; outside they patch up buildings within 2 km.
    * Nothing is repaired within 60 s of being hit. Several rescuers work faster (up to 10 hp/s).
    */
+  /** Dug in: a unit that has not moved takes 5% less damage per 15 s it has stood, up to 40% after two minutes. */
+  dugIn(u: Unit): number {
+    return Math.min(0.4, Math.floor((u.still ?? 0) / 15) * 0.05);
+  }
+
   /** Damage multiplier from morale: full above 50, down to half at 0. */
   moraleMult(u: Unit): number {
     const m = u.morale ?? 100;
@@ -2282,8 +2491,8 @@ export class Sim {
         u.path = [];
         break;
       }
-      if (wp.road) {
-        const speed = base * roadMult;
+      if (wp.road || wp.rail) {
+        const speed = base * (wp.rail ? 1 : roadMult);
         if (speed * budget >= dist) {
           u.pos = [wp.p[0], wp.p[1]];
           budget -= dist / speed;

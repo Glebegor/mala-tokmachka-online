@@ -73,7 +73,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let fx: ShotFx | null = null;
   let fog: FogOverlay | null = null;
   /** Click modes for delivery routes and artillery barrages. */
-  const pick: Pickers = { route: null, bombard: null, launch: null, fuel: null };
+  const pick: Pickers = { route: null, bombard: null, launch: null, fuel: null, launchFrom: null, rally: null };
+  let stored: UnitView[] = [];
   /** Attack-move or plain move, and the formation for group moves (set in the command panel, A / F). */
   const orders: OrderStyle = { attack: false, formation: 'spread' };
   /** City boundaries per capture point (housing may only go inside a held city). */
@@ -290,6 +291,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const partners = init ? init.ruleset.buildings.filter((o) => chained(d, o)).map((o) => o.name) : [];
     if (partners.length) f.push(`Keep ${init?.ruleset.rules.minBuildSpacing ?? 17.5} km from: ${partners.join(', ')}`);
     if (d.sameKindKm) f.push(`Keep ${d.sameKindKm} km from another ${d.name}`);
+    if (d.category === 'civil' && !d.line && d.id !== 'housing') f.push(`Keep ${init?.ruleset.rules.civilSpacing ?? 5} km from other civil sites`);
     if (d.vision) f.push(`Sees ${d.vision} km`);
     if (d.maxPerPlayer) f.push(`Limit ${d.maxPerPlayer} per player`);
     return f;
@@ -323,6 +325,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const o = defB.get(other);
     if (o && chained(d, o) && !inZone) return r.minBuildSpacing;
     if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
+    if (o && !inZone && d.category === 'civil' && o.category === 'civil' && !d.line && !o.line && d.id !== 'housing' && o.id !== 'housing') return r.civilSpacing;
     return r.fieldWorkSpacing;
   };
   /** Which side holds the ground (same rule as the server: the painted occupied area, cauldrons first). */
@@ -517,7 +520,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       // bridges: a wide light deck on a dark casing
       const isBridge: any = ['==', ['get', 'kind'], 'bridge'];
       map.addLayer({ id: 'trench-case', type: 'line', source: 'trenches', layout: { 'line-join': 'miter' }, paint: { 'line-color': '#0b0d10', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 4.5, 2.5], 10, ['case', isBridge, 9, 5]], 'line-opacity': ['get', 'o'] } });
-      map.addLayer({ id: 'trench-line', type: 'line', source: 'trenches', layout: { 'line-join': 'miter' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 2.5, 1.2], 10, ['case', isBridge, 5.5, 2.4]], 'line-opacity': ['get', 'o'] } });
+      map.addLayer({ id: 'trench-line', type: 'line', source: 'trenches', filter: ['!=', ['get', 'kind'], 'rail'], layout: { 'line-join': 'miter' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 2.5, 1.2], 10, ['case', isBridge, 5.5, 2.4]], 'line-opacity': ['get', 'o'] } });
+      // railway: the classic dark line with white ties
+      map.addLayer({ id: 'rail-ties', type: 'line', source: 'trenches', filter: ['==', ['get', 'kind'], 'rail'], paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 10, 2.4], 'line-dasharray': [2, 2], 'line-opacity': ['get', 'o'] } });
       // cauldrons: yellow broken ring around the cut-off ground
       map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
       map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
@@ -637,6 +642,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.launch = null;
         return render();
       }
+      if (pick.launchFrom) {
+        send({ type: 'launchFrom', building: pick.launchFrom.building, units: pick.launchFrom.units, target: p });
+        toast(`Launched ${pick.launchFrom.units.length}`);
+        pick.launchFrom = null;
+        return render();
+      }
+      if (pick.rally) {
+        send({ type: 'rally', building: pick.rally.building, pos: p });
+        toast('Rally point set: new units go there');
+        pick.rally = null;
+        return render();
+      }
       if (pick.fuel) {
         // the vehicle under the cursor: own or allied, any that takes fuel
         const layers = ['units-loose', 'units-grouped'].filter((l) => map.getLayer(l));
@@ -673,7 +690,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.bombard = null;
         return render();
       }
-      if (pick.route || pick.launch || pick.fuel) return void ((pick.route = pick.launch = pick.fuel = null), render());
+      if (pick.route || pick.launch || pick.fuel || pick.launchFrom || pick.rally) return void ((pick.route = pick.launch = pick.fuel = pick.launchFrom = pick.rally = null), render());
       if (placing) return cancelPlacing();
       if (!selUnits.size) return;
       const ev = e.originalEvent;
@@ -760,7 +777,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) return toggleMarkMenu();
     if (e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey) return showGuide();
     if (e.key === 'Escape') {
-      if (pick.route || pick.bombard || pick.launch || pick.fuel) return void ((pick.route = pick.bombard = pick.launch = pick.fuel = null), render());
+      if (pick.route || pick.bombard || pick.launch || pick.fuel || pick.launchFrom || pick.rally) return void ((pick.route = pick.bombard = pick.launch = pick.fuel = pick.launchFrom = pick.rally = null), render());
       return cancelPlacing();
     }
     const k = e.key.toLowerCase();
@@ -1048,7 +1065,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const clash = snap.buildings.find((b) => b.def !== 'housing' && distKm(b.pos, p) < spacingBetween(def, b.def, !!zone));
       if (clash) {
         const other = defB.get(clash.def)!;
-        return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : other.id === def.id && def.sameKindKm ? `keep ${def.sameKindKm} km from the next ${def.name}` : 'space occupied';
+        const gap = spacingBetween(def, other.id, !!zone);
+        return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied';
       }
     }
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
@@ -1110,14 +1128,27 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!placing || !init) return;
     const problem = placementProblem(placing, p);
     const color = problem ? '#ff5a5a' : '#5ae88a';
-    const radius = placing.supply?.radiusKm ?? placing.attack?.range ?? placing.crossing?.radiusKm ?? placing.defense?.radiusKm ?? placing.aura?.radiusKm ?? (placing.vision && placing.vision > 8 ? placing.vision : 1.2);
+    // every range the building will have, each in its own colour, plus its footprint
+    const zones: [number, string, string][] = [];
+    if (placing.aura) zones.push([placing.aura.radiusKm, '#a3e635', `+${Math.round((placing.aura.outputMult - 1) * 100)}% output ${placing.aura.radiusKm} km`]);
+    if (placing.defense) zones.push([placing.defense.radiusKm, '#4ade80', `cover ${placing.defense.radiusKm} km`]);
+    if (placing.supply) zones.push([placing.supply.radiusKm, '#e39b4f', `ammo ${placing.supply.radiusKm} km`]);
+    if (placing.heals) zones.push([placing.heals.radiusKm, '#f472b6', `healing ${placing.heals.radiusKm} km`]);
+    if (placing.attack) zones.push([placing.attack.range, '#ffd84a', `fires ${placing.attack.range} km`]);
+    if (placing.crossing) zones.push([placing.crossing.radiusKm, '#7fe7ff', `crossing ${placing.crossing.radiusKm} km`]);
+    if (placing.id === 'power_plant') zones.push([init.ruleset.rules.powerGridKm, '#38bdf8', `grid ${init.ruleset.rules.powerGridKm} km`]);
+    if (placing.vision) zones.push([placing.vision, '#94a3b8', `sight ${placing.vision} km`]);
     (map.getSource('ghost') as GeoJSONSource).setData({
       type: 'FeatureCollection',
-      features: [{ type: 'Feature', properties: { color }, geometry: { type: 'Polygon', coordinates: [circle(p, radius)] } }],
+      features: [
+        { type: 'Feature', properties: { color }, geometry: { type: 'Polygon', coordinates: [circle(p, 0.6)] } },
+        ...zones.map(([km, c]) => ({ type: 'Feature', properties: { color: problem ? '#ff5a5a' : c }, geometry: { type: 'Polygon', coordinates: [circle(p, km, 96)] } })),
+      ],
     });
+    const legend = zones.map((z) => z[2]).join(' · ');
     const road = roads?.isNear(p, init.ruleset.rules.roadAccessKm);
     const bonus = Math.round((init.ruleset.rules.roadOutputMult - 1) * 100);
-    hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''} (Shift keeps placing, Esc cancels)`;
+    hint.textContent = problem ? `${placing.name}: ${problem}` : `${placing.name}: click to build${legend ? ` · ${legend}` : ''}${placing.produces ? (road ? ` · road access +${bonus}% output` : ' · no road nearby') : ''} (Shift keeps placing, Esc cancels)`;
   }
 
   // ---------- UI ----------
@@ -1241,6 +1272,21 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             }))));
         }
         if (b.def === 'aircraft_plant') side.append(h('div', { class: 'muted' }, 'Production starts with a coming update.'));
+        // drones and missiles waiting here
+        const waiting = stored.filter((x) => x.parkedAt === b.id && x.owner === me);
+        if (waiting.length) {
+          const box = h('div', { class: 'storage-box' }, h('b', {}, d.launches?.length ? 'Ready to launch' : 'Waiting for a launcher (Airfield for recon, Launch Site for strike)'));
+          const byDef = new Map<string, UnitView[]>();
+          for (const x of waiting) byDef.set(x.def, [...(byDef.get(x.def) ?? []), x]);
+          for (const [def, list] of byDef) {
+            const ud = defU.get(def)!;
+            const can = !!d.launches?.includes(isReconDrone(ud) ? 'recon' : 'strike');
+            box.append(h('div', { class: 'row' }, unitIcon(ud, 0), h('span', {}, `${ud.name} ×${list.length}`),
+              can ? h('button', { class: 'hud-btn sm', onClick: () => ((pick.launchFrom = { building: b.id, units: [list[0].id] }), toast('Click the target'), render()) }, 'Launch 1 at…') : null,
+              can && list.length > 1 ? h('button', { class: 'hud-btn sm', onClick: () => ((pick.launchFrom = { building: b.id, units: list.map((x) => x.id) }), toast('Click the target'), render()) }, 'Launch all at…') : null));
+          }
+          side.append(box);
+        }
         if (d.training && b.progress >= 1 && !locked) {
           const t = d.training;
           const inside = b.inside ?? [];
@@ -1313,6 +1359,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             sideQueue = { list, building: b.id };
             queueSlot.replaceChildren(list.el);
           }
+          // rally point: where new units go (craft go to their launcher instead)
+          if (d.trains?.length) {
+            side.append(h('div', { class: 'row' },
+              h('button', { class: 'hud-btn sm' + (pick.rally?.building === b.id ? ' active' : ''), title: 'Click the map: new ground units walk there', onClick: () => ((pick.rally = pick.rally ? null : { building: b.id }), render()) }, b.rally ? 'Move rally point' : 'Set rally point'),
+              b.rally ? h('button', { class: 'hud-btn sm warn', onClick: () => send({ type: 'rally', building: b.id, pos: null }) }, 'Clear') : null,
+              h('span', { class: 'muted' }, b.rally ? 'new units walk to the flag' : 'new units stay here')));
+          }
           for (const uid of d.trains ?? []) {
             const u = defU.get(uid)!;
             if (u.side && u.side !== mySide) continue;
@@ -1325,6 +1378,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               h('span', { class: 'meta' }, h('b', {}, `Train ${u.name} · ${Math.round(u.trainTime * init.ruleset.rules.trainTimeMult * 10) / 10}s`), costHtml(u.cost, have),
                 short && short[0] !== 'money' && short[0] !== 'people' ? h('small', { class: 'warn' }, `Not enough ${short[0]} on site: deliver it by truck`) : null));
             describe(btn, u.name, u.description, unitFacts(u), 'left');
+            // repeat: keep making this one while resources last
+            const rep = h('button', { class: 'rep' + (b.repeat === uid ? ' on' : ''), title: b.repeat === uid ? 'Stop repeating' : `Keep training ${u.name} while resources last`, onClick: (e: MouseEvent) => (e.stopPropagation(), send({ type: 'repeat', building: b.id, unit: b.repeat === uid ? null : uid })) }, '↻');
+            if (b.owner === me) btn.append(rep);
             side.append(btn);
           }
         }
@@ -1432,6 +1488,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let lastPalette = 0;
   function onSnapshot(s: SnapMsg) {
     if (import.meta.env.DEV) s.pockets.push(...((window as any).__sw?.fakePockets ?? [])), s.grey.push(...((window as any).__sw?.fakeGrey ?? [])); // browser tests draw cauldrons this way
+    // riders and craft waiting at launchers are listed in panels, not drawn on the map
+    stored = s.units.filter((u) => u.embarkedIn !== undefined || u.parkedAt !== undefined);
+    s.units = s.units.filter((u) => u.embarkedIn === undefined && u.parkedAt === undefined);
     snap = s;
     if (import.meta.env.DEV && (window as any).__sw?.fakeLiberated) s.liberated = (window as any).__sw.fakeLiberated; // browser tests
     if (s.liberated) {
@@ -1468,13 +1527,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function renderHud() {
     if (!init || !snap) return;
     renderUnitHud(unitHud, {
-      orders, snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, fuelPerKm: init.ruleset.rules.fuelPerKm, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
+      orders, stored, snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, fuelPerKm: init.ruleset.rules.fuelPerKm, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
     });
     routeBanner.style.display = pick.route ? 'block' : 'none';
     routeBanner.textContent = pick.route
       ? pick.route.stops.length ? 'Delivery route: click buildings to add stops, the map to add a waypoint, then Start route (Esc cancels)' : 'Delivery route: click the building to load at (Esc cancels)'
       : '';
-    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch || pick.fuel));
+    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch || pick.fuel || pick.launchFrom || pick.rally));
   }
 
   /** Full refresh after a local change (selection, grouping). */
@@ -1546,10 +1605,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pts.push(offsetKm([a[0] + (c[0] - a[0]) * t, a[1] + (c[1] - a[1]) * t], (-dy / len) * side, (dx / len) * side));
       }
       const bridge = !!defB.get(b.def)?.spansWater;
-      trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : 'trench', color: bridge ? '#e7e2cf' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge ? [a, c] : pts } });
+      const rail = !!defB.get(b.def)?.rail;
+      trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
     }
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
     const rings: any[] = [];
+    // the selected building's rally point: a dashed line to a flag
+    const rallyB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding && x.rally) : null;
+    if (rallyB?.rally) {
+      rings.push({ type: 'Feature', properties: { color: '#ffe45c', w: 2, o: 0.9 }, geometry: { type: 'LineString', coordinates: [rallyB.pos, rallyB.rally] } });
+      rings.push({ type: 'Feature', properties: { color: '#ffe45c', w: 2, o: 0.9 }, geometry: { type: 'LineString', coordinates: circle(rallyB.rally, 0.4, 16) } });
+    }
     // the selected building: every range it has, bold (what it covers while you read its description)
     const selB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding) : null;
     if (selB) {

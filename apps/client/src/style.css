@@ -375,3 +375,6 @@ kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); bo
 :root { --ui: 1; }
 .game > :not(.map):not(.selbox), .lobby, .center, .overlay > .card, .info-card { zoom: var(--ui); }
 .ui-scale { padding: 3px 6px; font-size: 12px; }
+
+.bld .rep { position: absolute; right: 4px; top: 4px; width: 20px; height: 20px; padding: 0; font-size: 12px; line-height: 1; color: var(--muted); }
+.bld .rep.on { color: #0b0d10; background: var(--accent); border-color: var(--accent); }

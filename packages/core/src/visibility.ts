@@ -40,6 +40,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       .filter((b) => b.team === team || (seen(b.pos) && b.def !== 'gas_station'))
       .map((b) => ({
         id: b.id, def: b.def, owner: b.owner, team: b.team, pos: p4(b.pos), line: b.line ? [p4(b.line[0]), p4(b.line[1])] as [LngLat, LngLat] : undefined, size: b.size, hp: Math.round(b.hp), progress: b.progress, road: b.road, cooldown: 0, level: b.level,
+        rally: b.team === team ? b.rally : undefined,
+        repeat: b.team === team ? b.repeat : undefined,
         upgrade: b.team === team && b.upgrade ? { remaining: Math.ceil(b.upgrade.remaining), total: b.upgrade.total } : null,
         course: b.team === team && b.course ? { remaining: Math.ceil(b.course.remaining), total: b.course.total } : null,
         inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank, ready: sim.canTrain(u) })) : undefined,
@@ -47,7 +49,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       })),
     units: w.units
       .filter((u) => {
-        if (u.embarkedIn) return false; // riders are inside their vehicle
+        if (u.embarkedIn && u.team !== team) return false; // riders are inside their vehicle
+        if (u.parkedAt !== undefined && u.team !== team) return false; // grounded at a launcher
         if (u.team === team) return true;
         const d = sim.defs.u.get(u.def)!;
         if (d.kind === 'air') return seen(u.pos);
@@ -81,6 +84,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers, drones: u.cargo.drones } : undefined,
           haul: own ? u.haul : undefined,
           fuelTo: mine ? u.fuelTo : undefined,
+          parkedAt: own ? u.parkedAt : undefined,
+          embarkedIn: own ? u.embarkedIn : undefined,
           loiterCenter: own && u.loiterCenter ? p4(u.loiterCenter) : undefined,
           loiterRadius: own ? u.loiterRadius : undefined,
           isLoitering: own ? u.isLoitering : undefined,

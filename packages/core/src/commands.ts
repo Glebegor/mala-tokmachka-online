@@ -5,6 +5,12 @@ export type Command =
   /** `to`: the far end of a line structure (trench) drawn from `pos`. */
   | { type: 'build'; def: string; pos: LngLat; to?: LngLat }
   | { type: 'train'; building: number; unit: string }
+  /** Where a production building sends what it makes (null: they stay at the building). */
+  | { type: 'rally'; building: number; pos: [number, number] | null }
+  /** Keep training this unit whenever the queue is empty and resources allow (null: stop). */
+  | { type: 'repeat'; building: number; unit: string | null }
+  /** Launch drones or missiles waiting at a launcher at a target. */
+  | { type: 'launchFrom'; building: number; units: number[]; target: [number, number] }
   /** Cancel one of your own training orders (full refund). */
   | { type: 'cancelTrain'; item: number }
   /**
