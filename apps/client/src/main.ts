@@ -4,8 +4,10 @@ import { h, clear } from './dom';
 import { showLobby } from './lobby';
 import { startGame } from './game';
 import { setUiScale, uiScale } from './uiScale';
+import { langControl, startTranslation } from './i18n';
 
 setUiScale(uiScale());
+startTranslation();
 
 const app = document.getElementById('app')!;
 
@@ -26,7 +28,7 @@ function showLogin(error = '') {
   app.append(
     h('div', { class: 'center' },
       h('div', { class: 'card login' },
-        h('div', { class: 'logo' }, 'MALA TOKMACHKA', h('span', {}, 'ONLINE')),
+        h('div', { class: 'row between' }, h('div', { class: 'logo' }, 'MALA TOKMACHKA', h('span', {}, 'ONLINE')), langControl()),
         name, pass, err,
         h('div', { class: 'row' },
           h('button', { class: 'primary', onClick: () => go(false) }, 'Sign in'),
