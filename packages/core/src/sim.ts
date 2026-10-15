@@ -902,6 +902,19 @@ export class Sim {
       }
       case 'enter': {
         const b = w.buildings.find((x) => x.id === cmd.building);
+        const g = b && this.defs.b.get(b.def)!.garrison;
+        if (b && g) {
+          // a bunker: troops on foot take cover inside
+          if (b.team !== p.team || b.progress < 1) return fail('not a bunker of your side');
+          if (!this.usable(b, p.id)) return fail('a teammate keeps this bunker to themselves');
+          const set = new Set(cmd.units);
+          const free = g.capacity - b.inside.length - w.units.filter((u) => u.enter === b.id).length;
+          const men = w.units.filter((u) => set.has(u.id) && u.owner === p.id && this.defs.u.get(u.def)!.kind === 'ground' && (this.defs.u.get(u.def)!.mobility ?? 'foot') === 'foot' && this.defs.u.get(u.def)!.damage > 0).slice(0, Math.max(0, free));
+          if (!men.length) return fail(free <= 0 ? 'the bunker is full' : 'only armed troops on foot can man a bunker');
+          if (!this.orderMove(men, b.pos, false, false, false)) return fail('no way to the bunker');
+          for (const u of men) if (u.path.length) u.enter = b.id;
+          return ok();
+        }
         const t = b && this.defs.b.get(b.def)!.training;
         if (!b || !t || b.team !== p.team || b.progress < 1) return fail('not a training centre of your side');
         if (!this.usable(b, p.id)) return fail('a teammate keeps this training centre to themselves');
@@ -1422,6 +1435,7 @@ export class Sim {
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
       if (this.dugIn(u) > 0) s.push(['dugin', this.dugIn(u)]);
+      if ((u.suppressedUntil ?? 0) > this.world.time) s.push(['suppressed', 1.25]);
       if (u.morale !== undefined && u.morale < 25) s.push(['broken', u.morale / 100]);
       else if (u.morale !== undefined && u.morale < 50) s.push(['lowmorale', this.moraleMult(u)]);
       if (u.ammo !== undefined && d.maxAmmo) {
@@ -1443,9 +1457,10 @@ export class Sim {
     for (const u of w.units) {
       if (!u.enter || u.path.length) continue;
       const b = w.buildings.find((x) => x.id === u.enter);
-      const t = b && this.defs.b.get(b.def)!.training;
+      const bd = b && this.defs.b.get(b.def)!;
+      const cap = bd?.training?.capacity ?? bd?.garrison?.capacity;
       u.enter = 0;
-      if (!b || !t || b.course || b.inside.length >= t.capacity || distKm(u.pos, b.pos) > 3) continue;
+      if (!b || !cap || b.course || b.inside.length >= cap || distKm(u.pos, b.pos) > 3) continue;
       u.hp = Math.max(u.hp, 1);
       b.inside.push(u);
     }
@@ -1728,7 +1743,8 @@ export class Sim {
     const air = td.kind === 'air';
     const cover = air ? 0 : this.terrainAt(target.pos).cover;
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
-    const dealt = (raw * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
+    const shaken = (target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1;
+    const dealt = (raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
     target.lastHit = this.world.time;
     // being hit shakes a unit (more the harder the blow)
@@ -1741,8 +1757,9 @@ export class Sim {
     return dealt;
   }
 
-  private hitBuilding(attacker: Unit, b: Building, raw: number): number {
+  private hitBuilding(attacker: Unit, b: Building, raw: number, blast = false): number {
     const dealt = raw / this.holdMult(b.team, b.pos);
+    b.lastHitBy = blast ? 'blast' : 'direct';
     b.hp -= dealt;
     b.lastDamagedTime = this.world.time;
     if (b.hp <= 0) this.stat(attacker.owner).buildingsDestroyed++;
@@ -1760,7 +1777,7 @@ export class Sim {
     for (const b of this.world.buildings) {
       if (b.team === attacker.team || b.hp <= 0) continue;
       const d = this.reachKm(b, at); // a bridge or trench is hit anywhere along its length
-      if (d <= radius) total += this.hitBuilding(attacker, b, damage * 0.8 * (1 - d / radius));
+      if (d <= radius) total += this.hitBuilding(attacker, b, damage * 0.8 * (1 - d / radius), true);
     }
     if (hitsCities) {
       this.map.capturePoints.forEach((cp, i) => {
@@ -2087,7 +2104,7 @@ export class Sim {
       if ((u.id + w.tick) % r.tickRate === 0) this.resupply(u, d, 1);
       // no rounds left, no shooting
       const perShot = d.ammoPerShot ?? 1;
-      const canFire = (!d.maxAmmo || (u.ammo ?? 0) >= perShot) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
+      const canFire = (u.suppressedUntil ?? 0) <= w.time && (!d.maxAmmo || (u.ammo ?? 0) >= perShot) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
 
       // artillery barrage on a chosen area (2 s salvos, 1 km blast, a little scatter)
       let barrage = false;
@@ -2211,6 +2228,35 @@ export class Sim {
       if (!u.path.length && !tu && !tb && u.retreatAt && !u.retreating && d.kind !== 'air' && w.tick % r.tickRate === u.id % r.tickRate && u.hp < this.maxHp(u) * u.retreatAt) this.fallBack(u);
     }
 
+    // garrisons fire out of their bunkers (they cannot be shot until it falls)
+    if (!peace) {
+      for (const b of w.buildings) {
+        if (!b.inside.length || !this.defs.b.get(b.def)!.garrison) continue;
+        for (const g of b.inside) {
+          const gd = this.defs.u.get(g.def)!;
+          g.pos = [b.pos[0], b.pos[1]];
+          g.cooldown = Math.max(0, g.cooldown - dt);
+          if (g.cooldown > 0 || g.fireMode === 'hold' || (gd.maxAmmo && (g.ammo ?? 0) < (gd.ammoPerShot ?? 1))) continue;
+          const range = gd.range * this.ranks[g.rank].range + 0.3;
+          let tgt: Unit | null = null;
+          let best = range;
+          this.near(this.unitGrid, b.pos, range, (e) => {
+            if (e.team === b.team || e.hp <= 0 || e.embarkedIn || this.defs.u.get(e.def)!.kind === 'air') return;
+            const dist = distKm(b.pos, e.pos);
+            if (dist <= best) (best = dist), (tgt = e);
+          });
+          if (!tgt) continue;
+          const target: Unit = tgt;
+          g.cooldown = 1;
+          if (gd.maxAmmo) g.ammo = (g.ammo ?? 0) - (gd.ammoPerShot ?? 1);
+          const dealt = this.hitUnit(g, target, gd.damage * this.ranks[g.rank].damage * this.moraleMult(g));
+          g.xp += dealt * r.xpPerDamage;
+          this.stat(g.owner).damage += dealt;
+          this.shots.push({ def: g.def, team: g.team, from: b.pos, to: target.pos });
+        }
+      }
+    }
+
     // static weapons (air defence and the like)
     for (const b of w.buildings) {
       const a = this.defs.b.get(b.def)!.attack;
@@ -2251,6 +2297,14 @@ export class Sim {
     }
     const deadB = w.buildings.filter((b) => b.hp <= 0);
     if (deadB.length) {
+      for (const b of deadB) {
+        if (!this.defs.b.get(b.def)!.garrison || !b.inside.length) continue;
+        if (b.lastHitBy === 'blast') {
+          // shelled to rubble with the men inside
+          for (const u of b.inside) (this.stat(u.owner).losses++), this.hooks.emit('unitKilled', { id: u.id, def: u.def, owner: u.owner });
+          b.inside = [];
+        } else for (const u of b.inside) u.suppressedUntil = w.time + 8; // stormed: they stumble out shaken
+      }
       deadB.forEach((b) => this.evict(b, 0.5));
       w.buildings = w.buildings.filter((b) => b.hp > 0);
       deadB.forEach((b) => this.hooks.emit('buildingDestroyed', { id: b.id, def: b.def, owner: b.owner }));
@@ -2553,6 +2607,12 @@ export class Sim {
         if (ud.kind === 'air') return; // only ground troops hold or take ground
         force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R);
       });
+      // a manned bunker anchors the line: its garrison counts double
+      for (const b of this.garrisons()) {
+        const d = distKm(b.pos, pos);
+        if (d > R) continue;
+        for (const g of b.inside) force[g.team] += this.defs.u.get(g.def)!.damage * 2 * (1 - d / R);
+      }
       // troops sitting unopposed behind the line loosen it
       for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) force[z.team] += r.greyZonePush;
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
@@ -2647,6 +2707,13 @@ export class Sim {
       for (const j of touched) moved.add(j);
     }
     return moved.size > 0;
+  }
+
+  private garrisonCache: { tick: number; list: Building[] } = { tick: -1, list: [] };
+  /** Bunkers with men inside (refreshed every tick). */
+  private garrisons(): Building[] {
+    if (this.garrisonCache.tick !== this.world.tick) this.garrisonCache = { tick: this.world.tick, list: this.world.buildings.filter((b) => b.inside.length && this.defs.b.get(b.def)!.garrison) };
+    return this.garrisonCache.list;
   }
 
   /** When the jaws of a pincer meet, the loop of front between them is cut off and becomes a cauldron. */

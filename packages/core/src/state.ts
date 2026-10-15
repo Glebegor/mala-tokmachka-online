@@ -29,6 +29,8 @@ export interface Building {
   /** Line structures (trenches): the two ends, and the length in km (cost, build time and upgrades scale with it). */
   line?: [LngLat, LngLat];
   size?: number;
+  /** What last damaged it: a blast (artillery, missile, drone) kills a garrison with the building, direct fire does not. */
+  lastHitBy?: 'blast' | 'direct';
   /** Production buildings: where new units walk to (none = they stay at the building). */
   rally?: LngLat;
   /** Keeps training this unit whenever its queue is empty and the resources are there. */
@@ -103,6 +105,8 @@ export interface Unit {
   rank: number; // index into ruleset.ranks
   /** 0–100. Falls when encircled, out of ammo or under fire; below 50 it fights worse; encircled at 0 it surrenders. */
   morale?: number;
+  /** Shaken after its bunker fell: cannot fire and takes more damage until this time. */
+  suppressedUntil?: number;
   /** Seconds it has stood still (digging in: the longer, the better protected). */
   still?: number;
   /** Sim time it last took damage (healing waits until it has been out of the fight for a while). */
@@ -167,7 +171,7 @@ export interface Unit {
 export type UnitStatus = [id: string, value: number];
 
 /** Which status ids are debuffs. */
-export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo', 'lowmorale', 'broken']);
+export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo', 'lowmorale', 'broken', 'suppressed']);
 
 export interface Waypoint {
   p: LngLat;

@@ -606,14 +606,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!placing?.line || e.originalEvent.button !== 0 || e.originalEvent.shiftKey) return;
       lineStart = [e.lngLat.lng, e.lngLat.lat];
       lineStartPx = { x: e.point.x, y: e.point.y };
-      map.dragPan.disable();
     });
     map.on('mouseup', (e) => {
       if (!lineStart || !placing) return;
       const start = lineStart;
       const dragged = Math.hypot(e.point.x - lineStartPx.x, e.point.y - lineStartPx.y) > 8;
       lineStart = null;
-      map.dragPan.enable();
       suppressClick = performance.now(); // the click that follows is this release
       send({ type: 'build', def: placing.id, pos: start, to: dragged ? [e.lngLat.lng, e.lngLat.lat] : undefined });
       if (!e.originalEvent.shiftKey) cancelPlacing();
@@ -1015,7 +1013,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function cancelPlacing() {
     if (!placing) return;
-    if (lineStart) (lineStart = null), map.dragPan.enable();
+    lineStart = null;
+    map.dragPan.enable(); // panning back on after drawing lines
     placing = null;
     showPlacementAids();
     hint.textContent = HINT;
@@ -1174,9 +1173,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const btn =
           h('button', { class: 'bld' + (placing?.id === b.id ? ' active' : ''), onClick: () => {
             placing = b;
+            // lines (trenches, bridges, railways) are drawn by dragging: the map must not pan meanwhile
+            if (b.line) map.dragPan.disable();
+            else map.dragPan.enable();
             mapEl.classList.add('placing');
             showPlacementAids();
-            hint.textContent = `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
+            hint.textContent = b.line ? `${b.name}: press and drag on the map the way it should run, release to build (a click gives a short one; Esc cancels)` : `Placing ${b.name} — click on your territory (Shift keeps placing, Esc cancels)`;
             buildPalette();
           } },
             h('span', { class: 'ico' }, b.icon),
@@ -1286,6 +1288,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               can && list.length > 1 ? h('button', { class: 'hud-btn sm', onClick: () => ((pick.launchFrom = { building: b.id, units: list.map((x) => x.id) }), toast('Click the target'), render()) }, 'Launch all at…') : null));
           }
           side.append(box);
+        }
+        if (d.garrison && b.progress >= 1 && !locked) {
+          const inside = b.inside ?? [];
+          side.append(h('div', { class: 'stat' }, `Garrison: ${inside.length}/${d.garrison.capacity}`));
+          if (inside.length) side.append(h('div', { class: 'row pupils' }, ...inside.map((u) => unitIcon(defU.get(u.def)!, u.rank))), h('button', { onClick: () => send({ type: 'release', building: b.id }) }, 'Send everyone out'));
+          side.append(h('div', { class: 'muted' }, 'Select squads on foot and right click the bunker to man it. They fire out and cannot be hit until it falls.'));
         }
         if (d.training && b.progress >= 1 && !locked) {
           const t = d.training;
@@ -1688,7 +1696,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         });
         el.addEventListener('contextmenu', (ev) => {
           // right click on your own training centre with units selected sends them inside
-          if (b.team !== myTeam || !d.training || !selUnits.size) return;
+          if (b.team !== myTeam || !(d.training || d.garrison) || !selUnits.size) return;
           ev.preventDefault();
           ev.stopPropagation();
           send({ type: 'enter', units: [...selUnits], building: b.id });

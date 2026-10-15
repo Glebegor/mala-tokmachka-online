@@ -269,13 +269,13 @@
     "name": "Bunker",
     "category": "military",
     "icon": "▣",
-    "description": "Hardened position: strong damage reduction and front resistance within 8 km. Bunkers do not stack with each other (a bunker and a trench do): upgrade it instead (3 levels).",
+    "description": "Hardened position: up to 4 armed squads on foot can man it (select them, right click the bunker). They fire out of it, cannot be hit until it falls, and the front is very hard to push past it. Shelled down by artillery, missiles or drones, the garrison dies with it; stormed by troops, they stumble out shaken (8 s: cannot fire, take 25% more damage). Also gives cover within 8 km. Bunkers do not add up: upgrade one instead.",
     "cost": {
       "money": 220,
       "metal": 25
     },
     "buildTime": 18,
-    "hp": 900,
+    "hp": 1400,
     "defense": {
       "radiusKm": 8,
       "mult": 0.6
@@ -301,7 +301,10 @@
         "hp": 2000
       }
     ],
-    "fieldWork": true
+    "fieldWork": true,
+    "garrison": {
+      "capacity": 4
+    }
   },
   {
     "id": "signal_station",
