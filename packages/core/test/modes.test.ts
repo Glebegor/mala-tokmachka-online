@@ -837,11 +837,13 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.equal(d1.parkedAt, df.id, 'no launch site yet: it waits at the factory');
   assert.equal(sim.apply('a', { type: 'move', units: [d1.id], to: offsetKm(hq.pos, 30, 30) }).ok, false, 'it cannot just fly off');
   const ls = site('launch_site', 20);
-  run(sim, 3);
+  assert.ok(sim.apply('a', { type: 'dispatchDrones', building: df.id }).ok);
+  run(sim, 20);
   assert.equal(d1.parkedAt, ls.id, 'delivered to the new launch site');
   const af = site('airfield', 30, { fuel: 1000 });
+  df.rally = af.pos;
   sim.apply('a', { type: 'train', building: df.id, unit: 'drone_pd2' });
-  run(sim, 2);
+  run(sim, 45);
   const rec = sim.world.units.find((u) => u.def === 'drone_pd2')!;
   assert.equal(rec.parkedAt, af.id, 'recon drones go to the airfield');
   assert.equal(sim.apply('a', { type: 'launchFrom', building: ls.id, units: [rec.id], target: hq.pos }).ok, false, 'not from the launch site');

@@ -838,14 +838,14 @@ export class Sim {
         const td = this.defs.u.get(t.def)!;
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') {
-          // small drones ride on a vehicle's launcher
-          if (!ud.launchable) return fail('only small drones can be carried');
+          // small drones ride on a vehicle's launcher, logistics trucks can carry any drone
+          if (!ud.launchable && td.def !== 'truck') return fail('only small drones can be carried');
           if (!td.droneCap) return fail('that vehicle has no drone launcher');
           t.cargo ??= { res: {}, cap: td.cargoCap ?? 0, passengers: [] };
           t.cargo.drones ??= [];
           if (t.cargo.drones.length >= td.droneCap) return fail('launcher full');
           if (distKm(u.pos, t.pos) > 10) return fail('too far from the vehicle');
-          u.parkedAt = undefined; // a pickup can take drones off a launcher
+          u.parkedAt = undefined; // a pickup or truck can take drones off a launcher or factory
           u.embarkedIn = t.id;
           (u.path = []), (u.target = null), (u.pos = [t.pos[0], t.pos[1]]), (u.isLoitering = false), (u.loiterCenter = undefined);
           t.cargo.drones.push(u.id);
@@ -1004,6 +1004,47 @@ export class Sim {
         this.credit(p, Object.fromEntries(Object.entries(d.cost).map(([k, v]) => [k, v * 0.4 * (b.size ?? 1)])));
         this.evict(b);
         w.buildings.splice(i, 1);
+        return ok();
+      }
+      case 'departNow': {
+        const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id);
+        if (!u || !u.haul) return fail('truck has no delivery route');
+        const h = u.haul;
+        h.waiting = false;
+        h.timer = 0;
+        let nextIdx = (h.idx + 1) % h.stops.length;
+        while (h.stops[nextIdx]?.once) {
+          h.stops.splice(nextIdx, 1);
+          if (!h.stops.length) return void (u.haul = undefined), ok();
+          nextIdx = nextIdx % h.stops.length;
+        }
+        h.idx = nextIdx;
+        this.haulGo(u);
+        return ok();
+      }
+      case 'dispatchDrones': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.owner === p.id);
+        if (!b) return fail('building not found');
+        const waiting = w.units.filter((u) => u.parkedAt === b.id && u.owner === p.id);
+        if (!waiting.length) return fail('no drones waiting at this building');
+        for (const u of waiting) {
+          const kind = this.launchKind(this.defs.u.get(u.def)!);
+          let targetB: Building | null = null;
+          if (cmd.targetLauncher) {
+            targetB = w.buildings.find((x) => x.id === cmd.targetLauncher && x.team === u.team && (x.progress ?? 1) >= 1 && this.defs.b.get(x.def)!.launches?.includes(kind)) ?? null;
+          }
+          if (!targetB) {
+            for (const ob of w.buildings) {
+              if (ob.team !== u.team || (ob.progress ?? 1) < 1 || !this.defs.b.get(ob.def)!.launches?.includes(kind) || !this.usable(ob, u.owner)) continue;
+              if (!targetB || distKm(ob.pos, b.pos) < distKm(targetB.pos, b.pos)) targetB = ob;
+            }
+          }
+          if (targetB) {
+            u.parkedAt = undefined;
+            u.pos = [b.pos[0], b.pos[1]];
+            this.orderMove([u], targetB.pos, false, false, false);
+          }
+        }
         return ok();
       }
     }
@@ -1610,8 +1651,14 @@ export class Sim {
       if (!p) return false;
       const n = w.units.length;
       const u = this.spawnUnit(q.unit, p, [b.pos[0] + 0.03 * Math.cos(n * 1.9), b.pos[1] + 0.02 * Math.sin(n * 1.9)]);
-      if (this.defs.u.get(u.def)!.kind === 'air') this.park(u, b);
-      else if (b.rally) this.orderMove([u], b.rally, false, false, false); // off to the rally point
+      if (this.defs.u.get(u.def)!.kind === 'air') {
+        if (b.rally) {
+          u.parkedAt = undefined;
+          this.orderMove([u], b.rally, false, false, false);
+        } else {
+          this.park(u, b);
+        }
+      } else if (b.rally) this.orderMove([u], b.rally, false, false, false);
       this.stat(q.owner).unitsTrained++;
       this.hooks.emit('unitTrained', { owner: q.owner, def: q.unit });
       return false;
@@ -1624,17 +1671,9 @@ export class Sim {
   }
 
   /**
-   * A new drone or missile waits at the nearest launcher of its kind on its side (delivered there), or at the building
-   * that made it until there is one.
+   * A drone or missile waits at the specified launcher or factory until launched or transported.
    */
-  private park(u: Unit, made: Building) {
-    const kind = this.launchKind(this.defs.u.get(u.def)!);
-    let best: Building | null = null;
-    for (const b of this.world.buildings) {
-      if (b.team !== u.team || b.progress < 1 || !this.defs.b.get(b.def)!.launches?.includes(kind) || !this.usable(b, u.owner)) continue;
-      if (!best || distKm(b.pos, made.pos) < distKm(best.pos, made.pos)) best = b;
-    }
-    const at = best ?? made;
+  private park(u: Unit, at: Building) {
     u.parkedAt = at.id;
     u.pos = [at.pos[0], at.pos[1]];
     (u.path = []), (u.target = null), (u.isLoitering = false), (u.loiterCenter = undefined);
@@ -2168,7 +2207,6 @@ export class Sim {
         }
         u.pos = [at.pos[0], at.pos[1]];
         const d = this.defs.u.get(u.def)!;
-        if ((u.id + w.tick) % 20 === 0 && !this.defs.b.get(at.def)!.launches?.includes(this.launchKind(d))) this.park(u, at);
         if (isReconDrone(d) && u.fuel !== undefined && u.maxFuel && this.defs.b.get(at.def)!.launches?.includes('recon')) u.fuel = Math.min(u.maxFuel, u.fuel + 5 * dt);
         continue;
       }
@@ -2498,6 +2536,16 @@ export class Sim {
     if (hitting) u.pos = [wp.p[0], wp.p[1]];
     const done = u.path.shift()!;
     if (recon && u.isLoitering) u.path.push(done); // keep circling
+    if (!u.path.length) {
+      const kind = this.launchKind(d);
+      const nearLauncher = this.world.buildings.find(
+        (b) => b.team === u.team && (b.progress ?? 1) >= 1 && this.defs.b.get(b.def)!.launches?.includes(kind) && distKm(b.pos, u.pos) <= 2.5
+      );
+      if (nearLauncher) {
+        this.park(u, nearLauncher);
+        return;
+      }
+    }
     if (recon && !u.path.length) {
       u.isLoitering = true;
       u.path = this.orbit(u);

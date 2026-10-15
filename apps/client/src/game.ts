@@ -625,11 +625,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     const setScale = () => mapEl.style.setProperty('--s', String(Math.min(1.4, Math.max(0.42, (map.getZoom() - 3.6) / 4.6))));
-    map.on('zoom', setScale);
+    const updateZoom = () => {
+      setScale();
+      const z = map.getZoom();
+      mapEl.classList.toggle('far', z < 6.6);
+      mapEl.classList.toggle('zoom-out', z < 7.5);
+    };
+    map.on('zoom', updateZoom);
     map.on('zoomend', () => renderUnits()); // ground markers come back when zooming in
-    map.on('zoom', () => mapEl.classList.toggle('far', map.getZoom() < 6.6));
-    mapEl.classList.toggle('far', m.zoom < 6.6);
-    setScale();
+    updateZoom();
 
     let lastHover = 0;
     // line structures (trenches): press, drag the way it should run, release
@@ -807,6 +811,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function selectAt(point: { x: number; y: number }, shift: boolean) {
     const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
     const hit = map.queryRenderedFeatures([[point.x - 6, point.y - 6], [point.x + 6, point.y + 6]], { layers }).find((f) => f.properties?.own);
+    const trenchHit = !hit && map.getLayer('trench-line') ? map.queryRenderedFeatures([[point.x - 8, point.y - 8], [point.x + 8, point.y + 8]], { layers: ['trench-line', 'trench-case'] })[0] : null;
+    if (trenchHit?.properties?.id) {
+      selBuilding = Number(trenchHit.properties.id);
+      selUnits = new Set();
+      render();
+      return;
+    }
     selBuilding = null;
     const many = hit?.properties?.gid ? [...(groups.get(Number(hit.properties.gid))?.ids ?? [])] : hit?.properties?.ids ? (JSON.parse(hit.properties.ids) as number[]) : null;
     if (many) {
@@ -1377,6 +1388,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               can ? h('button', { class: 'hud-btn sm', onClick: () => ((pick.launchFrom = { building: b.id, units: [list[0].id] }), toast('Click the target'), render()) }, 'Launch 1 at…') : null,
               can && list.length > 1 ? h('button', { class: 'hud-btn sm', onClick: () => ((pick.launchFrom = { building: b.id, units: list.map((x) => x.id) }), toast('Click the target'), render()) }, 'Launch all at…') : null));
           }
+          if (!d.launches?.length) {
+            box.append(h('button', { class: 'hud-btn sm', title: 'Fly waiting drones to the nearest launch site or airfield', onClick: () => {
+              send({ type: 'dispatchDrones', building: b.id });
+              toast('Drones dispatched to launcher');
+            } }, 'Відправити на майданчик (Dispatch to launcher)'));
+          }
           side.append(box);
         }
         if (d.garrison && b.progress >= 1 && !locked) {
@@ -1735,7 +1752,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       const bridge = !!defB.get(b.def)?.spansWater;
       const rail = !!defB.get(b.def)?.rail;
-      trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: staleIds.has(b.id) ? 0.45 : b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
+      trenches.push({ type: 'Feature', properties: { id: b.id, kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: staleIds.has(b.id) ? 0.45 : b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
     }
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
     const rings: any[] = [];
@@ -1793,11 +1810,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // buildings → DOM markers with construction animation
     const alive = new Set<number>();
     for (const b of snap.buildings) {
+      if (b.def === 'trench') continue;
       alive.add(b.id);
       const d = defB.get(b.def)!;
       let m = bMarkers.get(b.id);
       if (!m) {
-        const el = h('div', { class: `bm t${b.team}` });
+        const el = h('div', { class: `bm t${b.team} bm-${b.def}` });
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
         el.querySelector('.glyph')!.textContent = d.icon;
         el.addEventListener('click', (ev) => {

@@ -234,7 +234,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
         st.action === 'via' ? h('span', {}, 'Waypoint') : h('button', { class: 'hud-btn sm', title: 'Switch between loading and unloading here', onClick: (e: MouseEvent) => (e.stopPropagation(), (st.action = st.action === 'load' ? 'unload' : 'load'), c.rerender()) }, ACT[st.action]),
         st.action !== 'via' ? h('span', {}, bname(st.building)) : null,
         h('button', { class: 'hud-btn sm warn', title: 'Remove this stop', onClick: (e: MouseEvent) => (e.stopPropagation(), r.stops.splice(i, 1), c.rerender()) }, '×'));
-      const presets = [0, 150, 200, 500, 1000].filter((v) => v < (d0.cargoCap ?? 0));
+      const presets = [1, 0, 150, 200, 500, 1000].filter((v) => v === 1 || v === 0 || v < (d0.cargoCap ?? 0));
       const minInput = h('input', { type: 'number', min: 1, max: d0.cargoCap, value: r.minLoad, class: 'min-load', title: 'Leave the last loading stop only with at least this much' });
       minInput.addEventListener('change', () => ((r.minLoad = Math.max(1, Math.min(d0.cargoCap!, Number((minInput as HTMLInputElement).value) || 1))), c.rerender()));
       control = h('div', { class: 'route-box' },
@@ -244,7 +244,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
           h('button', { class: 'hud-btn sm' + (r.resType === o ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (r.resType = o), c.rerender()) },
             o === 'any' ? RES_LABEL.any : `${RES_LABEL[o] ?? o} ${Math.floor(stock[o] ?? 0)}`))) : null,
         h('div', { class: 'row' }, h('span', { class: 'muted', title: 'Leave the last loading stop only with at least this much on board' }, 'Leave with:'),
-          ...presets.map((v) => h('button', { class: 'hud-btn sm' + ((v === 0 ? r.minLoad === d0.cargoCap : r.minLoad === v) ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (r.minLoad = v === 0 ? d0.cargoCap : v), c.rerender()) }, v === 0 ? 'Full' : String(v))),
+          ...presets.map((v) => h('button', { class: 'hud-btn sm' + ((v === 0 ? r.minLoad === d0.cargoCap : r.minLoad === v) ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (r.minLoad = v === 0 ? d0.cargoCap : v), c.rerender()) }, v === 0 ? 'Full' : v === 1 ? 'Any' : String(v))),
           minInput),
         h('div', { class: 'row' },
           h('button', { class: 'hud-btn sm' + (ready ? ' active' : ''), disabled: !ready || undefined, onClick: (e: MouseEvent) => {
@@ -260,7 +260,12 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
       control = h('div', { class: 'route-box' },
         h('b', {}, `Route${hl.resType ? ` (${RES_LABEL[hl.resType] ?? hl.resType})` : ''}${hl.minLoad && hl.minLoad > 1 && hl.minLoad < (d0.cargoCap ?? 0) ? ` · leaves with ${hl.minLoad}+` : ''}`),
         h('div', { class: 'route-line' }, ...hl.stops.map((st, i) => h('span', { class: i === hl.idx ? 'cur' : '' }, `${i ? '→ ' : ''}${st.once ? 'Drop old cargo at' : ACT[st.action]}${st.action === 'via' ? '' : ` ${bname(st.building)}`}`))),
-        h('button', { class: 'hud-btn sm warn', onClick: () => c.send({ type: 'stop', units: [first.id] }) }, 'Stop route'));
+        h('div', { class: 'row' },
+          h('button', { class: 'hud-btn sm' + (hl.waiting ? ' active' : ''), title: 'Depart immediately with current cargo without waiting for full load', onClick: () => {
+            c.send({ type: 'departNow', unit: first.id });
+            c.toast('Departing now');
+          } }, 'Відправити зараз (Depart now)'),
+          h('button', { class: 'hud-btn sm warn', onClick: () => c.send({ type: 'stop', units: [first.id] }) }, 'Stop route')));
     } else {
       control = h('button', { class: 'hud-btn', title: 'Set up a standing delivery: load and unload stops and waypoints in a loop', onClick: () => {
         c.pick.route = { unitId: first.id, stops: [] };

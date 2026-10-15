@@ -139,6 +139,14 @@ button.ghost.on { color: var(--accent); }
 
 .far .cp span { font-size: 8px; letter-spacing: .03em; opacity: .7; }
 .far .cp i { width: 7px; height: 7px; }
+.zoom-out .cp:not(.cp-major) span,
+.far .cp:not(.cp-major) span {
+  display: none !important;
+}
+.zoom-out .bm.bm-housing:not(.selected),
+.far .bm.bm-housing:not(.selected) {
+  display: none !important;
+}
 .side .row { flex-wrap: nowrap; }
 .side .row:has(> button) { flex-wrap: wrap; }
 

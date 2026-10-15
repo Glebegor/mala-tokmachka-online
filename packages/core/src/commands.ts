@@ -51,6 +51,10 @@ export type Command =
   /** Drive to another (own or allied) vehicle and hand it fuel: tankers from their load, other vehicles from their own tank. */
   | { type: 'giveFuel'; unit: number; target: number }
   /** Artillery barrage on an area (null stops it). */
-  | { type: 'bombard'; units: number[]; target: [number, number] | null };
+  | { type: 'bombard'; units: number[]; target: [number, number] | null }
+  /** Advance immediately from current haul stop without waiting for full load. */
+  | { type: 'departNow'; unit: number }
+  /** Dispatch drones waiting at a factory to fly to the nearest launch site / airfield. */
+  | { type: 'dispatchDrones'; building: number; targetLauncher?: number };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };
