@@ -40,7 +40,6 @@ export const STATUS: Record<string, { name: string; icon: string; text: (v: numb
   lowammo: { name: 'Low ammo', icon: '<path d="M8 2c1.4 0 2.2 1.8 2.2 3.8V12H5.8V5.8C5.8 3.8 6.6 2 8 2z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M5.8 10h4.4V12H5.8z" fill="currentColor"/>', text: (v) => `Only ${pct(v)} of its rounds left: bring it near an ammo depot or base.` },
   noammo: { name: 'Out of ammo', icon: '<path d="M8 2c1.4 0 2.2 1.8 2.2 3.8V12H5.8V5.8C5.8 3.8 6.6 2 8 2z" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M3 3l10 10" stroke="currentColor" stroke-width="1.6"/>', text: () => 'No rounds left: it cannot fire until it refills at an ammo depot or base.' },
   encircled: { name: 'Encircled', icon: '<circle cx="8" cy="8" r="6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-dasharray="3 2.2"/><circle cx="8" cy="8" r="2" fill="currentColor"/>', text: (v) => `Cut off in a cauldron: deals only ${pct(v)} damage and loses strength every second.` },
-  entrenched: { name: 'Sector Defense', icon: '<path d="M8 1.5 13.5 3.5v4.2c0 3.2-2.3 5.6-5.5 6.8C4.8 13.3 2.5 10.9 2.5 7.7V3.5z" fill="currentColor"/><path d="M8 4.5v7" stroke="#0b0d10" stroke-width="1.6"/>', text: (v) => `Defending 2x2 km sector: takes ${pct(v * 0.65)} less direct fire damage. Drones and artillery bypass this defense.` },
 };
 
 export function statusIconHtml(id: string, good: boolean): string {

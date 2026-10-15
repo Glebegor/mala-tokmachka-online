@@ -10,14 +10,11 @@ export class Bot {
   private step = 0;
   private lastThink = 0;
   private lastArmyOrder = -100;
-  private lastAssaultTime = -100;
   private readonly interval: number;
   private readonly attackSize: number;
-  private readonly assaultCooldown: number;
   constructor(readonly playerId: string, difficulty: BotDifficulty = 'normal') {
-    this.interval = { easy: 6, normal: 2.5, hard: 1.5 }[difficulty];
-    this.attackSize = { easy: 18, normal: 14, hard: 10 }[difficulty];
-    this.assaultCooldown = { easy: 60, normal: 45, hard: 30 }[difficulty];
+    this.interval = { easy: 6, normal: 2.5, hard: 1.2 }[difficulty];
+    this.attackSize = { easy: 14, normal: 8, hard: 5 }[difficulty];
   }
 
   think(sim: Sim) {
@@ -111,19 +108,8 @@ export class Bot {
       // save up for the supply trucks before buying more troops
       const needTrucks = w.buildings.some((x) => x.team === p.team && x.def === 'machine_factory' && x.progress >= 1) && count('truck') < 2;
       if (needTrucks && (p.res.money ?? 0) < 500) continue;
-
-      const footInfantry = w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)?.mobility === 'foot' && !sim.defs.u.get(u.def)?.repairs).length;
       const drones = w.units.filter((u) => u.owner === p.id && u.def === 'drone').length;
-
-      let pool: string[];
-      if (footInfantry >= 10) {
-        // Cap foot infantry to ~10 squads: prioritize vehicles, armour, artillery and support
-        pool = ['tank', 'artillery', 'apc', 'ifv', 'medic', 'manpads', ...(drones < 2 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
-        if (!pool.length) continue; // Don't queue more basic infantry from HQ
-      } else {
-        // Balanced training roster
-        pool = ['infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'manpads', 'medic', 'tank', 'artillery', 'apc', 'ifv', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
-      }
+      const pool = ['infantry', 'infantry', 'infantry_assault', 'infantry_at', 'infantry_recon', 'manpads', 'medic', 'tank', 'artillery', ...(drones < 1 ? ['drone'] : [])].filter((u) => d.trains!.includes(u));
       const pick = pool[Math.floor(Math.random() * pool.length)];
       if (pick) sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
     }
@@ -189,56 +175,20 @@ export class Bot {
       }
     }
 
-    // Re-order ground army at most every 8 s
+    const idle = army.filter((u) => !u.target);
+    if (!idle.length) return;
+    // route planning is the costly part: re-order the army at most every 8 s
     if (w.time - this.lastArmyOrder < 8) return;
     this.lastArmyOrder = w.time;
-
-    const front = w.front;
-    if (!front.length || !army.length) return;
-    const nearIdx = nearestNode(front, anchor);
-
-    // Frontline defense line: 3 posts ~2.5 km behind the front line facing this bot
-    const anchorNodes = [
-      front[(nearIdx - 1 + front.length) % front.length],
-      front[nearIdx],
-      front[(nearIdx + 1) % front.length],
-    ];
-    const defPosts = anchorNodes.map((fn) => moveToward([fn.lng, fn.lat], anchor, 2.5));
-
-    // Allocate 50-60% of army to hold the defense line and anchor the front
-    const defenseQuota = Math.min(8, Math.max(3, Math.floor(army.length * 0.55)));
-    const defenders = army.slice(0, defenseQuota);
-    const assaultPool = army.slice(defenseQuota);
-
-    // 1. Position defenders in their defensive posts along the front (digging in and entrenching)
-    defenders.forEach((u, i) => {
-      const post = defPosts[i % defPosts.length];
-      if (!u.target && distKm(u.pos, post) > 1.5) {
-        sim.apply(p.id, { type: 'move', units: [u.id], to: post });
-      }
-    });
-
-    // 2. Assault strike group: gathers at rally point behind the defense line
-    const rallyPoint = moveToward([front[nearIdx].lng, front[nearIdx].lat], anchor, 6);
-    const canAssault =
-      assaultPool.length >= Math.max(4, this.attackSize - defenseQuota) &&
-      (w.time - this.lastAssaultTime >= this.assaultCooldown) &&
-      enemyPoints.length > 0;
-
-    if (canAssault) {
-      // Coordinated strike: order idle assault units towards the nearest enemy objective
+    if (army.length >= this.attackSize && enemyPoints.length) {
       const goal = enemyPoints.reduce((a, b) => (distKm(a.pos, anchor) < distKm(b.pos, anchor) ? a : b));
-      const idleAssault = assaultPool.filter((u) => !u.target);
-      if (idleAssault.length) {
-        sim.apply(p.id, { type: 'move', units: idleAssault.map((u) => u.id), to: goal.pos, cohesion: true });
-        this.lastAssaultTime = w.time;
-      }
+      sim.apply(p.id, { type: 'move', units: idle.map((u) => u.id), to: goal.pos, cohesion: true });
     } else {
-      // Stage reserve assault units at the rally point
-      const farReserves = assaultPool.filter((u) => !u.target && distKm(u.pos, rallyPoint) > 4);
-      if (farReserves.length) {
-        sim.apply(p.id, { type: 'move', units: farReserves.map((u) => u.id), to: rallyPoint });
-      }
+      // rally just behind the front
+      const front = w.front[nearestNode(w.front, anchor)];
+      const rally = moveToward([front.lng, front.lat], anchor, 6);
+      const far = idle.filter((u) => distKm(u.pos, rally) > 4);
+      if (far.length) sim.apply(p.id, { type: 'move', units: far.map((u) => u.id), to: rally });
     }
   }
 }

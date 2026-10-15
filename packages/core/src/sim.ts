@@ -5,8 +5,7 @@ import { buildFront, distToFrontKm, findPinch, nearestNode, normalOf, OccupiedIn
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
-import { LIBERATED_CELL, SECTOR_CELL, type Building, type CombatSector, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
-import { districtAt, districtName, districtSeed } from './districts';
+import { LIBERATED_CELL, type Building, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -1214,7 +1213,6 @@ export class Sim {
     if (r.sandbox && w.tick % r.tickRate === 0) this.restock();
     this.training(dt);
     this.units(dt);
-    this.sectors(dt);
     this.repairs(dt);
     if (w.tick % r.tickRate === 0) this.healing();
     if (w.tick % r.tickRate === 3) this.morale();
@@ -1427,141 +1425,6 @@ export class Sim {
     return (this.libRuns = out);
   }
 
-  /** Tactical Voronoi combat districts / provinces by spatial key. */
-  private sectorByKey = new Map<number, CombatSector>();
-
-  sectorAt(p: LngLat): CombatSector | undefined {
-    const { ix, iy, center } = districtAt(p);
-    const key = Sim.cellKey(ix, iy);
-    let s = this.sectorByKey.get(key);
-    if (!s) {
-      s = {
-        ix,
-        iy,
-        name: districtName(center, this.map.capturePoints),
-        team: this.side(center),
-        entrenchment: 0,
-        contested: false,
-        captureProgress: 0,
-        capturingTeam: null,
-        defenders: 0,
-        attackers: 0,
-      };
-      this.sectorByKey.set(key, s);
-    }
-    return s;
-  }
-
-  /**
-   * Tactical combat districts / provinces (HoI4 / East Showdown style):
-   * Holds territory, tracks entrenchment, handles capture by presence (~7.5s uncontested),
-   * and provides ~2.8x survivability (65% direct damage reduction) for defending infantry.
-   * Ground units only bind to and garrison a sector once they have completely halted.
-   */
-  private sectors(dt: number) {
-    const w = this.world;
-    const occ = new Map<number, { defs: number; atts: number }>();
-    for (const u of w.units) {
-      if (u.hp <= 0 || u.embarkedIn || u.parkedAt !== undefined) continue;
-      const ud = this.defs.u.get(u.def);
-      if (!ud || ud.kind === 'air') continue;
-      // Ground unit must be completely stopped inside the sector to bind and garrison it:
-      const isStopped = !u.target && (!u.path || u.path.length === 0) && (u.still ?? 0) >= 0.3;
-      if (!isStopped) continue;
-
-      const { ix, iy, center } = districtAt(u.pos);
-      const key = Sim.cellKey(ix, iy);
-      let s = this.sectorByKey.get(key);
-      if (!s) {
-        s = {
-          ix,
-          iy,
-          name: districtName(center, this.map.capturePoints),
-          team: this.side(center),
-          entrenchment: 0,
-          contested: false,
-          captureProgress: 0,
-          capturingTeam: null,
-          defenders: 0,
-          attackers: 0,
-        };
-        this.sectorByKey.set(key, s);
-      }
-      let o = occ.get(key);
-      if (!o) {
-        o = { defs: 0, atts: 0 };
-        occ.set(key, o);
-      }
-      if (u.team === s.team) o.defs++;
-      else o.atts++;
-    }
-
-    for (const [key, s] of this.sectorByKey.entries()) {
-      const o = occ.get(key);
-      s.defenders = o ? o.defs : 0;
-      s.attackers = o ? o.atts : 0;
-      s.contested = s.defenders > 0 && s.attackers > 0;
-
-      if (s.defenders > 0) {
-        if (s.attackers === 0) {
-          // Defenders occupying calmly: builds entrenchment to 1.0 (takes ~20s)
-          s.entrenchment = Math.min(1.0, s.entrenchment + dt * 0.05);
-          s.captureProgress = Math.max(0, s.captureProgress - dt / 5);
-          if (s.captureProgress === 0) s.capturingTeam = null;
-        } else {
-          // Contested: combat inside district; entrenchment erodes under assault
-          if (s.attackers > s.defenders * 2) {
-            s.entrenchment = Math.max(0, s.entrenchment - dt * 0.03);
-          } else {
-            s.entrenchment = Math.min(1.0, s.entrenchment + dt * 0.01);
-          }
-        }
-      } else if (s.attackers > 0) {
-        // District cleared of defenders! Attackers establish control
-        s.entrenchment = Math.max(0, s.entrenchment - dt * 0.1);
-        const capturingTeam: Team = (1 - s.team) as Team;
-        s.capturingTeam = capturingTeam;
-        s.captureProgress += dt / 7.5; // ~7.5 seconds capture progress
-        if (s.captureProgress >= 1.0) {
-          // District captured! Flip ownership to capturing side
-          s.team = capturingTeam;
-          s.defenders = s.attackers;
-          s.attackers = 0;
-          s.captureProgress = 0;
-          s.capturingTeam = null;
-          s.contested = false;
-          s.entrenchment = 0.2; // initial entrenchment for conqueror
-        }
-      } else {
-        // Empty district: decay capture progress and entrenchment
-        s.captureProgress = Math.max(0, s.captureProgress - dt / 5);
-        if (s.captureProgress === 0) s.capturingTeam = null;
-        s.entrenchment = Math.max(0, s.entrenchment - dt * 0.01);
-      }
-    }
-  }
-
-  activeSectors(team?: Team): CombatSector[] {
-    const list: CombatSector[] = [];
-    for (const s of this.sectorByKey.values()) {
-      if (s.entrenchment > 0.05 || s.defenders > 0 || s.attackers > 0 || s.captureProgress > 0) {
-        list.push({
-          ix: s.ix,
-          iy: s.iy,
-          name: s.name,
-          team: s.team,
-          entrenchment: Math.round(s.entrenchment * 100) / 100,
-          contested: s.contested,
-          captureProgress: Math.round(s.captureProgress * 100) / 100,
-          capturingTeam: s.capturingTeam,
-          defenders: s.defenders,
-          attackers: s.attackers,
-        });
-      }
-    }
-    return list;
-  }
-
   /** Work out the buffs and debuffs every unit is under right now (shown on markers and in the unit panel). */
   private refreshStatus() {
     const r = this.ruleset.rules;
@@ -1585,9 +1448,6 @@ export class Sim {
         if (city > 0) s.push(['citydefense', city]);
         if (u.transport) s.push(['transport', r.transportDamageMult]);
         if (u.encircled) s.push(['encircled', r.encircledDamageMult]);
-        const sec = this.sectorAt(u.pos);
-        const isStopped = !u.target && (!u.path || u.path.length === 0) && (u.still ?? 0) >= 0.3;
-        if (sec && sec.team === u.team && sec.entrenchment > 0.05 && isStopped) s.push(['entrenched', sec.entrenchment]);
       }
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
@@ -1928,30 +1788,15 @@ export class Sim {
     return u.aim > 0;
   }
 
-  /** Damage a ground unit actually takes from a hit, after terrain, fortifications, nearby cities, sector entrenchment and column order. */
-  private hitUnit(attacker: Unit, target: Unit, raw: number, isBlast = false): number {
+  /** Damage a ground unit actually takes from a hit, after terrain, fortifications, nearby cities and column order. */
+  private hitUnit(attacker: Unit, target: Unit, raw: number): number {
     const r = this.ruleset.rules;
     const td = this.defs.u.get(target.def)!;
     const air = td.kind === 'air';
     const cover = air ? 0 : this.terrainAt(target.pos).cover;
     const city = air ? 0 : this.cityDefenseBonus(target.team, target.pos);
     const shaken = ((target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1) * (air ? 1 : this.crowdTaken(target));
-
-    // Sector entrenchment defense:
-    // Defending ground units holding their friendly 2x2 km sector get up to 65% reduction against direct ground fire
-    // (survivability increased ~2.8x).
-    // Blasts (from strike drones, missiles, artillery) bypass direct-fire entrenchment!
-    let sectorMult = 1.0;
-    if (!air && !isBlast) {
-      const s = this.sectorAt(target.pos);
-      if (s && s.team === target.team && s.entrenchment > 0) {
-        const isFoot = (td.mobility ?? 'foot') === 'foot';
-        const maxRed = isFoot ? 0.65 : 0.40;
-        sectorMult = 1 - (s.entrenchment * maxRed);
-      }
-    }
-
-    const dealt = (raw * shaken * sectorMult * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
+    const dealt = (raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
     target.lastHit = this.world.time;
     // being hit shakes a unit (more the harder the blow)
@@ -1975,15 +1820,11 @@ export class Sim {
 
   /** A blast (strike drone, shell) hurting everything of the other side within `radius` km, strongest at the centre. */
   private blast(attacker: Unit, at: LngLat, radius: number, damage: number, hitsCities: boolean): number {
-    const s = this.sectorAt(at);
-    if (s && s.entrenchment > 0) {
-      s.entrenchment = Math.max(0, s.entrenchment - Math.min(0.35, damage / 400));
-    }
     let total = 0;
     for (const e of this.world.units) {
       if (e.team === attacker.team || e.embarkedIn || e.parkedAt !== undefined || e.hp <= 0 || this.defs.u.get(e.def)!.kind === 'air') continue;
       const d = distKm(at, e.pos);
-      if (d <= radius) total += this.hitUnit(attacker, e, damage * (1 - d / radius), true);
+      if (d <= radius) total += this.hitUnit(attacker, e, damage * (1 - d / radius));
     }
     for (const b of this.world.buildings) {
       if (b.team === attacker.team || b.hp <= 0) continue;
@@ -2908,52 +2749,19 @@ export class Sim {
         if (d > R || u.embarkedIn || u.hp <= 0) return;
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') return; // only ground troops hold or take ground
-        // Quadratic distance falloff: tactical units directly on the frontline (0-4 km) have dominant push,
-        // while units in distant rear bases don't artificially destabilize the front line.
-        const fall = Math.max(0, 1 - d / R);
-        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (fall * fall) * this.crowdDealt(u);
+        force[u.team] += ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
       });
       // a manned bunker anchors the line: its garrison counts double
       for (const b of this.garrisons()) {
         const d = distKm(b.pos, pos);
         if (d > R) continue;
-        const fall = Math.max(0, 1 - d / R);
-        for (const g of b.inside) force[g.team] += this.defs.u.get(g.def)!.damage * 2 * (fall * fall);
+        for (const g of b.inside) force[g.team] += this.defs.u.get(g.def)!.damage * 2 * (1 - d / R);
       }
       // troops sitting unopposed behind the line loosen it
       for (const z of w.grey) if (distKm(z.pos, pos) <= z.r + r.frontNodeSpacingKm) force[z.team] += r.greyZonePush;
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
-      // When both teams have opposing forces near the node, cap push speed to keep the frontline stable and manageable
-      const opposed = force[0] > 0 && force[1] > 0;
-      const maxSpd = opposed ? Math.min(r.frontMaxSpeed, 0.035) : r.frontMaxSpeed;
-      let spd = clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -maxSpd, maxSpd) * (1 - resist);
-
-      // Defending 2x2 km combat sectors anchor the frontline:
-      // Check the 3x3 sector grid surrounding the front node (~3.5-4 km defensive radius).
-      // Entrenched defenders physically pin the frontline from advancing past them
-      // unless attackers achieve overwhelming local superiority (>= 2.5:1).
-      if (spd !== 0) {
-        const defendingTeam: Team = spd > 0 ? 1 : 0;
-        const baseIx = Math.floor(pos[0] / SECTOR_CELL.lng);
-        const baseIy = Math.floor(pos[1] / SECTOR_CELL.lat);
-        let maxAnchor = 0;
-        for (let dx = -1; dx <= 1; dx++) {
-          for (let dy = -1; dy <= 1; dy++) {
-            const sec = this.sectorByKey.get(Sim.cellKey(baseIx + dx, baseIy + dy));
-            if (!sec || sec.team !== defendingTeam || sec.defenders <= 0) continue;
-            const ratio = sec.attackers / Math.max(1, sec.defenders);
-            if (ratio < 2.5) {
-              const defenseHold = Math.max(0.35, sec.entrenchment);
-              maxAnchor = Math.max(maxAnchor, defenseHold * 0.95);
-            }
-          }
-        }
-        if (maxAnchor > 0) {
-          spd *= Math.max(0.05, 1 - maxAnchor);
-        }
-      }
-      return spd;
+      return clamp((force[0] * hold[0] - force[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
     };
 
     // neighbours share speed so the line bends instead of spiking

@@ -9,4 +9,3 @@ export * from './visibility';
 export * from './roads';
 export * from './terrain';
 export * from './specialZones';
-export * from './districts';

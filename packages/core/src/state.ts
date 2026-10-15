@@ -260,26 +260,6 @@ export interface LiberatedCell {
 /** Size of a liberated-ground cell in degrees (about 1.5 km). */
 export const LIBERATED_CELL = { lng: 0.02, lat: 0.0135 } as const;
 
-/**
- * 5x5 km tactical combat district/province: controls frontline holding power, defensive entrenchment,
- * capture by presence, and HoI4-style discrete territorial ownership.
- */
-export interface CombatSector {
-  ix: number;
-  iy: number;
-  name?: string;
-  team: Team;
-  entrenchment: number; // 0..1 (0% to 65% direct damage reduction when defending)
-  contested: boolean;
-  captureProgress: number; // 0..1 (progress towards capture by enemy)
-  capturingTeam?: Team | null;
-  defenders: number; // count of friendly ground troops holding the sector
-  attackers: number; // count of hostile ground troops assaulting the sector
-}
-
-/** Tactical district/province dimensions in degrees (~4.0 km lat, ~4.0 km lng at ~48°N). */
-export const SECTOR_CELL = { lng: 0.054, lat: 0.036 } as const;
-
 export interface CapturePoint {
   id: string;
   owner: Team;
@@ -327,7 +307,6 @@ export interface World {
   mapId: string;
   stats: Record<string, PlayerStats>;
   smokes: SmokeCloud[];
-  sectors?: CombatSector[];
   timeline: TimelinePoint[];
 }
 

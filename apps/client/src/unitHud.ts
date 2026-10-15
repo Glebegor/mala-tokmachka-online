@@ -1,4 +1,4 @@
-import { distKm, districtAt, isReconDrone, isStrikeDrone, SECTOR_CELL, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
+import { distKm, isReconDrone, isStrikeDrone, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
 import { clear, h } from './dom';
 
 /** Picking state shared with the map: route = two clicks on buildings, barrage and launch = one click on the map. */
@@ -117,31 +117,6 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     const eta = Math.max(...etas);
     if (eta > 0) lines.push(`Arrives in ~${formatEta(eta)}`);
   }
-  if (d0.kind !== 'air') {
-    const dLoc = districtAt(first.pos);
-    const sec = c.snap.sectors?.find((s) => s.ix === dLoc.ix && s.iy === dLoc.iy);
-    const isStopped = !first.target && (!first.path || first.path.length === 0);
-    const distName = sec?.name ? `📍 ${sec.name}` : '📍 Тактичний район';
-    if (!isStopped) {
-      lines.push(`${distName}: 🚚 На марші (зупиніться для закріплення)`);
-    } else if (sec) {
-      if (sec.team === c.myTeam) {
-        if (sec.contested) {
-          lines.push(`${distName}: ⚔️ Оборона під вогнем (${sec.defenders} захисн. / ${sec.attackers} ворог.)`);
-        } else {
-          lines.push(`${distName}: 🛡️ Закріплено в районі (${Math.round(sec.entrenchment * 65)}% захисту)`);
-        }
-      } else {
-        if (sec.captureProgress && sec.captureProgress > 0) {
-          lines.push(`${distName}: 🚩 Захоплення ${Math.round(sec.captureProgress * 100)}% (${sec.attackers} наступають)`);
-        } else {
-          lines.push(`${distName}: ⚔️ Ворожий рубіж (${sec.defenders} захисн.)`);
-        }
-      }
-    } else {
-      lines.push(`${distName}: 🛡️ Закріплено на позиції`);
-    }
-  }
   el.append(
     h('div', { class: 'hud-sec' },
       single ? c.icon(d0, first.rank) : null,
@@ -149,21 +124,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     ),
   );
 
-  // 2. Garrison / hold district
-  if (d0.kind !== 'air') {
-    el.append(h('button', {
-      class: 'hud-btn',
-      title: 'Зайняти рубежі та закріпитися в районі',
-      onClick: () => {
-        const ix = Math.floor(first.pos[0] / SECTOR_CELL.lng);
-        const iy = Math.floor(first.pos[1] / SECTOR_CELL.lat);
-        const center: [number, number] = [(ix + 0.5) * SECTOR_CELL.lng, (iy + 0.5) * SECTOR_CELL.lat];
-        c.send({ type: 'move', units: ids, to: center });
-      },
-    }, '🛡️ Закріпитися'));
-  }
-
-  // 3. stop
+  // 2. stop
   el.append(h('button', { class: 'hud-btn', title: 'Stop everything (S)', onClick: () => {
     c.send({ type: 'stop', units: ids });
     c.send({ type: 'bombard', units: ids, target: null });
