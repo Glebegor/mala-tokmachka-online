@@ -2,7 +2,7 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
-  type BuildingDef, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
+  type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
 import { clear, h } from './dom';
@@ -16,6 +16,7 @@ import { cellsToMultiPolygon } from './contours';
 import { statsView } from './stats';
 import { openGuide } from './guide';
 import { uiScale, uiScaleControl } from './uiScale';
+import { langControl } from './i18n';
 import { ProductionDock, QueueList, type QueueContext } from './queue';
 
 /**
@@ -225,7 +226,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   app.append(
     h('div', { class: 'game' }, mapEl, dock.el, queueSlot, effectsSlot,
-      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, langControl('ghost'), uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner, markMenu),
   );
 
@@ -250,6 +251,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const groups = new Map<number, Group>();
   const bMarkers = new Map<number, { el: HTMLElement; marker: maplibregl.Marker; done: boolean }>();
   const pMarkers = new Map<string, HTMLElement>();
+  /** Enemy buildings seen before, kept where they were last seen (see rememberBuildings). */
+  const lastKnown = new Map<number, { b: BuildingView; at: number }>();
+  let staleBuildings: { b: BuildingView; at: number }[] = [];
   let shown: FrontNode[] = [];
 
   function hatchImage(): ImageData {
@@ -583,7 +587,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       fog = new FogOverlay(map);
       map.on('move', () => drawFog());
       fx = new ShotFx(map, mapEl, (def) => defU.get(def) ?? defB.get(def)?.attack, TEAM_COLOR);
-      if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap, init: () => init, units: () => lastUnitFeatures, fakePockets: [], select: (ids: number[]) => ((selUnits = new Set(ids)), (selBuilding = null), render()) };
+      if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap, init: () => init, units: () => lastUnitFeatures, fakePockets: [], lastKnown: () => [...lastKnown.keys()], select: (ids: number[]) => ((selUnits = new Set(ids)), (selBuilding = null), render()) };
       mapReady = true;
       if (snap) render();
       showStart();
@@ -1494,12 +1498,42 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   // ---------- snapshot → view ----------
   let lastPalette = 0;
+  /**
+   * Enemy buildings once seen stay on the map at half opacity where they were last seen: they may have been demolished
+   * since. The memory is dropped when that spot is in sight again and the building is not there.
+   */
+  function rememberBuildings(s: SnapMsg) {
+    if (!init?.ruleset.rules.fogOfWar) return void (lastKnown.clear(), (staleBuildings = []));
+    const now = new Set<number>();
+    for (const b of s.buildings) {
+      if (b.team === init.team) continue;
+      now.add(b.id);
+      lastKnown.set(b.id, { b: { ...b }, at: s.time });
+    }
+    staleBuildings = [];
+    if (lastKnown.size === now.size) return;
+    // own sight, a little short of the server's (terrain can cut it to 80%) so a memory is only dropped when surely seen
+    const eyes: { pos: LngLat; r: number }[] = [];
+    for (const u of s.units) if (u.team === init.team) {
+      const d = defU.get(u.def);
+      if (d) eyes.push({ pos: u.pos, r: d.vision * (d.kind === 'air' ? 0.95 : 0.75) });
+    }
+    for (const b of s.buildings) if (b.team === init.team && b.progress >= 1) eyes.push({ pos: b.pos, r: (defB.get(b.def)?.vision ?? 6) * 0.95 });
+    for (const [id, k] of lastKnown) {
+      if (now.has(id)) continue;
+      if (eyes.some((e) => distKm(e.pos, k.b.pos) <= e.r)) lastKnown.delete(id); // looked again: it is gone
+      else staleBuildings.push(k);
+    }
+  }
+
   function onSnapshot(s: SnapMsg) {
     if (import.meta.env.DEV) s.pockets.push(...((window as any).__sw?.fakePockets ?? [])), s.grey.push(...((window as any).__sw?.fakeGrey ?? [])); // browser tests draw cauldrons this way
     // riders and craft waiting at launchers are listed in panels, not drawn on the map
     stored = s.units.filter((u) => u.embarkedIn !== undefined || u.parkedAt !== undefined);
     s.units = s.units.filter((u) => u.embarkedIn === undefined && u.parkedAt === undefined);
+    if (import.meta.env.DEV) s.buildings.push(...((window as any).__sw?.fakeBuildings ?? [])); // browser tests: enemy buildings that come and go
     snap = s;
+    rememberBuildings(s);
     if (import.meta.env.DEV && (window as any).__sw?.fakeLiberated) s.liberated = (window as any).__sw.fakeLiberated; // browser tests
     if (s.liberated) {
       libRuns = s.liberated;
@@ -1601,7 +1635,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     // vision rings for own long-range assets
     // trench lines
     const trenches: any[] = [];
-    for (const b of snap.buildings) {
+    const staleIds = new Set(staleBuildings.map((x) => x.b.id));
+    for (const b of [...snap.buildings, ...staleBuildings.map((x) => x.b)]) {
       if (!b.line) continue;
       const [a, c] = b.line;
       const kx = Math.cos((a[1] * Math.PI) / 180) * 111.32;
@@ -1614,7 +1649,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       const bridge = !!defB.get(b.def)?.spansWater;
       const rail = !!defB.get(b.def)?.rail;
-      trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
+      trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: staleIds.has(b.id) ? 0.45 : b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
     }
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
     const rings: any[] = [];
@@ -1727,9 +1762,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const el = m.el;
         setTimeout(() => el.classList.remove('complete'), 1200);
       }
+      if (m.el.classList.contains('stale')) m.el.classList.remove('stale'), (m.el.title = '');
+    }
+    // enemy buildings out of sight: where they were last seen, half transparent
+    for (const { b, at } of staleBuildings) {
+      if (b.line) continue; // drawn with the lines
+      alive.add(b.id);
+      let m = bMarkers.get(b.id);
+      if (!m) {
+        const el = h('div', { class: `bm t${b.team}` });
+        el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
+        el.querySelector('.glyph')!.textContent = defB.get(b.def)?.icon ?? '?';
+        m = { el, marker: new maplibregl.Marker({ element: el }).setLngLat(b.pos).addTo(map), done: true };
+        bMarkers.set(b.id, m);
+      }
+      if (!m.el.classList.contains('stale')) {
+        m.el.classList.add('stale');
+        m.el.classList.remove('training', 'busy', 'selected');
+        m.el.dataset.q = '';
+      }
+      const ago = Math.max(0, Math.round((snap.time - at) / 60));
+      m.el.title = `${defB.get(b.def)?.name ?? b.def}: last seen ${ago ? `${ago} min ago` : 'just now'}. It may have been destroyed or demolished since.`;
     }
     for (const [id, m] of bMarkers) {
       if (!alive.has(id)) {
+        m.el.classList.remove('stale');
         m.el.classList.add('gone');
         setTimeout(() => m.marker.remove(), 400);
         bMarkers.delete(id);

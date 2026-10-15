@@ -378,3 +378,9 @@ kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); bo
 
 .bld .rep { position: absolute; right: 4px; top: 4px; width: 20px; height: 20px; padding: 0; font-size: 12px; line-height: 1; color: var(--muted); }
 .bld .rep.on { color: #0b0d10; background: var(--accent); border-color: var(--accent); }
+.lang-switch { display: inline-flex; gap: 0; }
+.lang-switch .lang-btn { padding: 3px 7px; font-size: 11px; }
+.lang-switch .lang-btn.active { border-color: var(--accent); color: var(--accent); }
+/* enemy building out of sight: where it was last seen */
+.bm.stale { opacity: .5; filter: saturate(.6); cursor: help; }
+.bm.stale .glyph { border-style: dashed; }

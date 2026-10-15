@@ -4,6 +4,7 @@ import { clear, h } from './dom';
 import { showProfile } from './profile';
 import { openGuide } from './guide';
 import { uiScaleControl } from './uiScale';
+import { langControl } from './i18n';
 
 type Opt<T> = { v: T; label: string };
 
@@ -152,6 +153,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
               void refresh(true);
             });
           } }, `${s.user.name} · Profile`),
+          langControl(),
           uiScaleControl(),
           h('button', { title: 'How to play', onClick: () => openGuide() }, 'Guide'),
           h('button', { onClick: () => ((stopped = true), cb.onLogout()) }, 'Sign out')),
