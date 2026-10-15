@@ -177,7 +177,7 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   console.log(`support ok (crew at ${crew.pos.map((x) => x.toFixed(2))})`);
 }
 
-// --- 2x2 km combat sectors: entrenchment build-up, direct damage reduction, drone blast bypass, contested state ---
+// --- 5x5 km tactical districts: naming, entrenchment, 65% damage reduction, and capture by presence ---
 {
   const sim = fresh();
   const a = sim.player('a')!;
@@ -185,20 +185,22 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   const hqA = hqOf(sim, 'a');
   const posA = offsetKm(hqA.pos, 5, 0);
 
-  // 1. Sector entrenchment build-up
+  // 1. District initialization & naming
   const defender = sim.spawnUnit('infantry', a, posA);
   defender.fireMode = 'hold';
-  run(sim, 0.5); // initialize sector
+  run(sim, 0.5);
   const sec0 = sim.sectorAt(posA);
-  assert.ok(sec0, 'sector exists');
-  assert.equal(sec0.team, 0, 'sector belongs to friendly team');
+  assert.ok(sec0, 'district exists');
+  assert.equal(sec0.team, 0, 'district belongs to friendly team');
+  assert.ok(sec0.name && sec0.name.length > 0, `district has geographical name: ${sec0.name}`);
 
+  // 2. Entrenchment build-up & status
   run(sim, 20); // 20 s -> entrenchment builds to 1.0
   const sec1 = sim.sectorAt(posA)!;
   assert.ok(sec1.entrenchment >= 0.95, `entrenchment reached ~1.0 (was ${sec1.entrenchment})`);
   assert.ok(defender.status.some(([s]) => s === 'entrenched'), 'defender gains entrenched status');
 
-  // 2. Direct fire damage reduction (infantry gets ~65% reduction at full entrenchment)
+  // 3. Direct fire damage reduction (infantry gets ~65% reduction at full entrenchment)
   const attacker = sim.spawnUnit('infantry', b, offsetKm(posA, 0.5, 0));
   attacker.fireMode = 'hold';
   const hpBefore = defender.hp;
@@ -206,18 +208,26 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   const dmgEntrenched = hpBefore - defender.hp;
   assert.ok(Math.abs(dmgEntrenched - 35) <= 2, `entrenched direct damage reduced by 65% (took ${dmgEntrenched})`);
 
-  // 3. Drone / artillery blast bypasses entrenchment and degrades it
+  // 4. Drone / artillery blast bypasses entrenchment and degrades it
   const hpBeforeBlast = defender.hp;
   (sim as any).blast(attacker, defender.pos, 1.5, 50, false);
   const dmgBlast = hpBeforeBlast - defender.hp;
   assert.ok(dmgBlast >= 45, `blast bypasses direct-fire entrenchment cover (took ${dmgBlast})`);
   assert.ok(sec1.entrenchment < 0.9, `blast degraded sector entrenchment (now ${sec1.entrenchment})`);
 
-  // 4. Sector contested state under enemy presence
+  // 5. Contested state under combat
   const invader = sim.spawnUnit('tank', b, posA);
   run(sim, 0.5);
   const secContested = sim.sectorAt(posA)!;
-  assert.equal(secContested.contested, true, 'sector with enemy presence is contested');
+  assert.equal(secContested.contested, true, 'district with both teams present is contested');
 
-  console.log('combat sectors ok: entrenchment, 65% direct damage reduction, blast bypass and contested status');
+  // 6. Capture by presence: once defender is eliminated, attackers capture the district
+  defender.hp = 0; // eliminate defender
+  run(sim, 8); // 8 seconds of uncontested enemy occupation
+  const secCaptured = sim.sectorAt(posA)!;
+  assert.equal(secCaptured.team, 1, 'district flipped ownership to enemy team');
+  assert.equal(secCaptured.contested, false, 'captured district is no longer contested');
+
+  console.log('tactical districts ok: naming, entrenchment, 65% direct damage reduction, and capture by presence');
 }
+

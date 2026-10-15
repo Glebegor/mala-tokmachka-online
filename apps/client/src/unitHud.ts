@@ -124,10 +124,19 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
       return s.ix === ix && s.iy === iy;
     });
     if (sec) {
-      if (sec.team === c.myTeam && sec.entrenchment > 0.05) {
-        lines.push(`🛡️ Sector defense: ${Math.round(sec.entrenchment * 65)}% cover (${sec.defenders} def / ${sec.attackers} att)`);
-      } else if (sec.contested) {
-        lines.push(`⚔️ Assaulting sector (${sec.attackers} att vs ${sec.defenders} def)`);
+      const distName = sec.name ? `📍 ${sec.name}` : '📍 Тактичний район';
+      if (sec.team === c.myTeam) {
+        if (sec.contested) {
+          lines.push(`${distName}: ⚔️ Оборона під вогнем (${sec.defenders} захисн. / ${sec.attackers} ворог.)`);
+        } else {
+          lines.push(`${distName}: 🛡️ Утримується (${Math.round(sec.entrenchment * 65)}% окопання)`);
+        }
+      } else {
+        if (sec.captureProgress && sec.captureProgress > 0) {
+          lines.push(`${distName}: 🚩 Захоплення ${Math.round(sec.captureProgress * 100)}% (${sec.attackers} наступають)`);
+        } else {
+          lines.push(`${distName}: ⚔️ Ворожий рубіж (${sec.defenders} захисн.)`);
+        }
       }
     }
   }
@@ -138,7 +147,21 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     ),
   );
 
-  // 2. stop
+  // 2. Garrison / hold district
+  if (d0.kind !== 'air') {
+    el.append(h('button', {
+      class: 'hud-btn',
+      title: 'Зайняти рубежі та закріпитися в районі',
+      onClick: () => {
+        const ix = Math.floor(first.pos[0] / SECTOR_CELL.lng);
+        const iy = Math.floor(first.pos[1] / SECTOR_CELL.lat);
+        const center: [number, number] = [(ix + 0.5) * SECTOR_CELL.lng, (iy + 0.5) * SECTOR_CELL.lat];
+        c.send({ type: 'move', units: ids, to: center });
+      },
+    }, '🛡️ Закріпитися'));
+  }
+
+  // 3. stop
   el.append(h('button', { class: 'hud-btn', title: 'Stop everything (S)', onClick: () => {
     c.send({ type: 'stop', units: ids });
     c.send({ type: 'bombard', units: ids, target: null });

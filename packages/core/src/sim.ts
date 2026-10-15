@@ -6,6 +6,7 @@ import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
 import { LIBERATED_CELL, SECTOR_CELL, type Building, type CombatSector, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
+import { districtName } from './districts';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -1432,15 +1433,31 @@ export class Sim {
   sectorAt(p: LngLat): CombatSector | undefined {
     const ix = Math.floor(p[0] / SECTOR_CELL.lng);
     const iy = Math.floor(p[1] / SECTOR_CELL.lat);
-    return this.sectorByKey.get(Sim.cellKey(ix, iy));
+    const key = Sim.cellKey(ix, iy);
+    let s = this.sectorByKey.get(key);
+    if (!s) {
+      const center: LngLat = [(ix + 0.5) * SECTOR_CELL.lng, (iy + 0.5) * SECTOR_CELL.lat];
+      s = {
+        ix,
+        iy,
+        name: districtName(center, this.map.capturePoints),
+        team: this.side(center),
+        entrenchment: 0,
+        contested: false,
+        captureProgress: 0,
+        capturingTeam: null,
+        defenders: 0,
+        attackers: 0,
+      };
+      this.sectorByKey.set(key, s);
+    }
+    return s;
   }
 
   /**
-   * 2x2 km Tactical combat sectors:
-   * Holds territory, tracks entrenchment, and provides ~2.8x survivability (65% damage reduction)
-   * for defending infantry holding their sector against direct ground fire.
-   * Defended sectors anchor the frontline. Blasts from drones and artillery bypass entrenchment
-   * and degrade it.
+   * 5x5 km Tactical combat districts / provinces (HoI4 / East Showdown style):
+   * Holds territory, tracks entrenchment, handles capture by presence (~7.5s uncontested),
+   * and provides ~2.8x survivability (65% direct damage reduction) for defending infantry.
    */
   private sectors(dt: number) {
     const w = this.world;
@@ -1458,9 +1475,12 @@ export class Sim {
         s = {
           ix,
           iy,
+          name: districtName(center, this.map.capturePoints),
           team: this.side(center),
           entrenchment: 0,
           contested: false,
+          captureProgress: 0,
+          capturingTeam: null,
           defenders: 0,
           attackers: 0,
         };
@@ -1485,8 +1505,10 @@ export class Sim {
         if (s.attackers === 0) {
           // Defenders occupying calmly: builds entrenchment to 1.0 (takes ~20s)
           s.entrenchment = Math.min(1.0, s.entrenchment + dt * 0.05);
+          s.captureProgress = Math.max(0, s.captureProgress - dt / 5);
+          if (s.captureProgress === 0) s.capturingTeam = null;
         } else {
-          // Contested: holds ground; if attackers outnumber 2:1, entrenchment erodes under assault
+          // Contested: combat inside district; entrenchment erodes under assault
           if (s.attackers > s.defenders * 2) {
             s.entrenchment = Math.max(0, s.entrenchment - dt * 0.03);
           } else {
@@ -1494,25 +1516,26 @@ export class Sim {
           }
         }
       } else if (s.attackers > 0) {
-        // Sector cleared of defenders! Attackers establish control
+        // District cleared of defenders! Attackers establish control
         s.entrenchment = Math.max(0, s.entrenchment - dt * 0.1);
-        if (s.entrenchment <= 0) {
-          // Flip sector to attacker side
-          s.team = (1 - s.team) as Team;
+        const capturingTeam: Team = (1 - s.team) as Team;
+        s.capturingTeam = capturingTeam;
+        s.captureProgress += dt / 7.5; // ~7.5 seconds capture progress
+        if (s.captureProgress >= 1.0) {
+          // District captured! Flip ownership to capturing side
+          s.team = capturingTeam;
           s.defenders = s.attackers;
           s.attackers = 0;
+          s.captureProgress = 0;
+          s.capturingTeam = null;
           s.contested = false;
-          s.entrenchment = 0.15;
+          s.entrenchment = 0.2; // initial entrenchment for conqueror
         }
       } else {
-        // Empty sector: decay entrenchment
-        s.entrenchment = Math.max(0, s.entrenchment - dt * 0.02);
-        if (s.entrenchment <= 0) {
-          const center: LngLat = [(s.ix + 0.5) * SECTOR_CELL.lng, (s.iy + 0.5) * SECTOR_CELL.lat];
-          if (Math.abs(distToFrontKm(w.front, center)) > 20) {
-            this.sectorByKey.delete(key);
-          }
-        }
+        // Empty district: decay capture progress and entrenchment
+        s.captureProgress = Math.max(0, s.captureProgress - dt / 5);
+        if (s.captureProgress === 0) s.capturingTeam = null;
+        s.entrenchment = Math.max(0, s.entrenchment - dt * 0.01);
       }
     }
   }
@@ -1520,13 +1543,16 @@ export class Sim {
   activeSectors(team?: Team): CombatSector[] {
     const list: CombatSector[] = [];
     for (const s of this.sectorByKey.values()) {
-      if (s.entrenchment > 0.05 || s.defenders > 0 || s.attackers > 0) {
+      if (s.entrenchment > 0.05 || s.defenders > 0 || s.attackers > 0 || s.captureProgress > 0) {
         list.push({
           ix: s.ix,
           iy: s.iy,
+          name: s.name,
           team: s.team,
           entrenchment: Math.round(s.entrenchment * 100) / 100,
           contested: s.contested,
+          captureProgress: Math.round(s.captureProgress * 100) / 100,
+          capturingTeam: s.capturingTeam,
           defenders: s.defenders,
           attackers: s.attackers,
         });

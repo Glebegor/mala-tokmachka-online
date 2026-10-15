@@ -495,7 +495,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing', 'sectors']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing', 'sectors', 'sector-front']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -544,23 +544,59 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } }, 'front-zone');
       map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } }, 'front-zone');
       map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } }, 'front-zone');
-      // tactical 2x2 km combat sectors: defense grid, entrenchment tint, and contested warnings
+      // tactical 5x5 km combat districts (HoI4 / East Showdown style):
+      // discrete province tiles with team fill, tactical borders, and frontline along held districts
       map.addLayer({
         id: 'sectors-fill', type: 'fill', source: 'sectors',
         paint: {
-          'fill-color': ['case', ['get', 'contested'], '#f59e0b', ['match', ['get', 'team'], 0, '#3b82f6', '#ef4444']],
-          'fill-opacity': ['case', ['get', 'contested'], 0.18, ['*', ['get', 'entrenchment'], 0.12]],
+          'fill-color': ['case', ['get', 'contested'], '#f59e0b', ['match', ['get', 'team'], 0, '#1d4ed8', '#b91c1c']],
+          'fill-opacity': ['case', ['get', 'contested'], 0.28, ['+', 0.12, ['*', ['get', 'entrenchment'], 0.16]]],
         },
       }, 'front-zone');
       map.addLayer({
-        id: 'sectors-line', type: 'line', source: 'sectors', minzoom: 6.5,
+        id: 'sectors-line', type: 'line', source: 'sectors', minzoom: 6.0,
         paint: {
-          'line-color': ['case', ['get', 'contested'], '#f59e0b', '#64748b'],
-          'line-width': ['case', ['get', 'contested'], 1.6, 0.75],
-          'line-opacity': ['case', ['get', 'contested'], 0.75, 0.28],
-          'line-dasharray': [2, 2],
+          'line-color': ['case', ['get', 'contested'], '#f59e0b', '#334155'],
+          'line-width': ['case', ['get', 'contested'], 1.8, 1.0],
+          'line-opacity': ['case', ['get', 'contested'], 0.85, 0.45],
         },
       }, 'front-zone');
+      // HoI4-style frontline tracing province borders between held districts
+      map.addLayer({
+        id: 'sector-front-case', type: 'line', source: 'sector-front',
+        layout: { 'line-join': 'miter', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#090507',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4.5, 9, 8],
+          'line-opacity': 0.95,
+        },
+      }, 'front-zone');
+      map.addLayer({
+        id: 'sector-front-line', type: 'line', source: 'sector-front',
+        layout: { 'line-join': 'miter', 'line-cap': 'round' },
+        paint: {
+          'line-color': '#ff4d57',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.2, 9, 4.5],
+          'line-opacity': 0.95,
+        },
+      }, 'front-zone');
+      // District names / labels on map when zoomed in
+      map.addLayer({
+        id: 'sectors-labels', type: 'symbol', source: 'sectors', minzoom: 7.2,
+        layout: {
+          'text-field': ['get', 'name'],
+          'text-size': ['interpolate', ['linear'], ['zoom'], 7.2, 10, 10, 13],
+          'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
+          'text-anchor': 'center',
+          'text-allow-overlap': false,
+        },
+        paint: {
+          'text-color': '#e2e8f0',
+          'text-halo-color': '#0f172a',
+          'text-halo-width': 1.6,
+          'text-opacity': 0.85,
+        },
+      });
       // trench lines: a zig-zag in the side's colour on a dark casing (faded while being dug)
       // bridges: a wide light deck on a dark casing
       const isBridge: any = ['==', ['get', 'kind'], 'bridge'];
@@ -1756,17 +1792,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
     const sectorFeatures: any[] = [];
+    const frontSegments: any[] = [];
     if (snap.sectors?.length) {
       const { lng: cw, lat: ch } = SECTOR_CELL;
+      const secMap = new Map<string, (typeof snap.sectors)[0]>();
+      for (const s of snap.sectors) secMap.set(`${s.ix},${s.iy}`, s);
+
       for (const sec of snap.sectors) {
         const x0 = sec.ix * cw, y0 = sec.iy * ch;
         const x1 = x0 + cw, y1 = y0 + ch;
         sectorFeatures.push({
           type: 'Feature',
           properties: {
+            id: `${sec.ix}_${sec.iy}`,
+            name: sec.name ?? '',
             team: sec.team,
             entrenchment: sec.entrenchment,
             contested: sec.contested,
+            captureProgress: sec.captureProgress ?? 0,
             defenders: sec.defenders,
             attackers: sec.attackers,
           },
@@ -1775,9 +1818,22 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             coordinates: [[[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]]],
           },
         });
+
+        // HoI4 style frontline: extract boundary edges between friendly and hostile districts
+        if (sec.team === 0) {
+          const east = secMap.get(`${sec.ix + 1},${sec.iy}`);
+          if (east && east.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x1, y0], [x1, y1]] } });
+          const west = secMap.get(`${sec.ix - 1},${sec.iy}`);
+          if (west && west.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x0, y0], [x0, y1]] } });
+          const north = secMap.get(`${sec.ix},${sec.iy + 1}`);
+          if (north && north.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x0, y1], [x1, y1]] } });
+          const south = secMap.get(`${sec.ix},${sec.iy - 1}`);
+          if (south && south.team === 1) frontSegments.push({ type: 'Feature', geometry: { type: 'LineString', coordinates: [[x0, y0], [x1, y0]] } });
+        }
       }
     }
     (map.getSource('sectors') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: sectorFeatures } as any);
+    (map.getSource('sector-front') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: frontSegments } as any);
     const rings: any[] = [];
     // the selected building's rally point: a dashed line to a flag
     const rallyB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding && x.rally) : null;
