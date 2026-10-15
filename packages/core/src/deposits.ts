@@ -358,9 +358,10 @@ export const DEPOSITS: ResourceDeposit[] = DEPOSIT_DEFS.map((d) => ({
 }));
 
 /** Tests if a given point is inside any deposit of the specified type. */
-export function inDeposit(type: DepositType, p: LngLat): ResourceDeposit | null {
+export function inDeposit(type: DepositType, p: LngLat, team?: 0 | 1): ResourceDeposit | null {
   for (const dep of DEPOSITS) {
     if (dep.type !== type) continue;
+    if (team !== undefined && dep.team !== team) continue;
     // Bounding circle fast-rejection
     if (distKm(p, dep.center) > dep.radiusKm * 1.35) continue;
     if (inPolygon(p, dep.polygon)) return dep;
@@ -369,8 +370,9 @@ export function inDeposit(type: DepositType, p: LngLat): ResourceDeposit | null 
 }
 
 /** Converts deposits into a GeoJSON FeatureCollection for MapLibre layer rendering. */
-export function depositsGeoJSON(filterType?: DepositType): any {
-  const list = filterType ? DEPOSITS.filter((d) => d.type === filterType) : DEPOSITS;
+export function depositsGeoJSON(filterType?: DepositType, team?: 0 | 1): any {
+  let list = filterType ? DEPOSITS.filter((d) => d.type === filterType) : DEPOSITS;
+  if (team !== undefined) list = list.filter((d) => d.team === team);
   return {
     type: 'FeatureCollection',
     features: list.map((d) => ({

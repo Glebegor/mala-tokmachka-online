@@ -622,7 +622,7 @@ export class Sim {
           if (!hasHq) return fail('must place military HQ first');
           if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
           if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
-          const dep = inDeposit('iron', cmd.pos);
+          const dep = inDeposit('iron', cmd.pos, p.team);
           if (!dep) return fail('mines can only be built on iron deposits');
           const clash = w.buildings.find((b) => b.def === 'mine' && distKm(b.pos, cmd.pos) < 1);
           if (clash) return fail('space occupied');

@@ -113,31 +113,139 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const basemapBtn = h('button', { class: 'ghost', title: 'Hide or show the real map underneath (M)', onClick: () => toggleBasemap() }, 'Map: ON');
   const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
-  const depositMarkers: { type: 'iron' | 'oil'; el: HTMLElement }[] = [];
 
-  /** Generates realistic small OSM building footprints inside a city block for a housing district. */
+  /** Generates authentic, varied OpenStreetMap architectural building footprints (L-shapes, U-shapes, stepped residential blocks). */
   function generateCityHousePolygons(pos: LngLat, seed: number): LngLat[][][] {
+    const city = cityAt(pos);
+    const poly = city ? cityPolys.get(city.id)?.[0] : null;
     const footprints: LngLat[][][] = [];
-    const count = 8;
-    const bW = 0.00035;
-    const bH = 0.00025;
-    for (let i = 0; i < count; i++) {
-      const row = Math.floor(i / 4);
-      const col = i % 4;
-      const dx = (col - 1.5) * 0.0011 + Math.sin(seed + i * 1.7) * 0.0002;
-      const dy = (row - 0.5) * 0.0009 + Math.cos(seed + i * 2.3) * 0.0002;
-      const cx = pos[0] + dx;
-      const cy = pos[1] + dy;
-      const w = bW * (0.8 + 0.35 * Math.sin(seed + i * 3.1));
-      const h = bH * (0.8 + 0.35 * Math.cos(seed + i * 4.3));
-      footprints.push([[
-        [cx - w, cy - h],
-        [cx + w, cy - h],
-        [cx + w, cy + h],
-        [cx - w, cy + h],
-        [cx - w, cy - h],
-      ]]);
+
+    let s = (seed * 9301 + 49297) % 233280;
+    const rnd = () => {
+      s = (s * 9301 + 49297) % 233280;
+      return s / 233280;
+    };
+
+    const count = 14;
+    const kmPerLat = 111.32;
+    const kmPerLng = 111.32 * Math.cos((pos[1] * Math.PI) / 180);
+
+    const nearbyRoads: { p: LngLat; ang: number }[] = [];
+    if (init?.map.roads) {
+      for (const line of init.map.roads) {
+        for (let i = 1; i + 3 < line.length; i += 2) {
+          const a: LngLat = [line[i], line[i + 1]];
+          const b: LngLat = [line[i + 2], line[i + 3]];
+          const mid: LngLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+          if (distKm(pos, mid) <= 0.8) {
+            const dx = (b[0] - a[0]) * kmPerLng;
+            const dy = (b[1] - a[1]) * kmPerLat;
+            nearbyRoads.push({ p: mid, ang: Math.atan2(dy, dx) });
+          }
+        }
+      }
     }
+
+    const baseAngle = nearbyRoads.length ? nearbyRoads[0].ang : rnd() * Math.PI;
+
+    for (let i = 0; i < count; i++) {
+      let cx: number;
+      let cy: number;
+      let angle = baseAngle;
+
+      if (nearbyRoads.length && i < nearbyRoads.length * 2) {
+        const seg = nearbyRoads[i % nearbyRoads.length];
+        angle = seg.ang;
+        const side = i % 2 === 0 ? 1 : -1;
+        const setbackKm = 0.016 + rnd() * 0.010;
+        const alongKm = ((Math.floor(i / 2) % 3) - 1) * 0.038 + (rnd() - 0.5) * 0.008;
+        const offX = alongKm * Math.cos(angle) - side * setbackKm * Math.sin(angle);
+        const offY = alongKm * Math.sin(angle) + side * setbackKm * Math.cos(angle);
+        cx = seg.p[0] + offX / kmPerLng;
+        cy = seg.p[1] + offY / kmPerLat;
+      } else {
+        const col = (i % 4) - 1.5;
+        const row = Math.floor(i / 4) - 1.5;
+        const bxKm = col * 0.052 + (rnd() - 0.5) * 0.012;
+        const byKm = row * 0.042 + (rnd() - 0.5) * 0.012;
+        const rxKm = bxKm * Math.cos(angle) - byKm * Math.sin(angle);
+        const ryKm = bxKm * Math.sin(angle) + byKm * Math.cos(angle);
+        cx = pos[0] + rxKm / kmPerLng;
+        cy = pos[1] + ryKm / kmPerLat;
+      }
+
+      if (poly && !inPolygon([cx, cy], poly)) {
+        cx = pos[0] + ((rnd() - 0.5) * 0.08) / kmPerLng;
+        cy = pos[1] + ((rnd() - 0.5) * 0.08) / kmPerLat;
+        if (poly && !inPolygon([cx, cy], poly)) continue;
+      }
+
+      const lenKm = 0.028 + rnd() * 0.024;
+      const widKm = 0.014 + rnd() * 0.008;
+      const hx = lenKm / 2;
+      const hy = widKm / 2;
+      const bType = Math.floor(rnd() * 4);
+
+      let localPoly: [number, number][];
+      if (bType === 0) {
+        localPoly = [
+          [-hx, -hy],
+          [hx, -hy],
+          [hx, hy * 0.25],
+          [hx * 0.2, hy * 0.25],
+          [hx * 0.2, hy * 2.1],
+          [-hx, hy * 2.1],
+          [-hx, -hy],
+        ];
+      } else if (bType === 1) {
+        localPoly = [
+          [-hx, -hy],
+          [hx * 0.15, -hy],
+          [hx * 0.15, -hy * 0.3],
+          [hx, -hy * 0.3],
+          [hx, hy],
+          [-hx * 0.15, hy],
+          [-hx * 0.15, hy * 0.3],
+          [-hx, hy * 0.3],
+          [-hx, -hy],
+        ];
+      } else if (bType === 2) {
+        localPoly = [
+          [-hx, -hy],
+          [hx, -hy],
+          [hx, hy * 1.5],
+          [hx * 0.45, hy * 1.5],
+          [hx * 0.45, hy * 0.15],
+          [-hx * 0.45, hy * 0.15],
+          [-hx * 0.45, hy * 1.5],
+          [-hx, hy * 1.5],
+          [-hx, -hy],
+        ];
+      } else {
+        localPoly = [
+          [-hx, -hy],
+          [hx, -hy],
+          [hx, hy],
+          [hx * 0.25, hy],
+          [hx * 0.25, hy * 1.35],
+          [-hx * 0.25, hy * 1.35],
+          [-hx * 0.25, hy],
+          [-hx, hy],
+          [-hx, -hy],
+        ];
+      }
+
+      const cosA = Math.cos(angle);
+      const sinA = Math.sin(angle);
+      const ringCoords: LngLat[] = localPoly.map(([lx, ly]) => {
+        const rx = lx * cosA - ly * sinA;
+        const ry = lx * sinA + ly * cosA;
+        return [cx + rx / kmPerLng, cy + ry / kmPerLat];
+      });
+
+      footprints.push([ringCoords]);
+    }
+
     return footprints;
   }
 
@@ -438,6 +546,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         roads = msg.map.roads?.length ? new RoadIndex(msg.map.roads) : null;
         cityPolys.clear();
         for (const f of msg.map.cities?.features ?? []) {
+          if (f.properties?.type && f.properties.type !== 'city-boundary-fill') continue;
           const id = f.properties?.cityId ?? f.properties?.id;
           const rings: LngLat[][] = f.geometry?.type === 'Polygon' ? [f.geometry.coordinates[0]] : f.geometry?.type === 'MultiPolygon' ? f.geometry.coordinates.map((x: any) => x[0]) : [];
           if (id) for (const r of rings) if (r?.length >= 3) cityPolys.set(id, [...(cityPolys.get(id) ?? []), r]);
@@ -543,8 +652,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('load', () => {
       for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing']) map.addSource(id, { type: 'geojson', data: empty() });
 
-      map.addSource('deposits-iron', { type: 'geojson', data: depositsGeoJSON('iron') });
-      map.addSource('deposits-oil', { type: 'geojson', data: depositsGeoJSON('oil') });
+      map.addSource('deposits-iron', { type: 'geojson', data: depositsGeoJSON('iron', init?.team) });
+      map.addSource('deposits-oil', { type: 'geojson', data: depositsGeoJSON('oil', init?.team) });
       map.addSource('housing-osm', { type: 'geojson', data: empty() });
 
       if (terrain) {
@@ -552,36 +661,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         map.addLayer({ id: 'terrain', type: 'raster', source: 'terrain', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.72, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } });
       }
 
-      map.addLayer({ id: 'deposits-iron-fill', type: 'fill', source: 'deposits-iron', layout: { visibility: 'none' }, paint: { 'fill-color': '#92400e', 'fill-opacity': 0.45 } });
-      map.addLayer({ id: 'deposits-iron-line', type: 'line', source: 'deposits-iron', layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#f59e0b', 'line-width': 2.5, 'line-dasharray': [4, 2], 'line-opacity': 0.95 } });
-      map.addLayer({ id: 'deposits-oil-fill', type: 'fill', source: 'deposits-oil', layout: { visibility: 'none' }, paint: { 'fill-color': '#18181b', 'fill-opacity': 0.55 } });
-      map.addLayer({ id: 'deposits-oil-line', type: 'line', source: 'deposits-oil', layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#fbbf24', 'line-width': 2.5, 'line-dasharray': [4, 2], 'line-opacity': 0.95 } });
+      map.addLayer({
+        id: 'deposits-iron-fill',
+        type: 'fill',
+        source: 'deposits-iron',
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-color': '#78350f',
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.22, 7, 0.35, 11, 0.45],
+        },
+      });
+      map.addLayer({
+        id: 'deposits-oil-fill',
+        type: 'fill',
+        source: 'deposits-oil',
+        layout: { visibility: 'none' },
+        paint: {
+          'fill-color': '#0f172a',
+          'fill-opacity': ['interpolate', ['linear'], ['zoom'], 4, 0.20, 7, 0.30, 11, 0.38],
+        },
+      });
 
       map.addLayer({ id: 'housing-osm-fill', type: 'fill', source: 'housing-osm', paint: { 'fill-color': '#94a3b8', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.3, 8, 0.75, 12, 0.9] } });
       map.addLayer({ id: 'housing-osm-line', type: 'line', source: 'housing-osm', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#e2e8f0', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.6, 9, 1.2, 12, 1.8], 'line-opacity': 0.95 } });
-
-      for (const dep of DEPOSITS) {
-        const ico = dep.type === 'iron' ? '⛏' : '🛢';
-        const color = dep.type === 'iron' ? '#f59e0b' : '#fbbf24';
-        const el = h('div', {
-          class: `deposit-label deposit-${dep.type}`,
-          style: {
-            display: 'none',
-            pointerEvents: 'none',
-            fontSize: '11px',
-            fontWeight: 'bold',
-            color: '#fff',
-            background: 'rgba(15, 23, 42, 0.88)',
-            border: `1px solid ${color}`,
-            borderRadius: '4px',
-            padding: '2px 6px',
-            whiteSpace: 'nowrap',
-            textShadow: '0 1px 2px #000',
-          }
-        }, `${ico} ${dep.name}`);
-        new maplibregl.Marker({ element: el }).setLngLat(dep.center).addTo(map);
-        depositMarkers.push({ type: dep.type, el });
-      }
 
       (map.getSource('roads') as GeoJSONSource).setData({
         type: 'FeatureCollection',
@@ -1196,33 +1298,44 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const ironVis = showIron ? 'visible' : 'none';
     const oilVis = showOil ? 'visible' : 'none';
 
-    for (const id of ['deposits-iron-fill', 'deposits-iron-line']) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', ironVis);
+    if (map.getLayer('deposits-iron-fill')) {
+      map.setLayoutProperty('deposits-iron-fill', 'visibility', ironVis);
+      if (placingMine && !terrainOn) {
+        map.setPaintProperty('deposits-iron-fill', 'fill-opacity', 0.52);
+      } else {
+        map.setPaintProperty('deposits-iron-fill', 'fill-opacity', ['interpolate', ['linear'], ['zoom'], 4, 0.22, 7, 0.35, 11, 0.45]);
+      }
     }
-    for (const id of ['deposits-oil-fill', 'deposits-oil-line']) {
-      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', oilVis);
-    }
-    for (const m of depositMarkers) {
-      const show = m.type === 'iron' ? showIron : showOil;
-      m.el.style.display = show ? '' : 'none';
+    if (map.getLayer('deposits-oil-fill')) {
+      map.setLayoutProperty('deposits-oil-fill', 'visibility', oilVis);
     }
   }
 
   function showTerrain(p: LngLat) {
     if (!terrain || !init) return;
     const t = init.ruleset.terrain.find((d) => d.id === terrain!.at(p));
-    if (!t) return void (terrainChip.style.display = 'none');
+    const depIron = inDeposit('iron', p, init.team);
+    const depOil = !depIron ? inDeposit('oil', p, init.team) : null;
+    const friendlyDep = depIron ?? depOil;
+
+    if (!t && !friendlyDep) return void (terrainChip.style.display = 'none');
     const pct = (v: number) => `${Math.round(v * 100)}%`;
     const classes = [...new Set(init.ruleset.units.filter((u) => u.kind !== 'air').map((u) => u.mobility ?? 'foot'))];
     clear(terrainChip);
     terrainChip.style.display = 'flex';
-    const barrier = terrain.isBarrier(p);
-    terrainChip.append(h('i', { style: { background: t.color } }), h('b', {}, barrier ? 'River' : t.barrier ? 'Stream (fordable)' : t.name));
-    if (barrier) terrainChip.append(h('span', { class: 'neg' }, 'ground units cross only on a road bridge or at a pontoon crossing'));
-    else terrainChip.append(...classes.map((c) => h('span', {}, `${c} ${pct(t.speed[c] ?? t.speed.default ?? 1)}`)));
-    if (t.cover) terrainChip.append(h('span', { class: t.cover > 0 ? 'pos' : 'neg' }, `cover ${t.cover > 0 ? '+' : ''}${pct(t.cover)}`));
-    if (t.concealment < 1) terrainChip.append(h('span', { class: 'pos' }, 'concealed'));
-    if (!barrier && (t.vision ?? 1) !== 1) terrainChip.append(h('span', { class: (t.vision ?? 1) > 1 ? 'pos' : 'neg' }, `sight ${(t.vision ?? 1) > 1 ? '+' : ''}${Math.round(((t.vision ?? 1) - 1) * 100)}%`));
+    if (t) {
+      const barrier = terrain.isBarrier(p);
+      terrainChip.append(h('i', { style: { background: t.color } }), h('b', {}, barrier ? 'River' : t.barrier ? 'Stream (fordable)' : t.name));
+      if (barrier) terrainChip.append(h('span', { class: 'neg' }, 'ground units cross only on a road bridge or at a pontoon crossing'));
+      else terrainChip.append(...classes.map((c) => h('span', {}, `${c} ${pct(t.speed[c] ?? t.speed.default ?? 1)}`)));
+      if (t.cover) terrainChip.append(h('span', { class: t.cover > 0 ? 'pos' : 'neg' }, `cover ${t.cover > 0 ? '+' : ''}${pct(t.cover)}`));
+      if (t.concealment < 1) terrainChip.append(h('span', { class: 'pos' }, 'concealed'));
+      if (!barrier && (t.vision ?? 1) !== 1) terrainChip.append(h('span', { class: (t.vision ?? 1) > 1 ? 'pos' : 'neg' }, `sight ${(t.vision ?? 1) > 1 ? '+' : ''}${Math.round(((t.vision ?? 1) - 1) * 100)}%`));
+    }
+    if (friendlyDep) {
+      const ico = friendlyDep.type === 'iron' ? '⛏' : '🛢';
+      terrainChip.append(h('span', { class: 'pos', style: { marginLeft: '6px', background: friendlyDep.type === 'iron' ? '#78350f' : '#0f172a', color: '#fff', borderRadius: '3px', padding: '1px 6px', fontWeight: 'bold' } }, `${ico} ${friendlyDep.name}`));
+    }
     if (roads?.isNear(p, 2)) terrainChip.append(h('span', { class: 'road' }, `road ×${init.ruleset.rules.roadSpeedMult}`));
   }
 
@@ -1302,7 +1415,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (!myHq) return 'Сначала необходимо построить Военный штаб';
-      if (!inDeposit('iron', p)) return 'Шахту можно строить только на месторождении железа';
+      if (!inDeposit('iron', p, init.team)) return 'Шахту можно строить только на месторождении железа вашей команды';
       const clash = snap.buildings.find((b) => b.def === 'mine' && distKm(b.pos, p) < 1);
       if (clash) return 'Место занято другой шахтой';
       return null;
@@ -2085,7 +2198,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!m) {
         const el = h('div', { class: `bm t${b.team} bm-${b.def}` });
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
-        el.querySelector('.glyph')!.textContent = d.icon;
+        if (b.def === 'housing') {
+          el.querySelector('.glyph')!.innerHTML = `<svg class="bld-house-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`;
+        } else {
+          el.querySelector('.glyph')!.textContent = d.icon;
+        }
         el.addEventListener('click', (ev) => {
           if (placing || b.team !== myTeam) return;
           ev.stopPropagation();
@@ -2142,9 +2259,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       alive.add(b.id);
       let m = bMarkers.get(b.id);
       if (!m) {
-        const el = h('div', { class: `bm t${b.team}` });
+        const el = h('div', { class: `bm t${b.team} bm-${b.def}` });
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
-        el.querySelector('.glyph')!.textContent = defB.get(b.def)?.icon ?? '?';
+        if (b.def === 'housing') {
+          el.querySelector('.glyph')!.innerHTML = `<svg class="bld-house-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`;
+        } else {
+          el.querySelector('.glyph')!.textContent = defB.get(b.def)?.icon ?? '?';
+        }
         m = { el, marker: new maplibregl.Marker({ element: el }).setLngLat(b.pos).addTo(map), done: true };
         bMarkers.set(b.id, m);
       }
