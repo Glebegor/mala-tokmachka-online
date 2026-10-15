@@ -196,6 +196,8 @@ export interface Unit {
   skirmishCount?: number;
   /** Target frontline garrison unit to reinforce and merge into upon arrival. */
   reinforceTarget?: number;
+  /** Frontline status: holding, advancing, or retreating. */
+  frontStatus?: 'holding' | 'advancing' | 'retreating';
 }
 
 /**

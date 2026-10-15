@@ -2067,10 +2067,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const squadCount = u.squadSize ?? d.squadSize ?? (isFrontGarrison ? 100 : 5);
 
         if (isFrontGarrison) {
+          const statusText = u.frontStatus === 'advancing'
+            ? '⚔️ Гарнизон фронта (медленно наступает)'
+            : u.frontStatus === 'retreating'
+            ? '⚠️ Гарнизон фронта (медленно отступает)'
+            : '🛡️ Гарнизон фронта (удерживает рубеж)';
+          const statusColor = u.frontStatus === 'advancing' ? '#4ade80' : u.frontStatus === 'retreating' ? '#f87171' : '#8ec5fc';
+
           side.append(
             h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, 'Пехотный рубеж'), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
-            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${u.ammo ?? 100}%`),
-            h('div', { class: 'stat', style: { color: '#8ec5fc', marginTop: '6px' } }, '🛡️ Гарнизон фронта (удерживает рубеж)'),
+            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${Math.round(u.ammo ?? 100)}`),
+            h('div', { class: 'stat', style: { color: statusColor, marginTop: '6px' } }, statusText),
             h('div', { class: 'muted', style: { marginTop: '8px', fontSize: '12px' } }, 'ПКМ своим отрядом пехоты по этой позиции для отправки на укрепление.'),
           );
         } else if (u.def === 'infantry') {

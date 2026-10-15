@@ -22,5 +22,13 @@
     "color": "#94a3b8",
     "start": 0,
     "cap": 5000
+  },
+  {
+    "id": "ammo",
+    "icon": "shell",
+    "name": "Боеприпасы (БК)",
+    "color": "#e39b4f",
+    "start": 0,
+    "cap": 50000
   }
 ]

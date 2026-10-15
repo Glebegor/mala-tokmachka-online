@@ -3528,6 +3528,13 @@ export class Sim {
         if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0035;
       }
 
+      if (local0) {
+        (local0 as Unit).frontStatus = dynamicPush > 0.0005 ? 'advancing' : dynamicPush < -0.0005 ? 'retreating' : 'holding';
+      }
+      if (local1) {
+        (local1 as Unit).frontStatus = dynamicPush < -0.0005 ? 'advancing' : dynamicPush > 0.0005 ? 'retreating' : 'holding';
+      }
+
       return clamp(dynamicPush + (effPush[0] * hold[0] - effPush[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
     };
 
@@ -3547,8 +3554,31 @@ export class Sim {
         const [nx, ny] = normalOf(n[pi], n[i], n[ni]);
         const dlng = (nx * v * dt) / kmPerDegLng(n[i].lat);
         const dlat = (ny * v * dt) / 111.32;
-        const lng = n[i].lng + dlng;
-        const lat = n[i].lat + dlat;
+
+        // Displace frontline garrisons on BOTH sides of this front node
+        // Advancing troops push forward aggressively into enemy territory, creating grey zone cells ahead!
+        if (!closed && Math.abs(v) > 0) {
+          const nodePos: LngLat = [n[i].lng, n[i].lat];
+          for (const u of w.units) {
+            if (u.hp <= 0) continue;
+            if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
+              if (nearestNode(n, u.pos) === i && distKm(u.pos, nodePos) <= 5.5) {
+                const pushMult = 1.2;
+                const nextPos: LngLat = [u.pos[0] + dlng * pushMult, u.pos[1] + dlat * pushMult];
+                if (!this.terrain?.isBarrier(nextPos)) {
+                  u.pos = nextPos;
+                  if (u.post) u.post = [u.post[0] + dlng * pushMult, u.post[1] + dlat * pushMult];
+                }
+              }
+            }
+          }
+        }
+
+        // The front line follows behind the advancing vanguard at ~0.7x speed, ensuring the solid line
+        // stays behind the grey penetration tiles created in enemy territory
+        const frontMoveMult = closed ? 1 : 0.7;
+        const lng = n[i].lng + dlng * frontMoveMult;
+        const lat = n[i].lat + dlat * frontMoveMult;
         // the line does not advance across open sea or a big river
         if (this.terrain?.isBarrier([lng, lat]) && !this.terrain.isBarrier([n[i].lng, n[i].lat])) {
           n[i].v = 0;
@@ -3556,24 +3586,6 @@ export class Sim {
         }
         n[i].lng = lng;
         n[i].lat = lat;
-
-        // Displace frontline garrisons on BOTH sides of this front node by [dlng, dlat]
-        // so that the front line, the pushing garrison, and the retreating garrison all move together!
-        if (!closed && Math.abs(v) > 0) {
-          const nodePos: LngLat = [n[i].lng, n[i].lat];
-          for (const u of w.units) {
-            if (u.hp <= 0) continue;
-            if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
-              if (nearestNode(n, u.pos) === i && distKm(u.pos, nodePos) <= 5.5) {
-                const nextPos: LngLat = [u.pos[0] + dlng, u.pos[1] + dlat];
-                if (!this.terrain?.isBarrier(nextPos)) {
-                  u.pos = nextPos;
-                  if (u.post) u.post = [u.post[0] + dlng, u.post[1] + dlat];
-                }
-              }
-            }
-          }
-        }
       }
       if (!closed) n[0].v = n[len - 1].v = 0; // both ends of the main line stay anchored
     };

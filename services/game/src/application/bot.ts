@@ -202,11 +202,14 @@ function findBotDepositPos(sim: Sim, team: Team, type: 'iron' | 'oil'): LngLat |
   const shuffled = [...deposits].sort(() => Math.random() - 0.5);
 
   for (const dep of shuffled) {
-    const spots: LngLat[] = [dep.center];
-    for (let i = 0; i < 16; i++) {
-      const ang = Math.random() * Math.PI * 2;
-      const r = Math.random() * (dep.radiusKm * 0.65);
-      spots.push(offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r));
+    const spots: LngLat[] = [];
+    if (inDeposit(type, dep.center, team, sim.deposits)) spots.push(dep.center);
+    for (const rFrac of [0.15, 0.3, 0.5, 0.7]) {
+      const r = dep.radiusKm * rFrac;
+      for (let i = 0; i < 12; i++) {
+        const ang = (i * Math.PI * 2) / 12;
+        spots.push(offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r));
+      }
     }
 
     for (const spot of spots) {
@@ -354,6 +357,21 @@ export class Bot {
         }
       }
     }
+
+    // Build ammo factory (up to 1 per bot)
+    const ammoDef = sim.defs.b.get('ammo_factory');
+    if (ammoDef && sim.canPay(p, ammoDef.cost)) {
+      const myAmmo = mine.filter((b) => b.def === 'ammo_factory');
+      if (myAmmo.length < 1) {
+        const anchor = mine.find((b) => b.def === 'steel_mill') ?? mine.find((b) => b.def === 'military_base') ?? hq;
+        if (anchor) {
+          const spot = offsetKm(anchor.pos, 4 + Math.random() * 4, 4 + Math.random() * 4);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+            sim.apply(p.id, { type: 'build', def: 'ammo_factory', pos: spot });
+          }
+        }
+      }
+    }
   }
 
 
@@ -368,14 +386,31 @@ export class Bot {
       if (b.def === 'military_base') {
         const money = p.res.money ?? 0;
         if (!w.queue.some((q) => q.building === b.id)) {
-          if (count('infantry') < 12 && money >= 100) {
-            sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
-          } else if (count('humvee_mg') < 3 && money >= 200) {
-            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee_mg' });
-          } else if (count('humvee') < 2 && money >= 150) {
-            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
-          } else if (count('truck') < 3 && money >= 125) {
+          const infCount = count('infantry');
+          const humveeCount = count('humvee');
+          const humveeMgCount = count('humvee_mg');
+          const truckCount = count('truck');
+
+          // Ensure bot buys vehicles (truck, humvee) and infantry in balanced numbers:
+          // Infantry squad: 100, Truck: 125, Humvee: 150, Humvee MG: 200
+          if (truckCount < 1 && money >= 125) {
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+          } else if (humveeCount < 1 && money >= 150) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
+          } else if (infCount < 4 && money >= 100) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+          } else if (humveeMgCount < 2 && money >= 200) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee_mg' });
+          } else if (truckCount < 2 && money >= 125) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+          } else if (humveeCount < 2 && money >= 150) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
+          } else if (infCount < 12 && money >= 100) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+          } else if (truckCount < 4 && money >= 125) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+          } else if (humveeCount < 4 && money >= 150) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
           }
         }
         continue;
@@ -420,11 +455,17 @@ export class Bot {
     const own = (def: string) => w.buildings.filter((b) => b.team === p.team && b.def === def && b.progress >= 1);
     const nearest = (from: Building, list: Building[]) => list.sort((a, b) => distKm(a.pos, from.pos) - distKm(b.pos, from.pos))[0];
     const route = (u: Unit, from?: Building, to?: Building, res?: string) => from && to && sim.apply(p.id, { type: 'setRoute', unit: u.id, fromBuilding: from.id, toBuilding: to.id, resType: res, minLoad: 1 });
-    const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul);
+    // Only use trucks that are not occupied as troop transports or reinforcing
+    const unembarkedNearBase = (t: Unit) => w.units.some((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && !u.target && !u.reinforceTarget && distKm(u.pos, t.pos) <= 10);
+    const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul && !u.reinforceTarget && !(u.cargo?.passengers?.length) && !unembarkedNearBase(u));
     const mines = own('mine'), works = own('metalworks'), steelMills = own('steel_mill'), bases = own('hq'), refineries = own('oil_refinery');
     const ammo = own('ammo_factory'), depots = own('ammo_depot');
     trucks.forEach((u, i) => {
-      if (works[0] && ammo[0] && (ammo[0].storage?.metal ?? 0) < 100 && i % 3 === 0) {
+      if (steelMills[0] && ammo[0] && (ammo[0].storage?.steel ?? 0) < 50 && i % 3 === 0) {
+        route(u, steelMills[0], ammo[0], 'steel');
+      } else if (ammo[0] && bases[0] && (i % 3 === 1)) {
+        route(u, ammo[0], bases[0], 'ammo');
+      } else if (works[0] && ammo[0] && (ammo[0].storage?.metal ?? 0) < 100 && i % 3 === 0) {
         route(u, works[0], ammo[0], 'metal');
       } else if (ammo[0] && depots.length && (i % 2 === 1 || depots.some((d) => (d.storage?.ammo ?? 0) < 3000))) {
         const needyDepot = [...depots].sort((a, b) => (a.storage?.ammo ?? 0) - (b.storage?.ammo ?? 0))[0];
@@ -451,11 +492,54 @@ export class Bot {
 
   private command(sim: Sim, p: Player) {
     const w = sim.world;
-    this.logistics(sim, p);
-    const army = w.units.filter((u) => u.owner === p.id && u.frontPost === undefined && sim.defs.u.get(u.def)!.kind !== 'air' && u.def !== 'truck' && !sim.defs.u.get(u.def)!.repairs);
-    const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
+    const myMilitaryBases = w.buildings.filter((b) => b.owner === p.id && b.def === 'military_base');
+    const fallbackBase = w.buildings.filter((b) => b.team === p.team && b.def === 'military_base')[0];
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
+    const anchorBase = myMilitaryBases[0]?.pos ?? fallbackBase?.pos ?? hq?.pos ?? sim.map.center;
     const anchor: LngLat = hq?.pos ?? sim.map.center;
+
+    // Disembark any passengers if vehicle arrived at a non-garrison destination
+    for (const v of w.units) {
+      if (v.owner === p.id && (v.cargo?.passengers?.length ?? 0) > 0 && !v.reinforceTarget && !v.target) {
+        sim.apply(p.id, { type: 'disembark', transport: v.id });
+      }
+    }
+
+    // 1. Board infantry into available empty transports (truck or humvee) to move them rapidly
+    const transports = w.units.filter((u) => u.owner === p.id && (u.def === 'humvee' || (u.def === 'truck' && !u.haul)) && !u.target && !u.reinforceTarget);
+    const unembarkedInfantry = w.units.filter((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && !u.target && !u.reinforceTarget);
+
+    for (const trans of transports) {
+      const td = sim.defs.u.get(trans.def);
+      const cap = td?.passengerCap ?? 0;
+      if (cap <= 0) continue;
+      const currentPassengers = trans.cargo?.passengers?.length ?? 0;
+      const slots = cap - currentPassengers;
+      if (slots <= 0) continue;
+
+      const nearbyInf = unembarkedInfantry.filter((inf) => !inf.embarkedIn && distKm(inf.pos, trans.pos) <= 10).slice(0, slots);
+      for (const inf of nearbyInf) {
+        sim.apply(p.id, { type: 'board', unit: inf.id, transport: trans.id });
+      }
+    }
+
+    this.logistics(sim, p);
+
+    // Return empty transports sitting idle far from base back to base to pick up next reinforcements
+    const emptyVehiclesAtFront = w.units.filter((u) =>
+      u.owner === p.id &&
+      (u.def === 'truck' || u.def === 'humvee') &&
+      !u.haul &&
+      !u.reinforceTarget &&
+      !u.target &&
+      !(u.cargo?.passengers?.length) &&
+      distKm(u.pos, anchorBase) > 25
+    );
+    for (const v of emptyVehiclesAtFront) {
+      sim.apply(p.id, { type: 'move', units: [v.id], to: anchorBase });
+    }
+
+    const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
 
     // strike drones and missiles go for enemy sites, recon drones scout over the enemy side (from their launchers)
     const send = (u: Unit, to: LngLat) =>
@@ -472,6 +556,10 @@ export class Bot {
       if (cp) send(u, offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20));
     }
 
+    // Ground army: include non-logistics trucks as troop transports, exclude embarked infantry
+    const isHaulTruck = (u: Unit) => u.def === 'truck' && u.haul !== undefined;
+    const army = w.units.filter((u) => u.owner === p.id && u.frontPost === undefined && sim.defs.u.get(u.def)!.kind !== 'air' && !isHaulTruck(u) && !sim.defs.u.get(u.def)!.repairs && !u.embarkedIn);
+
     // schooling: with spare money, send a squad that is not on a mission through the training centre
     for (const b of w.buildings) {
       if (b.owner !== p.id || b.progress < 1 || b.course) continue;
@@ -487,37 +575,90 @@ export class Bot {
 
     const idle = army.filter((u) => !u.target && u.targetPost === undefined && !u.reinforceTarget);
     if (!idle.length) return;
-    // route planning is the costly part: re-order the army at most every 5 s
-    if (w.time - this.lastArmyOrder < 5) return;
+    // route planning is the costly part: re-order the army at most every 4 s
+    if (w.time - this.lastArmyOrder < 4) return;
     this.lastArmyOrder = w.time;
 
-    // Bot ground army: reinforce frontline garrisons evenly near the military base (not running to far edges)
+    // Bot ground army: prioritize frontline garrisons, stabilizing trouble spots first (opposing strength disparity)
     const friendlyGarrisons = w.units.filter((u) => u.team === p.team && u.hp > 0 && (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')));
-    if (friendlyGarrisons.length) {
-      const myMilitaryBases = w.buildings.filter((b) => b.owner === p.id && b.def === 'military_base');
-      const fallbackBase = w.buildings.filter((b) => b.team === p.team && b.def === 'military_base')[0];
-      const anchorBase = myMilitaryBases[0]?.pos ?? fallbackBase?.pos ?? idle[0]?.pos ?? hq?.pos ?? sim.map.center;
+    const enemyGarrisons = w.units.filter((u) => u.team !== p.team && u.hp > 0 && (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')));
 
-      // Find frontline garrisons near military base (within ~140 km), or closest 8 if none within 140 km
-      let nearby = friendlyGarrisons.filter((g) => distKm(g.pos, anchorBase) <= 140);
-      if (!nearby.length) {
-        nearby = [...friendlyGarrisons].sort((a, b) => distKm(a.pos, anchorBase) - distKm(b.pos, anchorBase)).slice(0, 8);
+    if (friendlyGarrisons.length) {
+      let candidateGarrisons = friendlyGarrisons.filter((g) => distKm(g.pos, anchorBase) <= 160);
+      if (!candidateGarrisons.length) {
+        candidateGarrisons = [...friendlyGarrisons].sort((a, b) => distKm(a.pos, anchorBase) - distKm(b.pos, anchorBase)).slice(0, 10);
       }
-      if (nearby.length) {
-        const incoming = new Map<number, number>();
+
+      if (candidateGarrisons.length) {
+        const incomingStr = new Map<number, number>();
         for (const u of w.units) {
-          if (u.reinforceTarget) incoming.set(u.reinforceTarget, (incoming.get(u.reinforceTarget) ?? 0) + 1);
+          if (u.reinforceTarget) {
+            let added = 1;
+            if (u.cargo?.passengers?.length) {
+              added = u.cargo.passengers.length;
+            } else if ((sim.defs.u.get(u.def)?.mobility ?? 'foot') === 'foot') {
+              added = u.strength ?? 1;
+            }
+            incomingStr.set(u.reinforceTarget, (incomingStr.get(u.reinforceTarget) ?? 0) + added);
+          }
         }
-        for (const u of idle) {
-          // Distribute reinforcements evenly: sort by (strength + incoming), then by distance to unit
-          nearby.sort((a, b) => {
-            const loadA = (a.strength ?? 1) + (incoming.get(a.id) ?? 0);
-            const loadB = (b.strength ?? 1) + (incoming.get(b.id) ?? 0);
-            return loadA - loadB || distKm(u.pos, a.pos) - distKm(u.pos, b.pos);
+
+        const getOpposing = (g: Unit) => {
+          let best: Unit | null = null;
+          let bestD = 12.0;
+          for (const eg of enemyGarrisons) {
+            const d = distKm(g.pos, eg.pos);
+            if (d < bestD) {
+              bestD = d;
+              best = eg;
+            }
+          }
+          return best;
+        };
+
+        // Prioritize motorized transports with passengers first, then vehicles, then foot infantry
+        const prioritizedUnits = [...idle].sort((a, b) => {
+          const aPass = a.cargo?.passengers?.length ?? 0;
+          const bPass = b.cargo?.passengers?.length ?? 0;
+          if (aPass !== bPass) return bPass - aPass;
+          const aIsVeh = a.def === 'truck' || a.def === 'humvee' || a.def === 'humvee_mg';
+          const bIsVeh = b.def === 'truck' || b.def === 'humvee' || b.def === 'humvee_mg';
+          if (aIsVeh !== bIsVeh) return aIsVeh ? -1 : 1;
+          return 0;
+        });
+
+        for (const u of prioritizedUnits) {
+          // Sort candidates by threat / deficit:
+          // threat = oppStrength - myEffectiveStrength
+          candidateGarrisons.sort((a, b) => {
+            const oppA = getOpposing(a);
+            const oppB = getOpposing(b);
+            const oppStrA = oppA ? (oppA.strength ?? 1) : 1;
+            const oppStrB = oppB ? (oppB.strength ?? 1) : 1;
+            const myStrA = (a.strength ?? 1) + (incomingStr.get(a.id) ?? 0);
+            const myStrB = (b.strength ?? 1) + (incomingStr.get(b.id) ?? 0);
+            let deficitA = oppStrA - myStrA;
+            let deficitB = oppStrB - myStrB;
+            if ((a.ammo ?? 100) <= 0 && (!oppA || (oppA.ammo ?? 100) > 0)) deficitA += 2;
+            if ((b.ammo ?? 100) <= 0 && (!oppB || (oppB.ammo ?? 100) > 0)) deficitB += 2;
+
+            // Prioritize higher deficit first (troubled spots)
+            if (deficitB !== deficitA) return deficitB - deficitA;
+            // Then lower total friendly strength
+            if (myStrA !== myStrB) return myStrA - myStrB;
+            // Then closer to the reinforcing unit
+            return distKm(u.pos, a.pos) - distKm(u.pos, b.pos);
           });
-          const target = nearby[0];
+
+          const target = candidateGarrisons[0];
           if (target) {
-            incoming.set(target.id, (incoming.get(target.id) ?? 0) + 1);
+            let added = 1;
+            if (u.cargo?.passengers?.length) {
+              added = u.cargo.passengers.length;
+            } else if ((sim.defs.u.get(u.def)?.mobility ?? 'foot') === 'foot') {
+              added = u.strength ?? 1;
+            }
+            incomingStr.set(target.id, (incomingStr.get(target.id) ?? 0) + added);
             sim.apply(p.id, { type: 'reinforce', units: [u.id], targetUnit: target.id });
           }
         }
