@@ -1,5 +1,6 @@
 import type { SnapMsg, UnitDef } from '@sw/core';
 import { h } from './dom';
+import { tr } from './i18n';
 
 type Item = SnapMsg['queue'][number];
 
@@ -77,7 +78,7 @@ export class QueueList {
       r.time.textContent = active ? fmt(q.remaining) : `in ${fmt(done.get(q.id)!)}`;
     });
     // dashed placeholders for the free slots, always after the orders
-    while (this.slots.length < this.cap - items.length) this.slots.push(h('div', { class: 'qcard empty' }));
+    while (this.slots.length < this.cap - items.length) this.slots.push(h('div', { class: 'qcard empty', 'data-label': tr('free') }));
     while (this.slots.length > this.cap - items.length) this.slots.pop()!.remove();
     for (const e of this.slots) this.list.append(e);
   }

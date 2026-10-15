@@ -245,7 +245,7 @@ small.warn { color: #f59e0b; }
 .queue-cols { display: flex; gap: 6px; }
 .qcard { position: relative; width: 66px; height: 104px; display: flex; flex-direction: column; align-items: center; gap: 3px; padding: 16px 4px 0; border: 1px solid var(--line); border-radius: 3px; background: rgba(255, 255, 255, 0.03); overflow: hidden; }
 .qcard.empty { border: 1px dashed rgba(255, 255, 255, 0.2); background: none; justify-content: center; padding-top: 0; }
-.qcard.empty::before { content: "free"; font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.28); }
+.qcard.empty::before { content: attr(data-label); font-size: 10px; letter-spacing: .12em; text-transform: uppercase; color: rgba(255, 255, 255, 0.28); }
 .qcard.active { border-color: var(--accent); background: rgba(232, 195, 90, 0.08); box-shadow: inset 0 0 12px rgba(232, 195, 90, 0.12); }
 .qcard.theirs { opacity: .75; }
 .qcard .qicon .nato-ico { width: 34px; height: 34px; }

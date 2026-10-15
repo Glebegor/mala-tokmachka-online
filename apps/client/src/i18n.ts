@@ -26,32 +26,67 @@ export function setLang(l: Lang) {
   location.reload(); // simplest way to redraw every panel in the new language (a running match is rejoined)
 }
 
-const exact = new Map(Object.entries(UK_EXACT));
-const patterns = UK_PATTERNS.map(([re, out]) => [new RegExp(`^${re}$`), out] as const);
+const exact = new Map(Object.entries(UK_EXACT).filter(([k]) => !k.includes('@')));
+// keys with "@" (a name or phrase) become patterns: "#" a number, "@" anything, translated in turn ($1, $2… in order)
+const NUM_RE = '(\\d[\\d,]*(?:\\.\\d+)?)';
+const named = Object.entries(UK_EXACT)
+  .filter(([k]) => k.includes('@'))
+  .map(([k, v]) => {
+    const re = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/#/g, NUM_RE).replace(/@/g, '(.+?)');
+    let i = 0;
+    return [re, v.replace(/[#@]/g, () => `$${++i}`)] as [string, string];
+  })
+  .sort((a, b) => b[0].length - a[0].length); // the most specific first
+const patterns = [...named, ...UK_PATTERNS].map(([re, out]) => [new RegExp(`^${re}$`), out] as const);
+/** Numbers in a text: "Produces 2/s ore" is looked up as "Produces #/s ore" and the numbers put back. */
+const NUM = /\d[\d,]*(?:\.\d+)?/g;
+const memo = new Map<string, string | null>();
 
-/** Translate one text (exact phrase, or a pattern whose captured parts are translated in turn). */
+/** The translation of a text without surrounding space, or null. */
+function lookup(key: string, depth = 0): string | null {
+  const hit = exact.get(key);
+  if (hit !== undefined) return hit;
+  const nums = key.match(NUM);
+  if (nums) {
+    const t = exact.get(key.replace(NUM, '#'));
+    if (t !== undefined) {
+      let i = 0;
+      return t.replace(/#/g, () => nums[i++] ?? '#');
+    }
+  }
+  if (depth > 3) return null;
+  for (const [re, out] of patterns) {
+    const m = key.match(re);
+    if (!m) continue;
+    return out.replace(/\$(\d)/g, (_, i) => {
+      const g = m[Number(i)] ?? '';
+      return /[a-z]/i.test(g) ? lookup(g, depth + 1) ?? g : g;
+    });
+  }
+  // a list ("Infantry, Tank, Artillery") or several sentences: part by part when every part is known
+  for (const sep of [/(?<=[.:!?])\s+/, /,\s+/, /\s+·\s+/]) {
+    const parts = key.split(sep);
+    if (parts.length < 2) continue;
+    const glue = key.match(sep)![0];
+    const done = parts.map((p) => lookup(p, depth + 1) ?? (p.endsWith('.') ? (lookup(p.slice(0, -1), depth + 1) ?? null)?.concat('.') ?? null : null));
+    if (done.every((x) => x !== null)) return done.join(glue);
+  }
+  return null;
+}
+
+/** Translate one text (exact phrase, numbers template, a pattern whose captured parts are translated in turn, or part by part). */
 export function tr(s: string): string {
   if (lang() !== 'uk') return s;
   const key = s.trim();
   if (!key) return s;
-  const hit = exact.get(key);
-  if (hit !== undefined) return s.replace(key, hit);
-  for (const [re, out] of patterns) {
-    const m = key.match(re);
-    if (!m) continue;
-    const res = out.replace(/\$(\d)/g, (_, i) => {
-      const g = m[Number(i)] ?? '';
-      return exact.get(g) ?? (g.length > 2 && /[a-z]/i.test(g) ? tr(g) : g);
-    });
-    return s.replace(key, res);
+  let t = memo.get(key);
+  if (t === undefined) {
+    t = lookup(key);
+    if (memo.size > 20000) memo.clear(); // panels repaint several times a second: remember what was worked out
+    memo.set(key, t);
   }
-  // a list of sentences (descriptions): translate sentence by sentence when every one is known
-  if (key.includes('. ')) {
-    const parts = key.split(/(?<=\.)\s+/);
-    const done = parts.map((p) => exact.get(p) ?? exact.get(p.replace(/\.$/, '')) ?? null);
-    if (done.every((x) => x !== null)) return s.replace(key, done.join(' '));
-  }
-  if (import.meta.env.DEV) missing.add(key);
+  if (t !== null) return s.replace(key, t);
+  if (import.meta.env.DEV && !/[а-яіїєґ]/i.test(key)) missing.add(key); // (already Ukrainian: a text it translated itself)
   return s;
 }
 

@@ -1,0 +1,167 @@
+/** Ukrainian for the guidebook and for the messages the servers send back (refused orders, sign-in, lobby). */
+
+export const UK_GUIDE: Record<string, string> = {
+  'Getting started': 'Початок гри', Controls: 'Керування', 'Reading the map': 'Як читати мапу', 'Economy & logistics': 'Економіка й логістика',
+  Army: 'Армія', 'Team play': 'Командна гра',
+  'Mala Tokmachka Online is a real-time wargame on the real line of contact: Ukraine against Russia, up to eight players a side (bots fill in if you like).':
+    'Мала Токмачка Онлайн — військова стратегія в реальному часі на справжній лінії зіткнення: Україна проти Росії, до восьми гравців з кожного боку (за бажанням вільні місця займають боти).',
+  'How to win': 'Як перемогти', 'Take every city on the map, or': 'Захопіть усі міста на мапі, або', 'destroy every enemy headquarters, or': 'знищіть усі ворожі штаби, або',
+  'have the higher score when the time runs out (cities you hold earn score every second).': 'майте більший рахунок, коли скінчиться час (утримувані міста щосекунди дають очки).',
+  'Your first minutes': 'Перші хвилини',
+  'You start next to your Military Base (HQ) with a few infantry squads. The big arrow points at it.': 'Ви починаєте біля своєї військової бази (штабу) з кількома піхотними загонами. Велика стрілка вказує на неї.',
+  'Build a Power Plant and an Ore Mine, then a Metal Works at least 17.5 km from the mine: a truck carries the ore between them.':
+    'Збудуйте електростанцію й рудник, потім металургійний завод щонайменше за 17,5 км від рудника: руду між ними возить вантажівка.',
+  'Train troops at the HQ, move them to the front with right click, and fortify with trenches and bunkers.': 'Навчайте війська в штабі, відправляйте їх на фронт правим кліком і укріплюйтеся окопами та бункерами.',
+  'Set up supply: trucks for ore, metal and ammo, fuel trucks for fuel. Units run out of ammo and fuel.': 'Налагодьте постачання: вантажівки для руди, металу й БК, паливозаправники для пального. У військ закінчуються БК і пальне.',
+  'Lobby options': 'Налаштування лобі',
+  'Ceasefire at start (default 15 min): build and deploy, but nobody may shoot or cross the front until it ends.': 'Перемир’я на старті (типово 15 хв): будуйтеся й розгортайтеся, але ніхто не стріляє й не перетинає фронт, доки воно триває.',
+  'Game type Sandbox: endless resources, everything ten times faster, no victory: for trying things out.': 'Тип гри «Пісочниця»: безмежні ресурси, усе вдесятеро швидше, без перемоги — щоб усе випробувати.',
+  'Fill empty slots with bots, bot difficulty, front speed, fog of war, match length.': 'Заповнення вільних місць ботами, складність ботів, швидкість фронту, туман війни, тривалість матчу.',
+  // controls
+  'Left click': 'Лівий клік', 'Select a unit, formation or building': 'Вибрати одиницю, формування чи будівлю', 'Shift + click': 'Shift + клік', 'Add to / remove from the selection': 'Додати до вибору / прибрати з вибору',
+  'Shift + drag': 'Shift + протягування', 'Box selection': 'Вибір рамкою', 'Right click': 'Правий клік', 'Move by the fastest route (roads in transport mode, bridges over rivers)': 'Рух найшвидшим маршрутом (дорогами в транспортному режимі, мостами через річки)',
+  'Shift + right click': 'Shift + правий клік', 'Add a waypoint': 'Додати точку маршруту', 'Alt + right click': 'Alt + правий клік', 'Move straight across country, ready to fight': 'Рух навпростець, у бойовій готовності',
+  'Right drag': 'Протягування правою', 'Move and form up facing the way you drag (line, column or wedge; a spread group forms a line)': 'Рух і шикування обличчям у бік протягування (лінія, колона чи клин; розсип шикується в лінію)',
+  F: 'F', 'Next formation: spread, line, column, wedge': 'Наступний стрій: розсип, лінія, колона, клин', S: 'S', 'G / U': 'G / U', 'Group / ungroup the selection': 'Згрупувати / розгрупувати вибране',
+  'Ctrl + 1–9, 1–9': 'Ctrl + 1–9, 1–9', 'Assign / select a numbered group (press again to jump to it)': 'Призначити / вибрати пронумеровану групу (ще раз — перейти до неї)',
+  'Ping menu: Going here, Defend here, Danger here, Look here (keys 1–4 in the menu)': 'Меню позначок: Йду сюди, Обороняти тут, Небезпека тут, Дивіться сюди (клавіші 1–4 в меню)',
+  'Alt + click': 'Alt + клік', 'Quick "look here" ping for your team': 'Швидка позначка «дивіться сюди» для команди', 'T / M': 'T / M', 'Terrain overlay / real map on and off': 'Шар місцевості / справжня мапа: увімк. і вимк.',
+  H: 'H', 'This guide': 'Цей довідник', 'Cancel placing, picking or pinging': 'Скасувати розміщення, вибір чи позначку',
+  // map
+  'Territory, as on DeepState': 'Територія, як на DeepState', 'Red, hatched: ground held by Russia. The red line is the front.': 'Червона штрихована: територія під контролем Росії. Червона лінія — фронт.',
+  "Grey: ground that has just changed hands and is still contested. It becomes the taker's once no enemy ground troops have been within 3 km of it for 30 seconds. Nothing but ammo depots can be built on grey ground.":
+    'Сіра: земля, що щойно змінила власника й досі спірна. Вона стає вашою, коли 30 секунд у межах 3 км немає ворожих наземних військ. На сірій землі можна будувати лише склади БК.',
+  'Blue: ground Ukraine has liberated.': 'Синя: територія, яку звільнила Україна.',
+  "Grey circles behind the enemy line: your troops sitting there unopposed (for 10 s) loosen the enemy's hold.": 'Сірі кола за лінією ворога: ваші війська, що стоять там без опору (10 с), послаблюють контроль ворога.',
+  'Yellow broken ring: a cauldron. Units cut off inside lose strength every second until relieved or destroyed.': 'Жовте пунктирне кільце: котел. Відрізані всередині війська щосекунди втрачають сили, доки їх не деблокують або не знищать.',
+  Markers: 'Позначки', "NATO symbols: rectangle = your side, diamond = enemy. Your units are in your nation's colour (Ukraine blue, Russia red), allies green.":
+    'Символи НАТО: прямокутник — ваша сторона, ромб — ворог. Ваші війська — у кольорі вашої країни (Україна синя, Росія червона), союзники зелені.',
+  'Under the frame: two wheels = wheeled vehicle, track = tracked. Yellow with » = driving in column on a road.': 'Під рамкою: два колеса — колісна техніка, гусениця — гусенична. Жовта з » — рух колоною дорогою.',
+  'Right of the frame: rank chevrons. Left: green buff and red debuff pips. On top: the size of a formation.': 'Праворуч від рамки: шеврони звання. Ліворуч: зелені посилення й червоні послаблення. Згори: розмір формування.',
+  'Forest and cities give cover and hide troops; hills and mountains see further; open fields expose.': 'Ліс і міста дають укриття й ховають війська; з пагорбів і гір видно далі; відкрите поле демаскує.',
+  'Big rivers can only be crossed on road bridges or at your pontoon crossings.': 'Великі річки можна перетнути лише дорожніми мостами або вашими понтонними переправами.',
+  'Belarus, Moldova and the EU are off limits. Special zones (Kremenchuk refinery, Alabuga) boost one building type.': 'Білорусь, Молдова та ЄС недоступні. Особливі зони (Кременчуцький НПЗ, Алабуга) посилюють один тип будівель.',
+  'You only see what your units, buildings and recon drones see. Recon teams are stealthy, signal stations and drones see far. Enemy buildings you have seen stay on the map at half opacity where they were last seen: they may have been destroyed since.':
+    'Ви бачите лише те, що бачать ваші війська, будівлі й розвідувальні дрони. Розвідгрупи скритні, станції зв’язку й дрони бачать далеко. Помічені ворожі будівлі лишаються на мапі напівпрозорими там, де їх бачили востаннє: можливо, їх уже знищено.',
+  // economy
+  'Two kinds of resources': 'Два види ресурсів', 'Money, people and energy are pooled for the whole team.': 'Гроші, люди й енергія — спільні для всієї команди.',
+  'Goods (ore, metal, fuel, ammo) are physical: they lie in buildings. What you can spend on building and upgrades is what lies in your HQ and warehouses (the top bar).':
+    'Товари (руда, метал, пальне, БК) фізичні: вони лежать у будівлях. Витратити на будівництво й покращення можна те, що лежить у штабі й на складах (верхня панель).',
+  'Producers keep what they make in their own store: a truck has to bring it home or to the factory that needs it.': 'Виробники тримають продукцію у власному сховищі: вантажівка має відвезти її додому чи на завод, якому вона потрібна.',
+  'Supply chains': 'Ланцюги постачання',
+  'Ore Mine → (truck) → Metal Works → metal → (truck) → HQ, Machine Factory, Ammo Factory…': 'Рудник → (вантажівка) → Металургійний завод → метал → (вантажівка) → штаб, машинобудівний завод, завод боєприпасів…',
+  'Oil Refinery → (fuel truck) → Filling Stations, Airfield, HQ.': 'НПЗ → (паливозаправник) → АЗС, аеродром, штаб.',
+  'Ammo Factory → (truck, cargo "Ammo") → Ammo Depots near the front.': 'Завод боєприпасів → (вантажівка, вантаж «БК») → склади БК біля фронту.',
+  'Spacing between sites': 'Відстані між об’єктами', 'Ore Mine ↔ Metal Works: at least 17.5 km (the ore goes by truck).': 'Рудник ↔ металургійний завод: щонайменше 17,5 км (руду везе вантажівка).',
+  'Two mines or two metal works: 2.9 km. Two oil refineries: 4.4 km.': 'Два рудники чи два металургійні заводи: 2,9 км. Два НПЗ: 4,4 км.',
+  'Other civil sites (power plants, housing, filling stations, factories…): 5 km from each other.': 'Інші цивільні об’єкти (електростанції, житло, АЗС, заводи…): 5 км один від одного.',
+  'Military sites only need their own patch of ground (0.6 km).': 'Військовим об’єктам потрібна лише власна ділянка (0,6 км).',
+  'Delivery routes': 'Маршрути доставки',
+  'Select a truck, press Set delivery route and click 2–6 stops: buildings to load or unload at (switch each in the panel) and spots on the map to drive through. Choose the cargo ("Any" takes what each destination wants) and how much it must have on board before it leaves. It keeps running the loop: at an empty source it waits, at a full store it waits for room, and when low on fuel it fills up on the way. Goods left on board from an earlier job are dropped at the nearest store first.':
+    'Виберіть вантажівку, натисніть «Задати маршрут доставки» й клацніть 2–6 зупинок: будівлі для завантаження чи розвантаження (перемикайте в панелі) та точки на мапі, через які їхати. Оберіть вантаж («Будь-який» бере те, що потрібно кожному отримувачу) і скільки має бути на борту перед відправкою. Вантажівка їздить по колу: біля порожнього джерела чекає, біля повного сховища чекає на місце, а коли мало пального — заправляється дорогою. Вантаж, що лишився з попередньої роботи, спершу скидається на найближчому складі.',
+  Railways: 'Залізниці',
+  'Build Railway Stations and draw Railway track between them (press and drag, up to 40 km a piece; ends near a station or other track join up). A Freight Train carries 20,000 at a time between stations, far faster than trucks. If the track is cut it waits for a connection.':
+    'Будуйте залізничні станції й прокладайте між ними колію (натисніть і протягніть, до 40 км за раз; кінці біля станції чи іншої колії з’єднуються). Вантажний потяг везе між станціями по 20 000 за раз, набагато швидше за вантажівки. Якщо колію перерізано, він чекає на сполучення.',
+  Bonuses: 'Бонуси', 'Power Plant: everything within 100 km works 25% faster.': 'Електростанція: усе в радіусі 100 км працює на 25% швидше.', 'Road access: +15% output.': 'Доступ до дороги: +15% виробітку.',
+  'Housing: only inside cities your side holds (at most 10 per city).': 'Житло: лише в містах вашої сторони (не більше 10 на місто).',
+  'New buildings start empty, except factories, which get materials for two units. Teammates can use your buildings unless you switch Buildings: private.':
+    'Нові будівлі починають порожніми, крім заводів, які отримують матеріали на дві одиниці. Союзники можуть користуватися вашими будівлями, якщо ви не ввімкнете «Будівлі: особисті».',
+  // army
+  'Ammunition and fuel': 'Боєприпаси й пальне',
+  'Every armed unit carries rounds; each shot uses some (infantry fire 2-round bursts). With too few left it cannot fire.': 'Кожна озброєна одиниця має набої; кожен постріл їх витрачає (піхота стріляє чергами по 2). Коли їх замало, вона не стріляє.',
+  "Units refill near an Ammo Depot (18.75 km) or their base (8 km), paid from that building's ammo store. Ammo depots can stand in your grey zones, even behind the enemy line.":
+    'Війська поповнюються біля складу БК (18,75 км) або своєї бази (8 км) із запасу БК цієї будівлі. Склади БК можна ставити у ваших сірих зонах, навіть за лінією ворога.',
+  'Vehicles burn fuel as they drive (sprinting burns more). Refuel at filling stations, the base, fuel trucks, or have any vehicle Give fuel… to another.':
+    'Техніка витрачає пальне в русі (ривок — більше). Заправляйтеся на АЗС, базі, від паливозаправника або «Передайте пальне…» з будь-якої машини іншій.',
+  Combat: 'Бій', 'Fire at will / return fire / hold fire. Sprint doubles speed: infantry tire, vehicles burn fuel.': 'Вогонь на розсуд / лише у відповідь / не стріляти. Ривок подвоює швидкість: піхота втомлюється, техніка палить пальне.',
+  'In transport mode (driving in column on a road) units are fast but cannot fire and take more damage.': 'У транспортному режимі (колоною по дорозі) війська швидкі, але не стріляють і отримують більше шкоди.',
+  'Artillery fires 4–20 km (nothing closer than a fifth of its range), takes 2.5 s to aim at each new target and only hits what your side can see; spot for it, or barrage an area.':
+    'Артилерія б’є на 4–20 км (не ближче п’ятої частини дальності), наводиться 2,5 с на кожну нову ціль і влучає лише в те, що бачить ваша сторона; коригуйте її або накривайте площу.',
+  'Only anti-air stations and MANPADS teams can hit drones and missiles.': 'Лише станції ППО й розрахунки ПЗРК можуть уражати дрони й ракети.',
+  'Trenches and bunkers protect troops nearby; the best of each kind counts.': 'Окопи й бункери захищають війська поруч; враховується найкраще укріплення кожного виду.',
+  'A unit that stands still digs in: up to 40% less damage after two minutes. Moving loses it.': 'Нерухома одиниця окопується: до 40% менше шкоди через дві хвилини. Рух це скидає.',
+  'More than 6 units within 1.5 km crowd each other: they take more damage and deal less. Spread out.': 'Понад 6 одиниць у межах 1,5 км заважають одна одній: отримують більше шкоди й завдають менше. Розосереджуйтеся.',
+  'Orders, stances and formations': 'Накази, поведінка й стрій',
+  'Stance: Hold (stay put, fire at what comes into range), Defend (engage within 3 km of the post, then return) or Aggressive (go after any enemy in sight).':
+    'Поведінка: «Утримувати» (стояти й стріляти по тому, що в досяжності), «Обороняти» (атакувати в межах 3 км від позиції й повертатися) або «Агресивно» (переслідувати будь-якого помітного ворога).',
+  'Move pushes through, firing on the way; Attack-move (A) stops to fight whatever it meets.': '«Рух» — проходять, стріляючи дорогою; «Атака» (A) — зупиняються й б’ються з усім, що зустрінуть.',
+  'Formation at the destination (F): spread, line, column or wedge. Right drag sets which way the front faces.': 'Стрій на місці (F): розсип, лінія, колона чи клин. Протягування правою кнопкою задає, куди дивиться фронт.',
+  'Retreat: units fall back to a field hospital or base by themselves when health drops below 25% or 50%.': 'Відступ: війська самі відходять до госпіталю чи бази, коли здоров’я падає нижче 25% чи 50%.',
+  'Morale falls when units are encircled, out of ammo or under fire. Below 50 they fight worse; encircled at 0 they surrender. It comes back out of the fight, faster near the base or a field hospital.':
+    'Мораль падає в оточенні, без БК чи під вогнем. Нижче 50 війська б’ються гірше; в оточенні при 0 здаються. Поза боєм вона відновлюється, швидше біля бази чи госпіталю.',
+  Fortifications: 'Укріплення',
+  'Trench Line: press and drag on the map the way it should run (0.3–10 km). Troops within 1.5 km take less damage.': 'Лінія окопів: натисніть і протягніть на мапі в потрібному напрямку (0,3–10 км). Війська в межах 1,5 км отримують менше шкоди.',
+  'Bunker: up to 4 squads on foot man it (select them, right click the bunker). They fire out and cannot be hit until it falls. Shelled down, the garrison dies; stormed by troops, they come out shaken for 8 s.':
+    'Бункер: до 4 піших загонів займають його (виберіть їх і клацніть правою кнопкою по бункеру). Вони стріляють з нього й невразливі, доки він стоїть. Зруйнований обстрілом — гарнізон гине; взятий штурмом — бійці виходять приголомшеними на 8 с.',
+  'Bridge: drag across a river (up to 2 km). Takes minutes to build; drones, missiles and artillery can bring it down.': 'Міст: протягніть через річку (до 2 км). Будується хвилинами; дрони, ракети й артилерія можуть його зруйнувати.',
+  'Drones & missiles': 'Дрони й ракети', 'Recon drones circle their area and see far; strike drones dive on a target and explode.': 'Розвідувальні дрони кружляють над зоною й бачать далеко; ударні пікірують на ціль і вибухають.',
+  'Recon drones wait at an Airfield and refuel only there; strike drones and missiles wait at a Launch Site. Select the site, Launch at…, click the target.':
+    'Розвідувальні дрони чекають на аеродромі й заправляються лише там; ударні дрони й ракети чекають на пусковому майданчику. Виберіть майданчик, «Запустити по…», клацніть ціль.',
+  'Small drones ride on a pickup (2 each): Load them next to it (or from a launcher nearby), then Launch at… from the field.': 'Малі дрони їздять на пікапі (по 2): завантажте їх поруч (або з пускової неподалік), потім «Запустити по…» з поля.',
+  'A strike drone or missile aimed at a unit or building locks on and follows it.': 'Ударний дрон чи ракета, націлені на одиницю чи будівлю, захоплюють її й наводяться за нею.',
+  'Ranks and training': 'Звання й навчання',
+  'Units earn experience in combat and climb ranks (Regular → Veteran → Elite → Guards); each rank adds damage, health and range.': 'Війська набираються досвіду в бою й ростуть у званнях (Боєць → Ветеран → Еліта → Гвардія); кожне звання додає шкоду, здоров’я й дальність.',
+  'Training Centre: put at least 3 units inside and pay for a course (75 s to Regular, 45 s more per rank). From the second rank on a unit needs at least one kill since its last course.':
+    'Навчальний центр: заведіть щонайменше 3 одиниці й оплатіть курс (75 с до «Бійця», на 45 с довше за кожне звання). З другого звання потрібне щонайменше одне знищення після останнього курсу.',
+  'Combat experience needed: Regular 60, Veteran 600, Elite 1,800, Guards 4,000.': 'Потрібний бойовий досвід: Боєць 60, Ветеран 600, Еліта 1 800, Гвардія 4 000.',
+  'Orders queue up per building; cancel one for a full refund.': 'Замовлення стають у чергу кожної будівлі; скасування повертає все.',
+  'Rally point: new ground units walk to the flag. Repeat (↻): keep training a unit while resources last.': 'Точка збору: нові наземні війська йдуть до прапорця. Повтор (↻): навчати одиницю без зупинки, поки є ресурси.',
+  "APCs and IFVs carry infantry to the front under armour: Board from the infantry's panel.": 'БТР і БМП довозять піхоту до фронту під бронею: «Сісти» в панелі піхоти.',
+  'Medic Team: heals troops on foot within 2 km.': 'Медична група: лікує піші війська в радіусі 2 км.', 'Mechanic Crew: repairs vehicles within 2 km.': 'Ремонтна бригада: лагодить техніку в радіусі 2 км.',
+  'Field Hospital: heals troops on foot within 6 km.': 'Польовий госпіталь: лікує піші війська в радіусі 6 км.',
+  'Nobody heals within 10 s of being hit. Rescue crews repair cities and buildings.': 'Ніхто не лікується впродовж 10 с після влучання. Рятувальники ремонтують міста й будівлі.',
+  // team
+  'Ping the map (P, or Alt+click) to show your team where you are going, what to defend, where the danger is or what to look at. Everyone on your side sees the mark and hears a tone; click the message to fly there.':
+    'Ставте позначки на мапі (P або Alt+клік), щоб показати команді, куди ви йдете, що обороняти, де небезпека чи на що подивитися. Уся ваша сторона бачить позначку й чує сигнал; клацніть повідомлення, щоб перелетіти туди.',
+  'Factories and stores are shared by the team unless their owner sets Buildings: private.': 'Заводи й склади спільні для команди, якщо власник не ввімкнув «Будівлі: особисті».',
+  'Only the owner can demolish a building.': 'Знести будівлю може лише її власник.',
+  'If everyone leaves a match it is closed after a minute. Statistics of every finished match are saved to your profile.': 'Якщо всі покинуть матч, його закривають за хвилину. Статистика кожного завершеного матчу зберігається у вашому профілі.',
+};
+
+export const UK_SERVER: Record<string, string> = {
+  'a bridge has to cross a river': 'міст має перетинати річку', 'a course is already running': 'курс уже триває', 'a course is in progress': 'триває курс',
+  'a route has 2 to 6 stops': 'у маршруті від 2 до 6 зупинок', 'a route needs somewhere to load and somewhere to unload': 'маршруту потрібні місця завантаження й розвантаження',
+  'a teammate keeps that building to themselves': 'союзник залишив цю будівлю собі', 'a teammate keeps this building to themselves': 'союзник залишив цю будівлю собі',
+  'a teammate keeps this bunker to themselves': 'союзник залишив цей бункер собі', 'a teammate keeps this training centre to themselves': 'союзник залишив цей навчальний центр собі',
+  'a train only stops at railway stations': 'потяг зупиняється лише на залізничних станціях', 'already at the highest level': 'уже найвищий рівень',
+  'bad fire mode': 'неправильний режим вогню', 'bad order': 'неправильний наказ', 'bad position': 'неправильна позиція', 'bad rally point': 'неправильна точка збору',
+  'bad stance': 'неправильна поведінка', 'bad stop': 'неправильна зупинка', 'bad target': 'неправильна ціль', 'bad waypoint': 'неправильна точка маршруту',
+  'both ends of a bridge must be on your dry ground': 'обидва кінці мосту мають бути на вашій суші', 'building unavailable': 'будівля недоступна',
+  'cannot demolish HQ': 'штаб знести не можна', 'cannot train that here': 'тут цього не навчають', 'ceasefire: no shooting yet': 'перемир’я: стріляти ще не можна',
+  'ceasefire: nobody may cross the front yet': 'перемир’я: перетинати фронт ще не можна', 'housing can only be built inside a city': 'житло можна будувати лише в місті',
+  'its tank is already full': 'її бак уже повний', 'launch it from its launcher (or load it on a pickup)': 'запустіть його з пускової (або завантажте на пікап)',
+  'launcher full': 'пускова заповнена', 'launcher unavailable': 'пускова недоступна', 'limit reached': 'досягнуто ліміту', 'match over': 'матч завершено',
+  'must be built on a river bank': 'треба будувати на березі річки', 'no drones on board': 'на борту немає дронів', 'no passengers': 'немає десанту',
+  'no such order': 'такого замовлення немає', 'no way across the water: use a bridge or build a pontoon crossing': 'через воду не пройти: скористайтеся мостом або збудуйте понтонну переправу',
+  'no way to the bunker': 'немає шляху до бункера', 'no way to the training centre': 'немає шляху до навчального центру', 'nobody inside': 'всередині нікого',
+  'not a bunker of your side': 'це не бункер вашої сторони', 'not a production building': 'це не виробнича будівля', 'not a training centre of your side': 'це не навчальний центр вашої сторони',
+  'not a transport': 'це не транспорт', 'not enough materials in this building: deliver metal or fuel by truck': 'у цій будівлі бракує матеріалів: привезіть метал чи пальне вантажівкою',
+  'not enough money or people': 'бракує грошей чи людей', 'not enough money to start a course': 'бракує грошей, щоб почати курс',
+  'not enough resources (materials come from your HQ and warehouses)': 'бракує ресурсів (матеріали беруться зі штабу й складів)',
+  'not your building': 'не ваша будівля', 'nothing waiting here': 'тут нічого не чекає', 'only infantry can ride along': 'їхати може лише піхота',
+  'only small drones can be carried': 'перевозити можна лише малі дрони', 'only the owner can set repeat production': 'повтор виробництва може вмикати лише власник',
+  'outside map': 'поза мапою', 'outside the theatre of war': 'поза театром воєнних дій', 'pick another vehicle of your side': 'виберіть іншу машину вашої сторони',
+  'pick buildings of your side': 'виберіть будівлі вашої сторони', 'pick two different buildings of your side': 'виберіть дві різні будівлі вашої сторони', 'queue full': 'черга заповнена',
+  'that unit takes no fuel': 'цій одиниці пальне не потрібне', 'that vehicle carries no passengers': 'ця машина не перевозить десант', 'that vehicle has no drone launcher': 'у цієї машини немає пускової для дронів',
+  'the line leaves the theatre': 'лінія виходить за театр воєнних дій', 'this unit belongs to the other side': 'ця одиниця належить іншій стороні',
+  'this unit has no fuel to give': 'у цієї одиниці немає пального, щоб передати', 'too close to another housing block': 'надто близько до іншого житлового кварталу',
+  'too far from the transport': 'надто далеко від транспорту', 'too far from the vehicle': 'надто далеко від машини', 'training centre is full': 'навчальний центр заповнений',
+  'trains only run delivery routes between railway stations': 'потяги їздять маршрутами лише між залізничними станціями', 'transport full': 'транспорт заповнений',
+  'unit not found': 'одиницю не знайдено', 'unknown building': 'невідома будівля', 'unknown player': 'невідомий гравець', 'upgrade already in progress': 'покращення вже триває',
+  'the match has not started yet': 'матч ще не почався',
+  '@ is only available to @': '@ доступна лише для: @', '@ belongs to the other side': '@ належить іншій стороні', 'a @ is at least # km long': 'мінімальна довжина — # км',
+  'nothing on this route is wanted at the @': 'нічого з цього маршруту не потрібно: @', 'nowhere on this route to load @': 'на цьому маршруті ніде завантажити: @',
+  'nowhere to drop the @ it still carries': 'нікуди скинути вантаж, що лишився (@)', 'the @ keeps no goods': '@ не зберігає товарів', 'the @ does not take @': '@ не приймає: @',
+  '@ keeps this building to themselves': '@ залишив цю будівлю собі', 'Its owner keeps this building to themselves': 'Власник залишив цю будівлю собі',
+  'a course needs at least # units inside': 'для курсу потрібно щонайменше # одиниць усередині', 'at most # km in one go': 'не більше # км за раз',
+  'at most # housing blocks per city': 'не більше # житлових кварталів на місто',
+  'this site cannot launch it: recon drones fly from an airfield, strike drones and missiles from a launch site':
+    'звідси його не запустити: розвідувальні дрони злітають з аеродрому, ударні дрони й ракети — з пускового майданчика',
+  'it still carries @ that nothing on this route takes: unload it first': 'вона ще везе вантаж, який нікому на цьому маршруті не потрібен: спершу розвантажте його',
+  // sign-in and lobby
+  'already started': 'уже почався', 'bad report': 'неправильний звіт', 'bot not found': 'бота не знайдено', 'match already started': 'матч уже почався',
+  'match not found': 'матч не знайдено', 'name must be 3-20 letters/digits': 'ім’я — від 3 до 20 літер чи цифр', 'name taken': 'ім’я вже зайняте', 'no such match': 'такого матчу немає',
+  'only the host can do that': 'це може лише хост', 'only the host can start': 'почати може лише хост', 'password must be 6+ characters': 'пароль — щонайменше 6 символів',
+  'room not found': 'кімнату не знайдено', 'team is full': 'команда заповнена', 'team size is smaller than the players already in a team': 'розмір команди менший за кількість гравців, що вже в ній',
+  unauthorized: 'немає доступу', 'wrong name or password': 'неправильне ім’я чи пароль',
+};

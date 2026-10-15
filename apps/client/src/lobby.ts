@@ -82,6 +82,8 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
     if (stopped || viewingProfile) return;
     if (editing && !force) return;
     const rooms = await api.rooms();
+    // another refresh (the poll, or the one after a click) may have entered the match while this one waited
+    if (stopped || viewingProfile) return;
     const mine = rooms.find((r) => r.slots.some((x) => x.id === s.user.id));
     if (mine?.status === 'playing' && mine.matchId && mine.matchId === cb.leftMatch) {
       // the player pressed Leave: stay in the lobby and let them choose
