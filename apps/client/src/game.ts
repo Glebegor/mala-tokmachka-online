@@ -1937,12 +1937,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       let m = postMarkers.get(p.id);
       const isFriendly = p.team === myTeam;
       const empty = p.garrison.length === 0;
+      const title = empty
+        ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
+        : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`;
+      const innerCls = `post-inner ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`;
+      const innerHtml = `<span class="post-icon">${empty ? '⛊' : '🛡️'}</span><span class="post-badge">${empty ? '!' : `${p.garrison.length}/${p.cap}`}</span>${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
       if (!m) {
         const el = h('div', {
-          class: `post-marker ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`,
-          title: empty
-            ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
-            : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`,
+          class: 'maplibregl-marker post-marker',
           onClick: (e: MouseEvent) => {
             e.stopPropagation();
             if (isFriendly && selUnits.size) moveOrder(p.pos, e);
@@ -1953,17 +1955,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             if (isFriendly && selUnits.size) moveOrder(p.pos, e);
           },
         });
-        el.innerHTML = `<span class="post-icon">${empty ? '⛊' : '🛡️'}</span><span class="post-badge">${empty ? '!' : `${p.garrison.length}/${p.cap}`}</span>${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
+        const inner = h('div', { class: innerCls, title });
+        inner.innerHTML = innerHtml;
+        el.append(inner);
         const marker = new maplibregl.Marker({ element: el }).setLngLat(p.pos).addTo(map);
         m = { el, marker };
         postMarkers.set(p.id, m);
       } else {
         m.marker.setLngLat(p.pos);
-        m.el.className = `post-marker ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`;
-        m.el.title = empty
-          ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
-          : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`;
-        m.el.innerHTML = `<span class="post-icon">${empty ? '⛊' : '🛡️'}</span><span class="post-badge">${empty ? '!' : `${p.garrison.length}/${p.cap}`}</span>${p.advancing ? '<span class="post-adv">▲</span>' : ''}`;
+        const inner = m.el.firstElementChild as HTMLElement;
+        if (inner) {
+          inner.className = innerCls;
+          inner.title = title;
+          inner.innerHTML = innerHtml;
+        }
       }
     }
     for (const [id, m] of postMarkers) {

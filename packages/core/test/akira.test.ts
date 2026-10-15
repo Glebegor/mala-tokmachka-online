@@ -196,14 +196,25 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   assert.equal(extra.targetPost, myPost.id, 'targetPost set on unit');
   run(sim, 5);
   assert.equal(extra.frontPost, myPost.id, 'unit joined garrison');
+  assert.equal(extra.owner, '__front_0', 'transferred to frontline bot control');
   assert.equal(extra.stance, 'defend', 'defend stance adopted');
   assert.ok(myPost.garrison.includes(extra.id), 'unit in post.garrison');
 
-  // moving away removes from garrison
-  const awayPos = offsetKm(myPost.pos, 5, 0);
-  sim.apply('a', { type: 'move', units: [extra.id], to: awayPos });
-  assert.equal(extra.frontPost, undefined, 'left garrison');
-  assert.ok(!myPost.garrison.includes(extra.id), 'removed from post.garrison');
+  // stalemate firefight: equal frontline garrison units trade fire without fatal damage (hp >= 30)
+  const enemyPost = sim.world.posts.find((p) => p.team === 1 && p.nodeIdx === myPost.nodeIdx);
+  if (enemyPost && enemyPost.garrison[0]) {
+    const friendUnit = sim.world.units.find((u) => u.id === myPost.garrison[0])!;
+    const enemyUnit = sim.world.units.find((u) => u.id === enemyPost.garrison[0])!;
+    assert.equal(friendUnit.owner, '__front_0', 'frontline unit owned by bot');
+    assert.equal(enemyUnit.owner, '__front_1', 'enemy frontline unit owned by bot');
+    myPost.advancing = false;
+    enemyPost.advancing = false;
+    friendUnit.ammo = 300;
+    enemyUnit.ammo = 300;
+    run(sim, 10);
+    assert.ok(enemyUnit.hp >= 30 && enemyUnit.hp > 0, 'stalemate: garrison units trade fire but do not kill each other');
+    assert.ok(friendUnit.hp >= 30 && friendUnit.hp > 0, 'stalemate: friendly garrison survives');
+  }
 
   // reinforcing to superiority triggers autonomous advance
   const u1 = sim.spawnUnit('infantry_assault', a, myPost.pos);
@@ -211,7 +222,6 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   u1.frontPost = myPost.id;
   u2.frontPost = myPost.id;
   myPost.garrison.push(u1.id, u2.id);
-  const posBefore = [...myPost.pos];
   run(sim, 2);
   assert.ok(myPost.advancing, 'post is advancing on force superiority');
   console.log('frontline garrisons & line holding ok');

@@ -171,21 +171,24 @@ export class Sim {
     const p1 = players.find((p) => p.team === 1);
     if (r.frontPosts && p0 && p1) {
       const stepNodes = Math.max(3, Math.round(27 / (r.frontNodeSpacingKm || 9)));
+      const isDry = (p: LngLat) => this.isPlayableGround(p) && this.terrainAt(p).id !== 'water' && !this.terrain?.isBarrier(p);
+      const frontPlayer0: Player = { id: '__front_0', name: 'Frontline UA', team: 0, bot: true, res: {}, share: true };
+      const frontPlayer1: Player = { id: '__front_1', name: 'Frontline RU', team: 1, bot: true, res: {}, share: true };
       for (let i = 1; i < w.front.length - 1; i += stepNodes) {
         const node = w.front[i];
         const [nx, ny] = normalAt(w.front, i);
         const pos0: LngLat = offsetKm([node.lng, node.lat], -nx * 0.45, -ny * 0.45);
         const pos1: LngLat = offsetKm([node.lng, node.lat], nx * 0.45, ny * 0.45);
-        if (!this.terrain?.isBarrier(pos0) && !this.terrain?.isBarrier(pos1)) {
+        if (isDry([node.lng, node.lat]) && isDry(pos0) && isDry(pos1)) {
           const post0: FrontPost = { id: w.nextId++, team: 0, pos: pos0, nodeIdx: i, garrison: [], cap: 4 };
           const post1: FrontPost = { id: w.nextId++, team: 1, pos: pos1, nodeIdx: i, garrison: [], cap: 4 };
-          const u0 = this.spawnUnit('infantry', p0, pos0);
+          const u0 = this.spawnUnit('infantry', frontPlayer0, pos0);
           u0.frontPost = post0.id;
           u0.stance = 'defend';
           u0.post = [pos0[0], pos0[1]];
           post0.garrison.push(u0.id);
 
-          const u1 = this.spawnUnit('infantry', p1, pos1);
+          const u1 = this.spawnUnit('infantry', frontPlayer1, pos1);
           u1.frontPost = post1.id;
           u1.stance = 'defend';
           u1.post = [pos1[0], pos1[1]];
@@ -607,7 +610,9 @@ export class Sim {
     });
   }
 
-  player(id: string) {
+  player(id: string): Player | undefined {
+    if (id === '__front_0') return { id: '__front_0', name: 'Frontline UA', team: 0, bot: true, res: {}, share: true };
+    if (id === '__front_1') return { id: '__front_1', name: 'Frontline RU', team: 1, bot: true, res: {}, share: true };
     return this.world.players.find((p) => p.id === id);
   }
 
@@ -1887,7 +1892,17 @@ export class Sim {
     const shaken = ((target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1) * (air ? 1 : this.crowdTaken(target));
     const postBonus = target.frontPost !== undefined ? 0.65 : 1;
     const dealt = ((raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos))) * postBonus;
-    target.hp -= dealt;
+    if (target.frontPost !== undefined && attacker.frontPost !== undefined) {
+      const attackerPost = this.world.posts?.find((p) => p.id === attacker.frontPost);
+      const targetHasAmmo = (target.ammo ?? 1) > 0;
+      if (!attackerPost?.advancing && targetHasAmmo) {
+        target.hp = Math.max(30, target.hp - dealt);
+      } else {
+        target.hp -= dealt;
+      }
+    } else {
+      target.hp -= dealt;
+    }
     target.lastHit = this.world.time;
     // being hit shakes a unit (more the harder the blow)
     if (target.morale !== undefined) target.morale = Math.max(0, target.morale - (dealt / this.maxHp(target)) * 30);
@@ -2832,6 +2847,7 @@ export class Sim {
             u.targetPost = undefined;
             u.stance = 'defend';
             u.post = [post.pos[0], post.pos[1]];
+            u.owner = '__front_' + u.team;
           }
         }
       }
@@ -2888,7 +2904,8 @@ export class Sim {
         const dir: [number, number] = p.team === 0 ? [nx, ny] : [-nx, -ny];
         const step = 0.035 * dt;
         const nextPos = offsetKm(p.pos, dir[0] * step, dir[1] * step);
-        if (!this.terrain?.isBarrier(nextPos)) {
+        const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
+        if (isDry(nextPos)) {
           p.pos = nextPos;
           p.nodeIdx = ni;
           for (const id of p.garrison) {
@@ -2907,6 +2924,7 @@ export class Sim {
 
     // 3. Gap detection: when posts push and distance between posts expands, create new empty posts (Requirement 4)
     if (w.tick % (this.ruleset.rules.tickRate * 5) === 0) {
+      const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
       for (const team of [0, 1] as const) {
         const teamPosts = w.posts.filter((p) => p.team === team).sort((a, b) => a.nodeIdx - b.nodeIdx);
         if (teamPosts.length >= 35) continue;
@@ -2915,7 +2933,7 @@ export class Sim {
           const b = teamPosts[i + 1];
           if ((a.advancing || b.advancing) && distKm(a.pos, b.pos) > 36.0) {
             const midPos: LngLat = [(a.pos[0] + b.pos[0]) / 2, (a.pos[1] + b.pos[1]) / 2];
-            if (!this.terrain?.isBarrier(midPos)) {
+            if (isDry(midPos)) {
               w.posts.push({
                 id: w.nextId++,
                 team,
