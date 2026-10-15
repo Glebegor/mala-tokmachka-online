@@ -2,8 +2,8 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DEBUFFS, LIBERATED_CELL, SECTOR_CELL, distKm, distToFrontKm, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
-  districtPolygon, districtSeed, districtName,
-  type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
+  districtPolygon, districtSeed,
+  type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 import type { Session } from './api';
 import { clear, h } from './dom';
@@ -277,22 +277,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   /** Enemy buildings seen before, kept where they were last seen (see rememberBuildings). */
   const lastKnown = new Map<number, { b: BuildingView; at: number }>();
   let staleBuildings: { b: BuildingView; at: number }[] = [];
-  let shown: FrontNode[] = [];
 
-  function hatchImage(): ImageData {
-    const c = document.createElement('canvas');
-    c.width = c.height = 16;
-    const x = c.getContext('2d')!;
-    x.strokeStyle = 'rgba(229,56,59,0.55)';
-    x.lineWidth = 1.2;
-    for (const o of [-16, 0, 16]) {
-      x.beginPath();
-      x.moveTo(o, 16);
-      x.lineTo(o + 16, 0);
-      x.stroke();
-    }
-    return x.getImageData(0, 0, 16, 16);
-  }
 
   // ---------- description cards ----------
   const card = h('div', { class: 'info-card' });
@@ -363,15 +348,53 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return inOccupied(snap!.front, init!.map.occupiedClosure, p) ? 1 : 0;
   }
 
-  const districtPolyCache = new Map<number, LngLat[]>();
-  function getCachedDistrictPoly(ix: number, iy: number): LngLat[] {
+  interface CachedDistrictCell {
+    poly: LngLat[];
+    center: LngLat;
+    edges: { v1: LngLat; v2: LngLat; dx: number; dy: number }[];
+  }
+
+  const districtCellCache = new Map<number, CachedDistrictCell>();
+  let lastSectorKey = '';
+
+  function getCachedDistrictCell(ix: number, iy: number): CachedDistrictCell {
     const k = ix * 100000 + iy;
-    let poly = districtPolyCache.get(k);
-    if (!poly) {
-      poly = districtPolygon(ix, iy);
-      districtPolyCache.set(k, poly);
+    let cell = districtCellCache.get(k);
+    if (!cell) {
+      const center = districtSeed(ix, iy);
+      const poly = districtPolygon(ix, iy);
+      const edges: { v1: LngLat; v2: LngLat; dx: number; dy: number }[] = [];
+      if (poly && poly.length >= 3) {
+        const cA = center;
+        for (let e = 0; e < poly.length - 1; e++) {
+          const v1 = poly[e];
+          const v2 = poly[e + 1];
+          const mx = (v1[0] + v2[0]) / 2;
+          const my = (v1[1] + v2[1]) / 2;
+          const dToA = (mx - cA[0]) ** 2 + (my - cA[1]) ** 2;
+          let bestDx = 0;
+          let bestDy = 0;
+          let minDiff = Infinity;
+          for (let dx = -1; dx <= 1; dx++) {
+            for (let dy = -1; dy <= 1; dy++) {
+              if (dx === 0 && dy === 0) continue;
+              const nSeed = districtSeed(ix + dx, iy + dy);
+              const dToN = (mx - nSeed[0]) ** 2 + (my - nSeed[1]) ** 2;
+              const diff = Math.abs(dToN - dToA);
+              if (diff < minDiff) {
+                minDiff = diff;
+                bestDx = dx;
+                bestDy = dy;
+              }
+            }
+          }
+          edges.push({ v1, v2, dx: bestDx, dy: bestDy });
+        }
+      }
+      cell = { poly, center, edges };
+      districtCellCache.set(k, cell);
     }
-    return poly;
+    return cell;
   }
 
   /** Show a description card beside `el` while the pointer is over it. */
@@ -543,19 +566,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (f.properties?.type !== 'country_label') continue;
         new maplibregl.Marker({ element: h('div', { class: 'country-label' }, f.properties.name) }).setLngLat(f.geometry.coordinates).addTo(map);
       }
-      // front: flat occupied tint, a hard-edged contact zone, and a crisp cased line with sharp corners (no blur, no rounding)
-      map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#e5383b', 'fill-opacity': 0.12, 'fill-antialias': false } });
-      map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
-      map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
-      map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
-      // DeepState-style areas: grey = penetration area (contested: troops beyond their line, ground just taken),
-      // blue = liberated by Ukraine, bright blue = liberated in the last few minutes
-      map.addLayer({ id: 'freed-fill', type: 'fill', source: 'freed', paint: { 'fill-color': '#2f7bff', 'fill-opacity': 0.22 } }, 'front-zone');
-      map.addLayer({ id: 'freed-line', type: 'line', source: 'freed', paint: { 'line-color': '#4f8fff', 'line-width': 1, 'line-opacity': 0.8 } }, 'front-zone');
-      map.addLayer({ id: 'freed-new-fill', type: 'fill', source: 'freed-new', paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.38 } }, 'front-zone');
-      map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } }, 'front-zone');
-      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } }, 'front-zone');
-      map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } }, 'front-zone');
       // tactical combat districts (HoI4 / East Showdown style):
       // discrete Voronoi province tiles with team fill, tactical borders, and frontline along held districts
       map.addLayer({
@@ -564,7 +574,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'fill-color': ['case', ['get', 'contested'], '#f59e0b', ['match', ['get', 'team'], 0, '#1d4ed8', '#881337']],
           'fill-opacity': ['case', ['get', 'contested'], 0.28, ['+', 0.14, ['*', ['get', 'entrenchment'], 0.16]]],
         },
-      }, 'front-zone');
+      });
       map.addLayer({
         id: 'sectors-line', type: 'line', source: 'sectors', minzoom: 5.5,
         paint: {
@@ -572,7 +582,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'line-width': ['case', ['get', 'contested'], 1.8, 1.0],
           'line-opacity': ['case', ['get', 'contested'], 0.85, 0.45],
         },
-      }, 'front-zone');
+      });
+      // DeepState-style areas: grey = penetration area (contested: troops beyond their line, ground just taken),
+      // blue = liberated by Ukraine, bright blue = liberated in the last few minutes
+      map.addLayer({ id: 'freed-fill', type: 'fill', source: 'freed', paint: { 'fill-color': '#2f7bff', 'fill-opacity': 0.22 } });
+      map.addLayer({ id: 'freed-line', type: 'line', source: 'freed', paint: { 'line-color': '#4f8fff', 'line-width': 1, 'line-opacity': 0.8 } });
+      map.addLayer({ id: 'freed-new-fill', type: 'fill', source: 'freed-new', paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.38 } });
+      map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } });
+      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } });
+      map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } });
       // HoI4-style frontline tracing province borders between held districts
       map.addLayer({
         id: 'sector-front-case', type: 'line', source: 'sector-front',
@@ -582,7 +600,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'line-width': ['interpolate', ['linear'], ['zoom'], 5, 4.5, 9, 8],
           'line-opacity': 0.95,
         },
-      }, 'front-zone');
+      });
       map.addLayer({
         id: 'sector-front-line', type: 'line', source: 'sector-front',
         layout: { 'line-join': 'miter', 'line-cap': 'round' },
@@ -590,23 +608,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           'line-color': '#ff4d57',
           'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.2, 9, 4.5],
           'line-opacity': 0.95,
-        },
-      }, 'front-zone');
-      // District names / labels on map when zoomed in
-      map.addLayer({
-        id: 'sectors-labels', type: 'symbol', source: 'sectors', minzoom: 6.8,
-        layout: {
-          'text-field': ['get', 'name'],
-          'text-size': ['interpolate', ['linear'], ['zoom'], 6.8, 9.5, 9, 12, 11, 14],
-          'text-font': ['Open Sans Semibold', 'Arial Unicode MS Bold'],
-          'text-anchor': 'center',
-          'text-allow-overlap': false,
-        },
-        paint: {
-          'text-color': '#f1f5f9',
-          'text-halo-color': '#090d16',
-          'text-halo-width': 1.6,
-          'text-opacity': 0.88,
         },
       });
       // trench lines: a zig-zag in the side's colour on a dark casing (faded while being dug)
@@ -619,9 +620,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       // cauldrons: yellow broken ring around the cut-off ground
       map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
       map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
-      // occupied ground also gets fine diagonal hatching, like on printed situation maps
-      map.addImage('hatch', hatchImage(), { pixelRatio: 2 });
-      map.addLayer({ id: 'occupied-hatch', type: 'fill', source: 'occupied', paint: { 'fill-pattern': 'hatch', 'fill-opacity': 0.5 } }, 'front-zone');
       // build exclusion rings around existing sites and the special production zones (only while placing)
       map.addLayer({ id: 'restricted-fill', type: 'fill', source: 'restricted', paint: { 'fill-color': '#ff3333', 'fill-opacity': 0.08 } });
       map.addLayer({ id: 'restricted-line', type: 'line', source: 'restricted', paint: { 'line-color': '#ff6b6b', 'line-width': 1, 'line-opacity': 0.5, 'line-dasharray': [3, 3] } });
@@ -678,6 +676,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       fog = new FogOverlay(map);
       map.on('move', () => drawFog());
+      map.on('moveend', () => { if (mapReady) renderMap(); });
       fx = new ShotFx(map, mapEl, (def) => defU.get(def) ?? defB.get(def)?.attack, TEAM_COLOR);
       if (import.meta.env.DEV) (window as any).__sw = { map, fx, snap: () => snap, init: () => init, units: () => lastUnitFeatures, fakePockets: [], lastKnown: () => [...lastKnown.keys()], select: (ids: number[]) => ((selUnits = new Set(ids)), (selBuilding = null), render()) };
       mapReady = true;
@@ -1692,7 +1691,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       for (let k = 0; k < libRuns.length; k += 4) for (let i = 0; i < libRuns[k + 3]; i++) libCells.set(libKey(libRuns[k + 2] + i, libRuns[k]), libRuns[k + 1]);
       libDirty = true;
     }
-    if (shown.length !== s.front.length) shown = s.front.map((n) => ({ ...n }));
     pruneGroups();
     for (const id of selUnits) if (!s.units.some((u) => u.id === id)) selUnits.delete(id);
     showCountdown(s.countdown);
@@ -1803,8 +1801,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       trenches.push({ type: 'Feature', properties: { kind: bridge ? 'bridge' : rail ? 'rail' : 'trench', color: bridge ? '#e7e2cf' : rail ? '#f1f5f9' : relColor(b.owner === me ? 'own' : b.team === myTeam ? 'ally' : 'enemy'), o: staleIds.has(b.id) ? 0.45 : b.progress >= 1 ? 0.95 : 0.4 }, geometry: { type: 'LineString', coordinates: bridge || rail ? [a, c] : pts } });
     }
     (map.getSource('trenches') as GeoJSONSource).setData({ type: 'FeatureCollection', features: trenches } as any);
-    const sectorFeatures: any[] = [];
-    const frontSegments: any[] = [];
     if (init?.map) {
       const secMap = new Map<number, (typeof snap.sectors)[0]>();
       if (snap.sectors?.length) {
@@ -1837,83 +1833,72 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         maxIy = cy + halfSpanY;
       }
 
-      for (let ix = minIx; ix <= maxIx; ix++) {
-        for (let iy = minIy; iy <= maxIy; iy++) {
-          const key = ix * 100000 + iy;
-          const s = secMap.get(key);
-          const center = districtSeed(ix, iy);
-          const team = s !== undefined ? s.team : sideAt(center);
-          const entrenchment = s?.entrenchment ?? 0;
-          const contested = s?.contested ?? false;
-          const captureProgress = s?.captureProgress ?? 0;
-          const name = s?.name || districtName(center, init.map.capturePoints);
-          const poly = getCachedDistrictPoly(ix, iy);
-          if (!poly || poly.length < 3) continue;
+      let sectorKey = `${minIx},${maxIx},${minIy},${maxIy}|${snap.front.length}`;
+      if (snap.sectors?.length) {
+        for (const s of snap.sectors) {
+          sectorKey += `;${s.ix},${s.iy},${s.team},${s.contested ? 1 : 0},${Math.round((s.entrenchment ?? 0) * 10)}`;
+        }
+      }
+      const fLen = snap.front.length;
+      if (fLen > 0) {
+        const step = Math.max(1, Math.floor(fLen / 6));
+        for (let i = 0; i < fLen; i += step) {
+          sectorKey += `,${snap.front[i].lng.toFixed(3)}:${snap.front[i].lat.toFixed(3)}`;
+        }
+      }
 
-          sectorFeatures.push({
-            type: 'Feature',
-            properties: {
-              id: `${ix}_${iy}`,
-              name,
-              team,
-              entrenchment,
-              contested,
-              captureProgress,
-              defenders: s?.defenders ?? 0,
-              attackers: s?.attackers ?? 0,
-            },
-            geometry: {
-              type: 'Polygon',
-              coordinates: [poly],
-            },
-          });
+      if (sectorKey !== lastSectorKey) {
+        lastSectorKey = sectorKey;
+        const sectorFeatures: any[] = [];
+        const frontSegments: any[] = [];
 
-          // HoI4 style frontline: extract organic boundary edges between friendly and hostile districts
-          if (team === 0) {
-            const cA = center;
-            for (let e = 0; e < poly.length - 1; e++) {
-              const v1 = poly[e];
-              const v2 = poly[e + 1];
-              const mx = (v1[0] + v2[0]) / 2;
-              const my = (v1[1] + v2[1]) / 2;
-              const dToA = (mx - cA[0]) ** 2 + (my - cA[1]) ** 2;
+        for (let ix = minIx; ix <= maxIx; ix++) {
+          for (let iy = minIy; iy <= maxIy; iy++) {
+            const key = ix * 100000 + iy;
+            const s = secMap.get(key);
+            const cell = getCachedDistrictCell(ix, iy);
+            if (!cell.poly || cell.poly.length < 3) continue;
 
-              let bestDx = 0;
-              let bestDy = 0;
-              let minDiff = Infinity;
-              for (let dx = -1; dx <= 1; dx++) {
-                for (let dy = -1; dy <= 1; dy++) {
-                  if (dx === 0 && dy === 0) continue;
-                  const nSeed = districtSeed(ix + dx, iy + dy);
-                  const dToN = (mx - nSeed[0]) ** 2 + (my - nSeed[1]) ** 2;
-                  const diff = Math.abs(dToN - dToA);
-                  if (diff < minDiff) {
-                    minDiff = diff;
-                    bestDx = dx;
-                    bestDy = dy;
-                  }
+            const team = s !== undefined ? s.team : sideAt(cell.center);
+            const entrenchment = s?.entrenchment ?? 0;
+            const contested = s?.contested ?? false;
+
+            sectorFeatures.push({
+              type: 'Feature',
+              properties: {
+                team,
+                entrenchment,
+                contested,
+              },
+              geometry: {
+                type: 'Polygon',
+                coordinates: [cell.poly],
+              },
+            });
+
+            // HoI4 style frontline: extract organic boundary edges between friendly and hostile districts
+            if (team === 0 && (Math.abs(distToFrontKm(snap.front, cell.center)) <= 25 || contested || (s && s.team !== sideAt(cell.center)))) {
+              for (const edge of cell.edges) {
+                const nKey = (ix + edge.dx) * 100000 + (iy + edge.dy);
+                const nSec = secMap.get(nKey);
+                const nTeam = nSec !== undefined ? nSec.team : sideAt(districtSeed(ix + edge.dx, iy + edge.dy));
+                if (nTeam === 1) {
+                  frontSegments.push({
+                    type: 'Feature',
+                    geometry: {
+                      type: 'LineString',
+                      coordinates: [edge.v1, edge.v2],
+                    },
+                  });
                 }
-              }
-
-              const nKey = (ix + bestDx) * 100000 + (iy + bestDy);
-              const nSec = secMap.get(nKey);
-              const nTeam = nSec !== undefined ? nSec.team : sideAt(districtSeed(ix + bestDx, iy + bestDy));
-              if (nTeam === 1) {
-                frontSegments.push({
-                  type: 'Feature',
-                  geometry: {
-                    type: 'LineString',
-                    coordinates: [v1, v2],
-                  },
-                });
               }
             }
           }
         }
+        (map.getSource('sectors') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: sectorFeatures } as any);
+        (map.getSource('sector-front') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: frontSegments } as any);
       }
     }
-    (map.getSource('sectors') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: sectorFeatures } as any);
-    (map.getSource('sector-front') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: frontSegments } as any);
     const rings: any[] = [];
     // the selected building's rally point: a dashed line to a flag
     const rallyB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding && x.rally) : null;
@@ -2150,17 +2135,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (closed) return;
     requestAnimationFrame(animate);
     if (!snap || !init || !mapReady) return;
-    // nodes are added/removed as the line stretches: restart from the exact line rather than blending mismatched nodes
-    if (shown.length !== snap.front.length) (shown = snap.front.map((n) => ({ ...n }))), (frontDrawn = false);
-    let moved = false;
-    shown.forEach((n, i) => {
-      const t = snap!.front[i];
-      const dx = t.lng - n.lng, dy = t.lat - n.lat;
-      if (Math.abs(dx) + Math.abs(dy) > 1e-6 || n.v !== t.v) moved = true;
-      n.lng += dx * 0.18;
-      n.lat += dy * 0.18;
-      n.v = t.v;
-    });
     // units glide between snapshots (60 fps instead of 5 Hz steps); drones bank smoothly into turns
     let unitsMoved = false;
     const alive = new Set<number>();
@@ -2195,20 +2169,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
 
     const pocketKey = snap.pockets.map((k) => `${k.id}:${k.nodes.length}:${k.nodes[0].lng}`).join(',');
-    if (pocketKey !== lastPockets) (lastPockets = pocketKey), (moved = true);
-    if (!moved && frontDrawn) return;
-    frontDrawn = true;
-    const line: LngLat[] = shown.map((n) => [n.lng, n.lat]);
-    // cauldrons: rings of team 0 ground inside the occupied area are holes in it; rings of team 1 ground are extra patches
-    const ring = (k: SnapMsg['pockets'][number]): LngLat[] => [...k.nodes.map((n): LngLat => [n.lng, n.lat]), [k.nodes[0].lng, k.nodes[0].lat]];
-    const holes = snap.pockets.filter((k) => k.team === 0).map(ring);
-    const mapHoles = init.map.occupiedHoles ?? []; // e.g. the Sea of Azov: not occupied, but not a front either
-    const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
-    (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: [line, ...holes, ...patches] } } as any);
-    (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes, ...mapHoles], ...patches.map((p) => [p])] } } as any);
-    (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
+    if (pocketKey !== lastPockets) {
+      lastPockets = pocketKey;
+      const ring = (k: SnapMsg['pockets'][number]): LngLat[] => [...k.nodes.map((n): LngLat => [n.lng, n.lat]), [k.nodes[0].lng, k.nodes[0].lat]];
+      (map.getSource('pockets') as GeoJSONSource)?.setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
+    }
   }
-  let frontDrawn = false;
   let lastUnitDraw = 0;
   /** Contested liberated ground: runs [iy, team, ix, n, …] from the server, and a lookup of its cells. */
   let libRuns: number[] = [];
