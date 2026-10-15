@@ -2502,6 +2502,16 @@ export class Sim {
     return Math.min(0.4, Math.floor((u.still ?? 0) / 15) * 0.05);
   }
 
+  /** Medics, mechanics and rescuers only work out of the fight: not hit for 10 s and no enemy ground troops within 3 km. */
+  outOfFight(u: Unit): boolean {
+    if (this.world.time - (u.lastHit ?? -1e9) < 10) return false;
+    let enemy = false;
+    this.near(this.unitGrid, u.pos, 3, (e) => {
+      if (!enemy && e.team !== u.team && !e.embarkedIn && e.parkedAt === undefined && this.defs.u.get(e.def)!.kind !== 'air' && distKm(e.pos, u.pos) <= 3) enemy = true;
+    });
+    return !enemy;
+  }
+
   /** Damage multiplier from morale: full above 50, down to half at 0. */
   moraleMult(u: Unit): number {
     const m = u.morale ?? 100;
@@ -2543,7 +2553,7 @@ export class Sim {
     const healers: { team: Team; pos: LngLat; h: NonNullable<UnitDef['heals']> }[] = [];
     for (const u of w.units) {
       const h = this.defs.u.get(u.def)!.heals;
-      if (h && !u.embarkedIn) healers.push({ team: u.team, pos: u.pos, h });
+      if (h && !u.embarkedIn && this.outOfFight(u)) healers.push({ team: u.team, pos: u.pos, h });
     }
     for (const b of w.buildings) {
       const h = this.defs.b.get(b.def)!.heals;
@@ -2564,9 +2574,12 @@ export class Sim {
     }
   }
 
+  private crewsBusy = new Set<number>();
   private repairs(dt: number) {
     const w = this.world;
-    const crews = w.units.filter((u) => this.defs.u.get(u.def)!.repairs && !u.embarkedIn);
+    // crews under fire or with the enemy close by do not work (checked once a second)
+    if (w.tick % 10 === 0) this.crewsBusy = new Set(w.units.filter((u) => this.defs.u.get(u.def)!.repairs && !this.outOfFight(u)).map((u) => u.id));
+    const crews = w.units.filter((u) => this.defs.u.get(u.def)!.repairs && !u.embarkedIn && !this.crewsBusy.has(u.id));
     if (!crews.length) return;
     const quiet = (t?: number) => w.time - (t ?? -100) >= 60;
     const inCity = new Map<string, { i: number; team: Team; n: number }>();
