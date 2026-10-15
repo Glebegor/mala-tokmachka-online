@@ -1,9 +1,10 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, LIBERATED_CELL, distKm, distToFrontKm, forbiddenRings, formationSpot, inOccupied, inPolygon, isReconDrone, isStrikeDrone, offsetKm, pointInRing, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  DEBUFFS, DEPOSITS, depositsGeoJSON, distKm, distToFrontKm, forbiddenRings, formationSpot, inDeposit, inOccupied, inPolygon, isReconDrone, isStrikeDrone, LIBERATED_CELL, offsetKm, pointInRing, proceduralTerrain, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
+
 import type { Session } from './api';
 import { clear, h } from './dom';
 import { ShotFx } from './fx';
@@ -112,7 +113,36 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const terrainBtn = h('button', { class: 'ghost', onClick: () => toggleTerrain() }, 'Terrain');
   const basemapBtn = h('button', { class: 'ghost', title: 'Hide or show the real map underneath (M)', onClick: () => toggleBasemap() }, 'Map: ON');
   const unitHud = h('div', { class: 'unit-hud', style: { display: 'none' } });
+  const depositMarkers: { type: 'iron' | 'oil'; el: HTMLElement }[] = [];
+
+  /** Generates realistic small OSM building footprints inside a city block for a housing district. */
+  function generateCityHousePolygons(pos: LngLat, seed: number): LngLat[][][] {
+    const footprints: LngLat[][][] = [];
+    const count = 8;
+    const bW = 0.00035;
+    const bH = 0.00025;
+    for (let i = 0; i < count; i++) {
+      const row = Math.floor(i / 4);
+      const col = i % 4;
+      const dx = (col - 1.5) * 0.0011 + Math.sin(seed + i * 1.7) * 0.0002;
+      const dy = (row - 0.5) * 0.0009 + Math.cos(seed + i * 2.3) * 0.0002;
+      const cx = pos[0] + dx;
+      const cy = pos[1] + dy;
+      const w = bW * (0.8 + 0.35 * Math.sin(seed + i * 3.1));
+      const h = bH * (0.8 + 0.35 * Math.cos(seed + i * 4.3));
+      footprints.push([[
+        [cx - w, cy - h],
+        [cx + w, cy - h],
+        [cx + w, cy + h],
+        [cx - w, cy + h],
+        [cx - w, cy - h],
+      ]]);
+    }
+    return footprints;
+  }
+
   // ---------- map marks (pings) for the team ----------
+
   const MARKS: Record<MarkKind, { label: string; icon: string; tone: number }> = {
     go: { label: 'Going here', icon: '➤', tone: 660 },
     defend: { label: 'Defend here', icon: '⛨', tone: 520 },
@@ -368,6 +398,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     return forbidden.some((r) => inPolygon(p, r));
   }
 
+  const fullWest = 20.5;
+  const fullEast = 54.5;
+  const fullSouth = 43.0;
+  const fullNorth = 61.5;
+  const mercY = (lat: number) => Math.asinh(Math.tan((lat * Math.PI) / 180));
+  const fullYN = mercY(fullNorth);
+  const fullYS = mercY(fullSouth);
+
+
   /** Show a description card beside `el` while the pointer is over it. */
   function describe(el: HTMLElement, title: string, text: string | undefined, facts: string[], side: 'right' | 'left') {
     el.addEventListener('mouseenter', () => {
@@ -504,10 +543,46 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.on('load', () => {
       for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units', 'trenches', 'facing']) map.addSource(id, { type: 'geojson', data: empty() });
 
+      map.addSource('deposits-iron', { type: 'geojson', data: depositsGeoJSON('iron') });
+      map.addSource('deposits-oil', { type: 'geojson', data: depositsGeoJSON('oil') });
+      map.addSource('housing-osm', { type: 'geojson', data: empty() });
+
       if (terrain) {
-        map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
+        map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[fullWest, fullNorth], [fullEast, fullNorth], [fullEast, fullSouth], [fullWest, fullSouth]] });
         map.addLayer({ id: 'terrain', type: 'raster', source: 'terrain', layout: { visibility: 'none' }, paint: { 'raster-opacity': 0.72, 'raster-resampling': 'linear', 'raster-fade-duration': 0 } });
       }
+
+      map.addLayer({ id: 'deposits-iron-fill', type: 'fill', source: 'deposits-iron', layout: { visibility: 'none' }, paint: { 'fill-color': '#92400e', 'fill-opacity': 0.45 } });
+      map.addLayer({ id: 'deposits-iron-line', type: 'line', source: 'deposits-iron', layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#f59e0b', 'line-width': 2.5, 'line-dasharray': [4, 2], 'line-opacity': 0.95 } });
+      map.addLayer({ id: 'deposits-oil-fill', type: 'fill', source: 'deposits-oil', layout: { visibility: 'none' }, paint: { 'fill-color': '#18181b', 'fill-opacity': 0.55 } });
+      map.addLayer({ id: 'deposits-oil-line', type: 'line', source: 'deposits-oil', layout: { visibility: 'none', 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#fbbf24', 'line-width': 2.5, 'line-dasharray': [4, 2], 'line-opacity': 0.95 } });
+
+      map.addLayer({ id: 'housing-osm-fill', type: 'fill', source: 'housing-osm', paint: { 'fill-color': '#94a3b8', 'fill-opacity': ['interpolate', ['linear'], ['zoom'], 5, 0.3, 8, 0.75, 12, 0.9] } });
+      map.addLayer({ id: 'housing-osm-line', type: 'line', source: 'housing-osm', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#e2e8f0', 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.6, 9, 1.2, 12, 1.8], 'line-opacity': 0.95 } });
+
+      for (const dep of DEPOSITS) {
+        const ico = dep.type === 'iron' ? '⛏' : '🛢';
+        const color = dep.type === 'iron' ? '#f59e0b' : '#fbbf24';
+        const el = h('div', {
+          class: `deposit-label deposit-${dep.type}`,
+          style: {
+            display: 'none',
+            pointerEvents: 'none',
+            fontSize: '11px',
+            fontWeight: 'bold',
+            color: '#fff',
+            background: 'rgba(15, 23, 42, 0.88)',
+            border: `1px solid ${color}`,
+            borderRadius: '4px',
+            padding: '2px 6px',
+            whiteSpace: 'nowrap',
+            textShadow: '0 1px 2px #000',
+          }
+        }, `${ico} ${dep.name}`);
+        new maplibregl.Marker({ element: el }).setLngLat(dep.center).addTo(map);
+        depositMarkers.push({ type: dep.type, el });
+      }
+
       (map.getSource('roads') as GeoJSONSource).setData({
         type: 'FeatureCollection',
         features: (m.roads ?? []).map((l) => {
@@ -1033,11 +1108,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
    */
   function terrainImage(): string {
     const t = terrain!;
-    const { cols, rows } = t.data;
-    const f = Math.max(1, Math.ceil(cols / 4096));
     const c = document.createElement('canvas');
-    c.width = Math.floor(cols / f);
-    c.height = Math.floor(rows / f);
+    c.width = 1536;
+    c.height = 1240;
     const g = c.getContext('2d')!;
     const img = g.createImageData(c.width, c.height);
     const weight: Record<string, number> = { water: 6, city: 5, mountain: 4, forest: 3, hill: 2 };
@@ -1046,16 +1119,39 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const col = init!.ruleset.terrain.find((d) => d.id === id)?.color ?? '#000000';
       return { rgba: [parseInt(col.slice(1, 3), 16), parseInt(col.slice(3, 5), 16), parseInt(col.slice(5, 7), 16), i === 0 ? 0 : alpha[id] ?? 160], w: i === 0 ? 0 : weight[id] ?? 1 };
     });
+
+    const td = t.data;
+    const tYN = mercY(td.north);
+    const tYS = mercY(td.south);
+
     for (let y = 0; y < c.height; y++) {
+      const my = fullYN - ((y + 0.5) / c.height) * (fullYN - fullYS);
+      const lat = (Math.atan(Math.sinh(my)) * 180) / Math.PI;
+
       for (let x = 0; x < c.width; x++) {
-        let best = 0;
-        for (let dy = 0; dy < f; dy++) {
-          for (let dx = 0; dx < f; dx++) {
-            const k = t.kindAt((y * f + dy) * cols + x * f + dx);
-            if (look[k].w > look[best].w) best = k;
+        const lng = fullWest + ((x + 0.5) / c.width) * (fullEast - fullWest);
+
+        let rgba: number[];
+        // Inside high-resolution raster terrain data
+        if (lng >= td.west && lng <= td.east && lat >= td.south && lat <= td.north) {
+          const gx = Math.floor(((lng - td.west) / (td.east - td.west)) * td.cols);
+          const gy = Math.floor(((tYN - my) / (tYN - tYS)) * td.rows);
+          if (gx >= 0 && gy >= 0 && gx < td.cols && gy < td.rows) {
+            const k = t.kindAt(gy * td.cols + gx);
+            rgba = look[k].rgba;
+          } else {
+            const proc = proceduralTerrain(lng, lat);
+            const idx = t.ids.indexOf(proc);
+            rgba = idx >= 0 ? look[idx].rgba : look[0].rgba;
           }
+        } else {
+          // Outside high-res grid (Russia east & north, surrounding states): procedural natural terrain
+          const proc = proceduralTerrain(lng, lat);
+          const idx = t.ids.indexOf(proc);
+          rgba = idx >= 0 ? look[idx].rgba : look[0].rgba;
         }
-        img.data.set(look[best].rgba, (y * c.width + x) * 4);
+
+        img.data.set(rgba, (y * c.width + x) * 4);
       }
     }
     g.putImageData(img, 0, 0);
@@ -1087,7 +1183,31 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const on = map.getLayoutProperty('terrain', 'visibility') !== 'visible';
     map.setLayoutProperty('terrain', 'visibility', on ? 'visible' : 'none');
     terrainBtn.classList.toggle('on', on);
+    updateDepositsVisibility();
   }
+
+  function updateDepositsVisibility() {
+    if (!mapReady) return;
+    const terrainOn = map.getLayer('terrain') && map.getLayoutProperty('terrain', 'visibility') === 'visible';
+    const placingMine = placing?.id === 'mine';
+    const showIron = terrainOn || placingMine;
+    const showOil = terrainOn;
+
+    const ironVis = showIron ? 'visible' : 'none';
+    const oilVis = showOil ? 'visible' : 'none';
+
+    for (const id of ['deposits-iron-fill', 'deposits-iron-line']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', ironVis);
+    }
+    for (const id of ['deposits-oil-fill', 'deposits-oil-line']) {
+      if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', oilVis);
+    }
+    for (const m of depositMarkers) {
+      const show = m.type === 'iron' ? showIron : showOil;
+      m.el.style.display = show ? '' : 'none';
+    }
+  }
+
   function showTerrain(p: LngLat) {
     if (!terrain || !init) return;
     const t = init.ruleset.terrain.find((d) => d.id === terrain!.at(p));
@@ -1125,6 +1245,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     map.dragPan.enable(); // panning back on after drawing lines
     placing = null;
     showPlacementAids();
+    updateDepositsVisibility();
     hint.textContent = HINT;
     mapEl.classList.remove('placing');
     (map.getSource('ghost') as GeoJSONSource | undefined)?.setData(empty());
@@ -1146,6 +1267,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function placementProblem(def: BuildingDef, p: LngLat): string | null {
     if (!init || !snap) return 'not ready';
+    if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'Недостаточно денег';
     if (def.id === 'hq') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
@@ -1164,6 +1286,41 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (clash) return 'Слишком близко к другой военной базе (минимум 20 км)';
       return null;
     }
+    if (def.id === 'warehouse') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
+      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      const clash = snap.buildings.find((b) => b.def === 'warehouse' && distKm(b.pos, p) < 100);
+      if (clash) return 'Слишком близко к другому складу (минимум 100 км)';
+      return null;
+    }
+    if (def.id === 'mine') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
+      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      if (!inDeposit('iron', p)) return 'Шахту можно строить только на месторождении железа';
+      const clash = snap.buildings.find((b) => b.def === 'mine' && distKm(b.pos, p) < 1);
+      if (clash) return 'Место занято другой шахтой';
+      return null;
+    }
+    if (def.id === 'housing') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      const city = cityAt(p);
+      if (!city) return 'Жилой квартал можно строить только внутри города';
+      const cityIdx = init.map.capturePoints.indexOf(city);
+      if (cityIdx >= 0 && snap.points[cityIdx]?.owner !== init.team) return 'Город должен контролироваться вашей командой';
+      const limit = init.ruleset.rules.cityHousingLimit ?? 5;
+      if (snap.buildings.filter((b) => b.def === 'housing' && cityAt(b.pos) === city).length >= limit) return `В городе ${city.name} уже построено максимум ${limit} жилых кварталов`;
+      const clash = snap.buildings.find((b) => b.def === 'housing' && distKm(b.pos, p) < 0.08);
+      if (clash) return 'Слишком близко к другому жилому кварталу';
+      return null;
+    }
     const r = init.ruleset.rules;
     const zone = specialZoneAt(p);
     const mySide = init.team === 0 ? 'ua' : 'ru';
@@ -1177,26 +1334,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const lib = contestedAt(p);
       if (snap.grey.some((z) => distKm(z.pos, p) <= z.r) || lib === 0 || lib === 1) return def.buildInGrey ? 'only your side’s grey zones' : 'contested ground (grey zone)';
       if (sideAt(p) !== init.team) return 'not your territory';
-      if (def.id !== 'housing' && d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
+      if (d < r.minBuildDistanceFromFront * (def.category === 'civil' ? 2 : 1)) return 'too close to the front';
     }
     if (terrain?.at(p) === 'water') return 'cannot build on water';
     if (def.needsWaterWithinKm && !nearRiver(p, def.needsWaterWithinKm)) return 'must be on a river bank';
-    if (def.id === 'housing') {
-      const city = cityAt(p);
-      if (!city) return 'housing only inside a city';
-      if (snap.points[init.map.capturePoints.indexOf(city)]?.owner !== init.team) return 'your side must hold the city';
-      if (snap.buildings.filter((b) => b.def === 'housing' && cityAt(b.pos) === city).length >= r.cityHousingLimit) return `${city.name} already has ${r.cityHousingLimit} housing blocks`;
-    } else {
-      const clash = snap.buildings.find((b) => b.def !== 'housing' && distKm(b.pos, p) < spacingBetween(def, b.def, !!zone));
-      if (clash) {
-        const other = defB.get(clash.def)!;
-        const gap = spacingBetween(def, other.id, !!zone);
-        return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied';
-      }
+    const clash = snap.buildings.find((b) => b.def !== 'housing' && distKm(b.pos, p) < spacingBetween(def, b.def, !!zone));
+    if (clash) {
+      const other = defB.get(clash.def)!;
+      const gap = spacingBetween(def, other.id, !!zone);
+      return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied';
     }
-    if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
     return null;
   }
+
 
   function nearRiver(p: LngLat, km: number): boolean {
     if (!terrain) return false;
@@ -1265,6 +1415,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (placing.vision) zones.push([placing.vision, '#94a3b8', `sight ${placing.vision} km`]);
     if (placing.id === 'hq') zones.push([100, '#ef4444', 'дистанция 100 км до других штабов']);
     if (placing.id === 'military_base') zones.push([20, '#38bdf8', 'дистанция 20 км до других военных баз']);
+    if (placing.id === 'warehouse') zones.push([100, '#eab308', 'дистанция 100 км до других складов']);
     (map.getSource('ghost') as GeoJSONSource).setData({
       type: 'FeatureCollection',
       features: [
@@ -1297,15 +1448,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     else map.dragPan.enable();
     mapEl.classList.add('placing');
     showPlacementAids();
+    updateDepositsVisibility();
     hint.textContent = b.id === 'hq'
       ? 'Размещение: Военный штаб — кликните в любой точке карты для установки (Esc — отмена)'
       : b.id === 'military_base'
-        ? 'Размещение: Военная база — кликните в любой точке карты (минимум 20 км от других баз, Esc — отмена)'
-        : b.line
-          ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
-          : `Размещение: ${b.name} — кликните на карте (Shift — серийное строительство, Esc — отмена)`;
+        ? 'Размещение: Военная база — кликните в любой точке своей территории (минимум 20 км от других баз, Esc — отмена)'
+        : b.id === 'warehouse'
+          ? 'Размещение: Склад — выберите точку на своей территории (минимум 100 км от других складов, Esc — отмена)'
+          : b.id === 'mine'
+            ? 'Размещение: Шахта — выберите точку на месторождении железа (Esc — отмена)'
+            : b.id === 'housing'
+              ? 'Размещение: Жилой квартал — выберите точку внутри города своей команды (максимум 5 на город, Esc — отмена)'
+              : b.line
+                ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
+                : `Размещение: ${b.name} — кликните на карте (Shift — серийное строительство, Esc — отмена)`;
     buildPalette();
   }
+
 
   function buildPalette() {
     if (!init) return;
@@ -1352,6 +1511,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!init || !snap) return;
     clear(resBar);
     for (const r of init.ruleset.resources) {
+      if (r.id !== 'money') continue;
       const v = snap.res[r.id] ?? 0;
       const d = snap.rates[r.id] ?? 0;
       const ico = h('span', { class: 'rico' });
@@ -1863,6 +2023,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (selB.def === 'power_plant') big(r.powerGridKm, '#38bdf8');
       if (selB.def === 'hq') big(100, '#ef4444');
       if (selB.def === 'military_base') big(20, '#38bdf8');
+      if (selB.def === 'warehouse') big(100, '#eab308');
       if (d.vision) big(d.vision, '#94a3b8');
     }
     for (const b of snap.buildings) {
@@ -1871,6 +2032,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const ring = (km: number, color: string) => rings.push({ type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: circle(b.pos, km, 64) } });
       if (b.owner === me && b.def === 'military_base') ring(20, '#38bdf8');
       if (b.owner === me && b.def === 'hq') ring(100, '#ef4444');
+      if (b.owner === me && b.def === 'warehouse') ring(100, '#eab308');
       if (b.owner === me && (d.vision ?? 0) >= 20) ring(d.vision!, TEAM_COLOR[b.team]);
       if (d.attack) ring(d.attack.range, '#ffd84a');
       if (d.crossing) ring(d.crossing.radiusKm, '#7fe7ff');
@@ -1895,6 +2057,23 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       (map.getSource('fuel-stations') as GeoJSONSource).setData({ type: 'FeatureCollection', features: init.map.fuel.features.filter((f: any) => distToFrontKm(s.front, f.geometry.coordinates) * (myTeam === 0 ? 1 : -1) > 0) } as any);
     }
     (map.getSource('rings') as GeoJSONSource).setData({ type: 'FeatureCollection', features: rings });
+
+    const housingFeatures: any[] = [];
+    for (const b of snap.buildings) {
+      if (b.def !== 'housing') continue;
+      const polys = generateCityHousePolygons(b.pos, b.id);
+      for (const poly of polys) {
+        housingFeatures.push({
+          type: 'Feature',
+          properties: { team: b.team },
+          geometry: { type: 'Polygon', coordinates: poly },
+        });
+      }
+    }
+    (map.getSource('housing-osm') as GeoJSONSource)?.setData({
+      type: 'FeatureCollection',
+      features: housingFeatures,
+    });
 
     // buildings → DOM markers with construction animation
     const alive = new Set<number>();

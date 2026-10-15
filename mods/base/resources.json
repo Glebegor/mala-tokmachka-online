@@ -6,5 +6,13 @@
     "color": "#e8c35a",
     "start": 10000,
     "cap": 99999
+  },
+  {
+    "id": "ore",
+    "icon": "rock",
+    "name": "Железная руда",
+    "color": "#c58a5a",
+    "start": 0,
+    "cap": 5000
   }
 ]

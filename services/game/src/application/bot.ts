@@ -100,6 +100,47 @@ function findBotMilitaryBasePos(sim: Sim, team: Team): LngLat | null {
   return list[0];
 }
 
+/** Finds a location for a warehouse at ~80 km distance from the front line, maintaining >= 100 km spacing from other warehouses */
+function findBotWarehousePos(sim: Sim, team: Team): LngLat | null {
+  const roads = sim.roads?.nodes ?? [];
+  const front = sim.world.front;
+  const isDry = (pt: LngLat) => sim.isPlayableGround(pt) && sim.terrainAt(pt).id !== 'water';
+  const existingWarehouses = sim.world.buildings.filter((b) => b.def === 'warehouse');
+  const farFromWarehouses = (pt: LngLat) => !existingWarehouses.some((b) => distKm(b.pos, pt) < 100);
+
+  const idealCandidates: LngLat[] = [];
+  const acceptableCandidates: LngLat[] = [];
+  const step = Math.max(1, Math.floor(roads.length / 2500));
+
+  for (let i = 0; i < roads.length; i += step) {
+    const pt = roads[i];
+    if (!isDry(pt) || sim.side(pt) !== team || !farFromWarehouses(pt)) continue;
+    const d = distToFrontKm(front, pt);
+    const dist = team === 0 ? d : -d;
+    if (dist < 20) continue;
+
+    // Target ~80 km from the front line (65-95 km ideal)
+    if (dist >= 65 && dist <= 95) {
+      idealCandidates.push(pt);
+    } else if (dist >= 50 && dist <= 120) {
+      acceptableCandidates.push(pt);
+    }
+  }
+
+  const list = idealCandidates.length ? idealCandidates : acceptableCandidates;
+  if (!list.length) return null;
+
+  for (let attempt = 0; attempt < 8; attempt++) {
+    const pick = list[Math.floor(Math.random() * list.length)];
+    const ang = Math.random() * Math.PI * 2;
+    const r = 0.05 + Math.random() * 0.15;
+    const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
+    if (isDry(nudged) && sim.side(nudged) === team && farFromWarehouses(nudged)) return nudged;
+    if (farFromWarehouses(pick)) return pick;
+  }
+  return list[0];
+}
+
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
   private step = 0;
@@ -136,6 +177,18 @@ export class Bot {
       return;
     }
 
+    // Build warehouses at ~80 km from the front line (>= 100 km apart)
+    const whDef = sim.defs.b.get('warehouse');
+    if (whDef && sim.canPay(p, whDef.cost)) {
+      const myWarehouses = mine.filter((b) => b.def === 'warehouse');
+      if (myWarehouses.length < 1) {
+        const whPos = findBotWarehousePos(sim, p.team);
+        if (whPos) {
+          sim.apply(p.id, { type: 'build', def: 'warehouse', pos: whPos });
+        }
+      }
+    }
+
     // Build military bases across team territory, prioritizing 20-80 km from front
     const mbDef = sim.defs.b.get('military_base');
     if (mbDef && sim.canPay(p, mbDef.cost)) {
@@ -145,6 +198,7 @@ export class Bot {
       }
     }
   }
+
 
   private train(sim: Sim, p: Player) {
     const w = sim.world;

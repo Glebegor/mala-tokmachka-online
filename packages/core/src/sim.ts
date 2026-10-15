@@ -1,10 +1,11 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
-import { clamp, distKm, formationSpot, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
+import { clamp, distKm, formationSpot, inPolygon, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
 import { buildFront, distToFrontKm, findPinch, nearestNode, normalAt, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
+import { inDeposit } from './deposits';
 import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
@@ -24,15 +25,8 @@ const MAP_CACHE = new WeakMap<MapDef, MapCache>();
 
 export const isReconDrone = (d: UnitDef | undefined) => !!d && d.kind === 'air' && d.droneType !== 'strike';
 export const isStrikeDrone = (d: UnitDef | undefined) => !!d && d.droneType === 'strike';
-/** Point in polygon for plain [lng, lat] rings. */
-export function inPolygon(p: LngLat, ring: LngLat[]): boolean {
-  let inside = false;
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const a = ring[i], b = ring[j];
-    if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
-  }
-  return inside;
-}
+export { inPolygon };
+
 
 /** Rings for the non-playable neighbours, stitched from the map's border lines. */
 export function forbiddenRings(map: MapDef): LngLat[][] {
@@ -616,6 +610,32 @@ export class Sim {
           if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
           const clash = w.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, cmd.pos) < 20);
           if (clash) return fail('keep at least 20 km from other military bases');
+        } else if (d.id === 'warehouse') {
+          const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
+          if (!hasHq) return fail('must place military HQ first');
+          if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
+          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
+          const clash = w.buildings.find((b) => b.def === 'warehouse' && distKm(b.pos, cmd.pos) < 100);
+          if (clash) return fail('keep at least 100 km from other warehouses');
+        } else if (d.id === 'mine') {
+          const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
+          if (!hasHq) return fail('must place military HQ first');
+          if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
+          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
+          const dep = inDeposit('iron', cmd.pos);
+          if (!dep) return fail('mines can only be built on iron deposits');
+          const clash = w.buildings.find((b) => b.def === 'mine' && distKm(b.pos, cmd.pos) < 1);
+          if (clash) return fail('space occupied');
+        } else if (d.id === 'housing') {
+          const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
+          if (!hasHq) return fail('must place military HQ first');
+          const city = this.cityAt(cmd.pos);
+          if (!city) return fail('housing can only be built inside a city');
+          const cityIdx = this.map.capturePoints.indexOf(city);
+          if (cityIdx >= 0 && w.points[cityIdx]?.owner !== p.team) return fail('your side must hold the city');
+          const limit = r.cityHousingLimit ?? 5;
+          if (w.buildings.filter((x) => x.def === 'housing' && this.inCity(x.pos, city)).length >= limit) return fail(`at most ${limit} housing blocks per city`);
+          if (w.buildings.some((x) => x.def === 'housing' && distKm(x.pos, cmd.pos) < 0.08)) return fail('too close to another housing block');
         } else {
           const zone = specialZoneAt(cmd.pos);
           const mySide = p.team === 0 ? 'ua' : 'ru';
@@ -628,24 +648,14 @@ export class Sim {
             if (w.grey.some((z) => distKm(z.pos, cmd.pos) <= z.r) || this.liberatedAt(cmd.pos)) return fail('contested ground (grey zone)');
             if (this.side(cmd.pos) !== p.team) return fail('not your territory');
             const dist = Math.abs(distToFrontKm(w.front, cmd.pos));
-            if (d.id !== 'housing' && dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
+            if (dist < r.minBuildDistanceFromFront * (d.category === 'civil' ? 2 : 1)) return fail('too close to the front');
           }
           if (d.needsWaterWithinKm && !this.barrierNear(cmd.pos, d.needsWaterWithinKm)) return fail('must be built on a river bank');
-          if (d.id === 'housing') {
-            // housing only inside a city your side holds, and only so many per city
-            const city = this.cityAt(cmd.pos);
-            if (!city) return fail('housing can only be built inside a city');
-            if (w.points[this.map.capturePoints.indexOf(city)]?.owner !== p.team) return fail('your side must hold the city');
-            if (w.buildings.filter((x) => x.def === 'housing' && this.inCity(x.pos, city)).length >= r.cityHousingLimit) return fail(`at most ${r.cityHousingLimit} housing blocks per city`);
-            if (w.buildings.some((x) => x.def === 'housing' && distKm(x.pos, cmd.pos) < 0.08)) return fail('too close to another housing block');
-          } else {
-            // every site needs its own patch; only supply-chain partners (mine and metal works, …) must be far apart
-            const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
-            if (clash) {
-              const other = this.defs.b.get(clash.def)!;
-              const gap = this.spacingBetween(d, other.id, !!zone);
-              return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied');
-            }
+          const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
+          if (clash) {
+            const other = this.defs.b.get(clash.def)!;
+            const gap = this.spacingBetween(d, other.id, !!zone);
+            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : gap > r.fieldWorkSpacing ? `keep ${gap} km from the ${other.name}` : 'space occupied');
           }
         }
         if (!this.canPay(p, d.cost)) return fail('not enough resources');

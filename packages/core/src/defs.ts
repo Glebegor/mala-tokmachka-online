@@ -310,7 +310,7 @@ export const DEFAULT_RULES: RulesConfig = {
   powerGridKm: 100,
   powerGridMult: 1.25,
   housingGridMult: 1.5,
-  cityHousingLimit: 10,
+  cityHousingLimit: 5,
   storageCap: 30000,
   fieldWorkSpacing: 1.2,
   civilSpacing: 5,

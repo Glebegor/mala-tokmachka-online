@@ -9,6 +9,7 @@
     "buildTime": 0,
     "hp": 10000,
     "vision": 20,
+    "sameKindKm": 100,
     "maxPerPlayer": 1
   },
   {
@@ -22,6 +23,52 @@
     },
     "buildTime": 120,
     "hp": 5000,
-    "vision": 15
+    "vision": 15,
+    "sameKindKm": 20
+  },
+  {
+    "id": "warehouse",
+    "name": "Склад",
+    "category": "civil",
+    "icon": "⌂",
+    "description": "Склад материальных ресурсов. Нельзя строить ближе 100 км к другим складам.",
+    "cost": {
+      "money": 5000
+    },
+    "buildTime": 60,
+    "hp": 5000,
+    "storageCap": 5000,
+    "sameKindKm": 100
+  },
+  {
+    "id": "mine",
+    "name": "Шахта",
+    "category": "civil",
+    "icon": "⛏",
+    "description": "Добывает железную руду на месторождениях железа. Накапливает в себе до 5 000 руды.",
+    "cost": {
+      "money": 5000
+    },
+    "buildTime": 60,
+    "hp": 5000,
+    "storageCap": 5000,
+    "produces": {
+      "ore": 5
+    }
+  },
+  {
+    "id": "housing",
+    "name": "Жилой квартал",
+    "category": "civil",
+    "icon": "🏢",
+    "description": "Жилой квартал в городе. Приносит 10$/с, доход делится поровну между всеми игроками команды. До 5 кварталов на город.",
+    "cost": {
+      "money": 2000
+    },
+    "buildTime": 30,
+    "hp": 2000,
+    "produces": {
+      "money": 10
+    }
   }
 ]
