@@ -1,14 +1,66 @@
-import { type BotDifficulty, type Building, distKm, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Unit } from '@sw/core';
+import { type BotDifficulty, type Building, distKm, distToFrontKm, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
   'power_plant', 'housing', 'machine_factory', 'mine', 'metalworks', 'ammo_factory', 'ammo_depot', 'drone_factory', 'launch_site', 'oil_refinery', 'trench', 'gas_station', 'housing',
   'signal_station', 'antiair', 'ammo_depot', 'airfield', 'training_center', 'bunker', 'housing', 'trench', 'warehouse', 'bunker', 'missile_factory', 'ammo_depot',
 ];
 
+/** Selects a random position near a road far from the front: West of Ukraine for UA, East for RU */
+function findBotHqPos(sim: Sim, team: Team): LngLat {
+  const roads = sim.roads?.nodes ?? [];
+  const front = sim.world.front;
+  const isDry = (pt: LngLat) => sim.isPlayableGround(pt) && sim.terrainAt(pt).id !== 'water';
+
+  const candidates: LngLat[] = [];
+  const step = Math.max(1, Math.floor(roads.length / 2500));
+  for (let i = 0; i < roads.length; i += step) {
+    const pt = roads[i];
+    if (team === 0) {
+      // Ukraine: West (lng <= 33.0), on Ukrainian side, far from front (>= 120 km)
+      if (pt[0] <= 33.0 && sim.side(pt) === 0 && isDry(pt)) {
+        if (distToFrontKm(front, pt) >= 120) candidates.push(pt);
+      }
+    } else {
+      // Russia: East (lng >= 37.5), on Russian side, far from front (<= -80 km)
+      if (pt[0] >= 37.5 && sim.side(pt) === 1 && isDry(pt)) {
+        if (distToFrontKm(front, pt) <= -80) candidates.push(pt);
+      }
+    }
+  }
+
+  // Fallback with looser distance if needed
+  if (!candidates.length) {
+    for (let i = 0; i < roads.length; i += step) {
+      const pt = roads[i];
+      if (team === 0) {
+        if (pt[0] <= 34.0 && sim.side(pt) === 0 && isDry(pt) && distToFrontKm(front, pt) >= 60) {
+          candidates.push(pt);
+        }
+      } else {
+        if (pt[0] >= 37.0 && sim.side(pt) === 1 && isDry(pt) && distToFrontKm(front, pt) <= -50) {
+          candidates.push(pt);
+        }
+      }
+    }
+  }
+
+  if (candidates.length) {
+    const pick = candidates[Math.floor(Math.random() * candidates.length)];
+    const ang = Math.random() * Math.PI * 2;
+    const r = 0.05 + Math.random() * 0.1;
+    const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
+    if (isDry(nudged)) return nudged;
+    return pick;
+  }
+
+  const spawns = sim.map.spawns[team];
+  return spawns && spawns[0] ? spawns[0] : (team === 0 ? [28.0, 49.5] : [39.0, 48.0]);
+}
+
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
   private step = 0;
-  private lastThink = 0;
+  private lastThink = -100;
   private lastArmyOrder = -100;
   private readonly interval: number;
   private readonly attackSize: number;
@@ -36,9 +88,8 @@ export class Bot {
     if (mine.filter((b) => b.progress < 1).length >= 2) return;
     const hq = mine.find((b) => b.def === 'hq');
     if (!hq) {
-      const spawns = sim.map.spawns[p.team];
-      const spawnPos = spawns && spawns[0] ? spawns[0] : ([36.0, 48.0] as LngLat);
-      sim.apply(p.id, { type: 'build', def: 'hq', pos: spawnPos });
+      const hqPos = findBotHqPos(sim, p.team);
+      sim.apply(p.id, { type: 'build', def: 'hq', pos: hqPos });
       return;
     }
     const fn = w.front[nearestNode(w.front, hq.pos)];

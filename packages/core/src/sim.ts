@@ -289,13 +289,15 @@ export class Sim {
 
   /** Physical goods a building keeps on site: what it makes, what it uses, and what its trainees cost. */
   storageFor(d: BuildingDef): string[] {
+    const validGoods = new Set(this.ruleset.resources.filter((r) => this.isGood(r.id)).map((r) => r.id));
+    if (!validGoods.size) return [];
     const fixed: Record<string, string[]> = { hq: ['metal', 'fuel', 'ore', 'ammo'], rail_station: ['metal', 'fuel', 'ore', 'ammo'], gas_station: ['fuel'], oil_refinery: ['fuel'], airfield: ['fuel'], launch_site: ['fuel'], mine: ['ore'], warehouse: ['metal', 'fuel', 'ore', 'ammo'], ammo_depot: ['ammo'] };
-    if (fixed[d.id]) return fixed[d.id];
+    if (fixed[d.id]) return fixed[d.id].filter((k) => validGoods.has(k));
     const global = new Set(['money', 'people', 'energy']);
     const out = new Set<string>();
-    for (const k of [...Object.keys(d.produces ?? {}), ...Object.keys(d.consumes ?? {})]) if (!global.has(k)) out.add(k);
-    if (d.supply) out.add('ammo'); // ammo points keep a store to hand out
-    for (const uid of d.trains ?? []) for (const k of Object.keys(this.defs.u.get(uid)?.cost ?? {})) if (!global.has(k)) out.add(k);
+    for (const k of [...Object.keys(d.produces ?? {}), ...Object.keys(d.consumes ?? {})]) if (!global.has(k) && validGoods.has(k)) out.add(k);
+    if (d.supply && validGoods.has('ammo')) out.add('ammo');
+    for (const uid of d.trains ?? []) for (const k of Object.keys(this.defs.u.get(uid)?.cost ?? {})) if (!global.has(k) && validGoods.has(k)) out.add(k);
     return [...out];
   }
 
