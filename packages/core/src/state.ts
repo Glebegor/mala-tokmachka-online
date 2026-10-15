@@ -90,6 +90,8 @@ export interface Unit {
   cooldown: number;
   xp: number;
   rank: number; // index into ruleset.ranks
+  /** 0–100. Falls when encircled, out of ammo or under fire; below 50 it fights worse; encircled at 0 it surrenders. */
+  morale?: number;
   /** Sim time it last took damage (healing waits until it has been out of the fight for a while). */
   lastHit?: number;
   /** A medic, mechanic or hospital is patching it up (server side, shown as a status). */
@@ -148,7 +150,7 @@ export interface Unit {
 export type UnitStatus = [id: string, value: number];
 
 /** Which status ids are debuffs. */
-export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo']);
+export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo', 'lowmorale', 'broken']);
 
 export interface Waypoint {
   p: LngLat;
@@ -218,6 +220,8 @@ export interface LiberatedCell {
   team: Team; // the side that took it
   quiet: number; // seconds without enemy ground troops nearby
   free: boolean; // settled and shown as liberated (team 0 only)
+  /** When it turned blue (recently liberated ground is shown brighter). */
+  freedAt?: number;
 }
 
 /** Size of a liberated-ground cell in degrees (about 1.5 km). */

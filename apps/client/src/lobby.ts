@@ -3,6 +3,7 @@ import { api, type Session } from './api';
 import { clear, h } from './dom';
 import { showProfile } from './profile';
 import { openGuide } from './guide';
+import { uiScaleControl } from './uiScale';
 
 type Opt<T> = { v: T; label: string };
 
@@ -151,6 +152,7 @@ export function showLobby(app: HTMLElement, s: Session, cb: { leftMatch?: string
               void refresh(true);
             });
           } }, `${s.user.name} · Profile`),
+          uiScaleControl(),
           h('button', { title: 'How to play', onClick: () => openGuide() }, 'Guide'),
           h('button', { onClick: () => ((stopped = true), cb.onLogout()) }, 'Sign out')),
       ),

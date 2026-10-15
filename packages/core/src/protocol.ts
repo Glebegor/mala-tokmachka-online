@@ -39,7 +39,8 @@ export interface SnapMsg {
   grey: { team: Team; pos: [number, number]; r: number }[];
   /**
    * Ground that changed hands, as runs of grid cells (see LIBERATED_CELL): [iy, kind, first ix, count, …] where kind is
-   * 0 or 1 = grey, contested after that team took it; 2 = liberated by Ukraine (blue).
+   * 0 or 1 = grey (the penetration area: contested ground that team's troops are in, or just took); 2 = liberated by
+   * Ukraine (blue); 3 = liberated in the last few minutes (bright blue).
    * Only sent when it changed (and in the first snapshot); missing = unchanged.
    */
   liberated?: number[];

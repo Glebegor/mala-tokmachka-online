@@ -1,7 +1,7 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
 import { clamp, distKm, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
-import { buildFront, distToFrontKm, findPinch, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
+import { buildFront, distToFrontKm, findPinch, nearestNode, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
@@ -189,6 +189,7 @@ export class Sim {
       id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0,
       transport: false, encircled: false, infil: 0, status: [], enter: 0, path: [], cap: 0,
       fireMode: 'auto',
+      morale: d.kind === 'air' ? undefined : 100,
       // players' troops stay where they are put; bots go after what they see
       stance: p.bot ? 'aggressive' : 'hold',
       post: [pos[0], pos[1]],
@@ -463,7 +464,7 @@ export class Sim {
   }
   /** Refill rounds from a nearby ammo point (called once a second per unit). */
   private resupply(u: Unit, d: UnitDef, seconds: number): boolean {
-    if (u.ammo === undefined || !d.maxAmmo || u.ammo >= d.maxAmmo || u.embarkedIn) return false;
+    if (u.ammo === undefined || !d.maxAmmo || u.ammo >= d.maxAmmo || u.embarkedIn || u.encircled) return false; // cut off: no supply
     const b = this.supplyFor(u);
     if (!b) return false;
     const cost = d.ammoCost ?? 1;
@@ -1073,8 +1074,10 @@ export class Sim {
     this.units(dt);
     this.repairs(dt);
     if (w.tick % r.tickRate === 0) this.healing();
+    if (w.tick % r.tickRate === 3) this.morale();
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
     if (!peace) this.frontline(dt), (this.occ.tick = -1); // the line moved: territory index is stale
+    if (!peace && w.tick % r.tickRate === 5 && this.breakthrough()) this.occ.tick = -1;
     if (w.smokes.length && w.tick % r.tickRate === 0) w.smokes = w.smokes.filter((x) => x.expiresAt > w.time);
     if (!peace) this.territory(dt);
     if (!peace && !r.sandbox) this.checkVictory();
@@ -1154,11 +1157,16 @@ export class Sim {
   private static cellKey(ix: number, iy: number) {
     return ix * 100000 + iy;
   }
-  /** Contested (grey) ground at this position, if any. */
+  /** Contested (grey) ground at this position, if any: freshly taken ground or the penetration area around troops. */
   liberatedAt(p: LngLat): LiberatedCell | undefined {
-    const c = this.libByKey.get(Sim.cellKey(Math.floor(p[0] / LIBERATED_CELL.lng), Math.floor(p[1] / LIBERATED_CELL.lat)));
-    return c && !c.free ? c : undefined;
+    const key = Sim.cellKey(Math.floor(p[0] / LIBERATED_CELL.lng), Math.floor(p[1] / LIBERATED_CELL.lat));
+    const c = this.libByKey.get(key);
+    if (c && !c.free) return c;
+    const pen = this.penByKey.get(key);
+    return pen ? { ix: pen.ix, iy: pen.iy, team: pen.team, quiet: 0, free: false } : undefined;
   }
+  /** Penetration area (DeepState's grey zone): ground beyond the line where a side's troops are, kept a minute after they go. */
+  private penByKey = new Map<number, { ix: number; iy: number; team: Team; until: number }>();
 
   /**
    * Ground changing hands, checked once a second (as DeepState draws it): cells within 2 km of the moving parts of the front
@@ -1214,11 +1222,38 @@ export class Sim {
       });
       c.quiet = enemy ? 0 : c.quiet + 2;
       if (c.quiet < r.liberateSeconds) continue;
-      if (c.team === 0) c.free = true;
+      if (c.team === 0) (c.free = true), (c.freedAt = w.time);
       else this.libByKey.delete(key);
       this.libVersion++;
     }
+    // recently liberated ground fades to plain blue after five minutes
+    for (const c of this.libByKey.values()) if (c.free && c.freedAt !== undefined && w.time - c.freedAt > 300) (c.freedAt = undefined), this.libVersion++;
+    this.penetration();
     if (this.libVersion !== this.libSent) (w.liberated = [...this.libByKey.values()]), (this.libSent = this.libVersion), (this.libRuns = null);
+  }
+
+  /** Grey around every ground unit standing beyond its side's line (2 km), lasting 60 s after it leaves. */
+  private penetration() {
+    const w = this.world;
+    const { lng: cw, lat: ch } = LIBERATED_CELL;
+    for (const u of w.units) {
+      if (u.embarkedIn || this.defs.u.get(u.def)!.kind === 'air' || this.side(u.pos) === u.team) continue;
+      const cx = Math.floor(u.pos[0] / cw), cy = Math.floor(u.pos[1] / ch);
+      const rx = Math.ceil(2 / (kmPerDegLng(u.pos[1]) * cw)), ry = Math.ceil(2 / (111.32 * ch));
+      for (let ix = cx - rx; ix <= cx + rx; ix++) {
+        for (let iy = cy - ry; iy <= cy + ry; iy++) {
+          const at: LngLat = [(ix + 0.5) * cw, (iy + 0.5) * ch];
+          if (distKm(at, u.pos) > 2 || this.side(at) === u.team) continue; // only the far side of the line
+          const key = Sim.cellKey(ix, iy);
+          const was = this.penByKey.get(key);
+          if (!was || was.team !== u.team) this.libVersion++;
+          if (this.penByKey.size < 30000 || was) this.penByKey.set(key, { ix, iy, team: u.team, until: w.time + 60 });
+        }
+      }
+    }
+    for (const [key, c] of this.penByKey) {
+      if (c.until < w.time || this.side([(c.ix + 0.5) * cw, (c.iy + 0.5) * ch]) === c.team) (this.penByKey.delete(key), this.libVersion++);
+    }
   }
   /** Bumped whenever the contested ground changes; snapshots resend it only then. */
   libVersion = 0;
@@ -1227,8 +1262,11 @@ export class Sim {
   /** Contested ground as runs along each row of cells: [iy, team, firstIx, length, …] (compact for the wire). */
   liberatedRuns(): number[] {
     if (this.libRuns) return this.libRuns;
-    const kind = (c: LiberatedCell) => (c.free ? 2 : c.team);
-    const cells = [...this.world.liberated].sort((a, b) => a.iy - b.iy || kind(a) - kind(b) || a.ix - b.ix);
+    const kind = (c: LiberatedCell) => (c.free ? (c.freedAt !== undefined ? 3 : 2) : c.team);
+    // the penetration area is grey too (where no taken/liberated cell lies already)
+    const pen: LiberatedCell[] = [];
+    for (const [key, p] of this.penByKey) if (!this.libByKey.has(key)) pen.push({ ix: p.ix, iy: p.iy, team: p.team, quiet: 0, free: false });
+    const cells = [...this.world.liberated, ...pen].sort((a, b) => a.iy - b.iy || kind(a) - kind(b) || a.ix - b.ix);
     const out: number[] = [];
     for (let i = 0; i < cells.length; ) {
       const c = cells[i];
@@ -1266,6 +1304,8 @@ export class Sim {
       }
       if (u.sprint) s.push(['sprint', 2]);
       if (u.healing && u.hp < this.maxHp(u)) s.push(['healing', 1]);
+      if (u.morale !== undefined && u.morale < 25) s.push(['broken', u.morale / 100]);
+      else if (u.morale !== undefined && u.morale < 50) s.push(['lowmorale', this.moraleMult(u)]);
       if (u.ammo !== undefined && d.maxAmmo) {
         if (u.ammo < (d.ammoPerShot ?? 1)) s.push(['noammo', 0]);
         else if (u.ammo / d.maxAmmo < 0.25) s.push(['lowammo', u.ammo / d.maxAmmo]);
@@ -1539,6 +1579,8 @@ export class Sim {
     const dealt = (raw * (1 - cover) * (1 - city) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos));
     target.hp -= dealt;
     target.lastHit = this.world.time;
+    // being hit shakes a unit (more the harder the blow)
+    if (target.morale !== undefined) target.morale = Math.max(0, target.morale - (dealt / this.maxHp(target)) * 30);
     if (target.hp <= 0 && attacker.team !== target.team) {
       attacker.xp += r.xpPerKill;
       attacker.combat = (attacker.combat ?? 0) + 1;
@@ -1583,7 +1625,7 @@ export class Sim {
 
   /** Top up fuel from whatever is in reach: airfields (recon drones); filling stations, fuel trucks or an HQ (vehicles). */
   private refuelInPlace(u: Unit, d: UnitDef, dt: number) {
-    if (u.fuel === undefined || u.maxFuel === undefined || u.fuel >= u.maxFuel || isStrikeDrone(d)) return;
+    if (u.fuel === undefined || u.maxFuel === undefined || u.fuel >= u.maxFuel || isStrikeDrone(d) || u.encircled) return; // cut off: no supply
     const need = u.maxFuel - u.fuel;
     const fromStore = (kinds: string[], km: number, rate: number) => {
       for (const b of this.world.buildings) {
@@ -1847,7 +1889,7 @@ export class Sim {
       if ((tu || tb) && !aimingNow && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
         if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
-        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1);
+        const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1) * this.moraleMult(u);
         let dealt: number;
         if (tu) {
           const td = this.defs.u.get(tu.def)!;
@@ -2029,6 +2071,37 @@ export class Sim {
    * Rescuers: inside a city they repair the city and its housing at once; outside they patch up buildings within 2 km.
    * Nothing is repaired within 60 s of being hit. Several rescuers work faster (up to 10 hp/s).
    */
+  /** Damage multiplier from morale: full above 50, down to half at 0. */
+  moraleMult(u: Unit): number {
+    const m = u.morale ?? 100;
+    return m >= 50 ? 1 : 0.5 + m / 100;
+  }
+
+  /**
+   * Morale, once a second. Encircled units lose 2 a second, units out of ammo 0.5; a unit out of the fight for 10 s
+   * recovers 1 a second, 3 near its base or a field hospital. A unit still encircled at zero morale surrenders: it is
+   * lost and the other side scores for it.
+   */
+  private morale() {
+    const w = this.world;
+    const r = this.ruleset.rules;
+    const havens = w.buildings.filter((b) => b.progress >= 1 && (b.def === 'hq' || this.defs.b.get(b.def)!.heals));
+    for (const u of w.units) {
+      if (u.morale === undefined || u.embarkedIn) continue;
+      const d = this.defs.u.get(u.def)!;
+      let delta = 0;
+      if (u.encircled) delta -= 2;
+      if (d.maxAmmo && (u.ammo ?? 0) < (d.ammoPerShot ?? 1)) delta -= 0.5;
+      if (!delta && w.time - (u.lastHit ?? -1e9) >= 10) delta = havens.some((b) => b.team === u.team && distKm(b.pos, u.pos) <= 8) ? 3 : 1;
+      u.morale = clamp(u.morale + delta, 0, 100);
+      if (u.encircled && u.morale <= 0) {
+        u.hp = 0; // surrenders
+        w.scores[(1 - u.team) as Team] += r.cauldronScore / 2;
+        this.hooks.emit('unitSurrendered', { id: u.id, def: u.def, owner: u.owner });
+      }
+    }
+  }
+
   /**
    * Medics, mechanics and field hospitals, once a second: every hurt unit in reach of a healer for its kind gets the best
    * rate on offer (healers do not stack). Nobody heals until it has been out of the fight (not hit) for 10 s.
@@ -2237,6 +2310,51 @@ export class Sim {
         if (ring.length >= 3) p.nodes = ring;
       }
     }
+  }
+
+  /**
+   * The map follows the troops at once (checked every second): a ground unit that has pushed up to 4 km past the line with
+   * no enemy ground troops within 2 km drags the nearest stretch of front forward so it stands on its own side again.
+   * Raiders deeper than that only make grey (penetration) ground. Returns whether the line moved.
+   */
+  private breakthrough(): boolean {
+    const w = this.world;
+    const f = w.front;
+    if (f.length < 5) return false;
+    const moved = new Set<number>();
+    for (const u of w.units) {
+      if (u.embarkedIn || this.defs.u.get(u.def)!.kind === 'air' || u.hp <= 0) continue;
+      if (w.pockets.some((p) => pointInRing(p.nodes, u.pos))) continue; // cauldrons have their own line
+      const signed = distToFrontKm(f, u.pos) * (u.team === 0 ? 1 : -1); // < 0: beyond its line
+      if (signed >= 0 || signed < -4) continue;
+      let opposed = false;
+      this.near(this.unitGrid, u.pos, 2, (e) => {
+        if (!opposed && e.team !== u.team && !e.embarkedIn && this.defs.u.get(e.def)!.kind !== 'air' && distKm(e.pos, u.pos) <= 2) opposed = true;
+      });
+      if (opposed) continue;
+      const i = nearestNode(f, u.pos);
+      if (i <= 0 || i >= f.length - 1 || moved.has(i)) continue;
+      // push the node (and, less, its neighbours) along the normal past the unit; between two nodes the line gives
+      // less, so keep pushing (a few times at most) until the unit stands on its own side
+      const dir = u.team === 0 ? 1 : -1; // the normal points into team 1's ground
+      const touched: number[] = [];
+      for (let round = 0, beyond = -signed; round < 4 && beyond > 0; round++) {
+        const push = beyond + 0.5;
+        for (const [k, share] of [[0, 1], [-1, 0.6], [1, 0.6], [-2, 0.3], [2, 0.3]] as const) {
+          const j = i + k;
+          if (j <= 0 || j >= f.length - 1 || (moved.has(j) && !touched.includes(j))) continue;
+          const [nx, ny] = normalOf(f[j - 1], f[j], f[j + 1]);
+          const lng = f[j].lng + (nx * dir * push * share) / kmPerDegLng(f[j].lat);
+          const lat = f[j].lat + (ny * dir * push * share) / 111.32;
+          if (this.terrain?.isBarrier([lng, lat]) && !this.terrain.isBarrier([f[j].lng, f[j].lat])) continue; // not across a river
+          (f[j].lng = lng), (f[j].lat = lat);
+          touched.push(j);
+        }
+        beyond = -distToFrontKm(f, u.pos) * (u.team === 0 ? 1 : -1);
+      }
+      for (const j of touched) moved.add(j);
+    }
+    return moved.size > 0;
   }
 
   /** When the jaws of a pincer meet, the loop of front between them is cut off and becomes a cauldron. */

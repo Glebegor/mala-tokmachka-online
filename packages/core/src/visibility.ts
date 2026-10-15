@@ -76,6 +76,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           fuel: own && u.fuel !== undefined ? Math.round(u.fuel) : undefined,
           maxFuel: own ? u.maxFuel : undefined,
           ammo: own && u.ammo !== undefined ? Math.floor(u.ammo) : undefined,
+          morale: own && u.morale !== undefined ? Math.round(u.morale) : undefined,
           combat: mine ? u.combat ?? 0 : undefined,
           cargo: own && u.cargo ? { cap: u.cargo.cap, res: Object.fromEntries(Object.entries(u.cargo.res).map(([k, v]) => [k, Math.round(v)])), passengers: u.cargo.passengers, drones: u.cargo.drones } : undefined,
           haul: own ? u.haul : undefined,
