@@ -596,6 +596,55 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   console.log('multi-stop routes ok');
 }
 
+// --- delivery routes that used to go wrong: no-store buildings, old cargo, a full destination, running dry ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const mk = (def: string, dx: number, dy: number, storage: Record<string, number> = {}) => {
+    const b = { ...hq, id: sim.world.nextId++, def, hp: 500, pos: offsetKm(hq.pos, dx, dy), storage, inside: [], course: null, upgrade: null };
+    sim.world.buildings.push(b);
+    return b;
+  };
+  const store = mk('warehouse', 4, -4, { metal: 5000 });
+  const pp = mk('power_plant', 8, -4);
+  const truck = sim.spawnUnit('truck', a, store.pos);
+  const route = (from: number, to: number, resType?: string) => sim.apply('a', { type: 'setRoute', unit: truck.id, fromBuilding: from, toBuilding: to, resType });
+  assert.equal(route(store.id, pp.id).ok, false, 'a power plant keeps no goods to unload into');
+  assert.equal(route(store.id, pp.id, 'metal').ok, false);
+  assert.equal(route(pp.id, store.id, 'ore').ok, false, 'nor any to load');
+  // old cargo nothing on the new route takes: dropped at the nearest store first, then the route runs
+  const fac = mk('ammo_factory', 6, 2, { ammo: 400 });
+  const depot = mk('ammo_depot', 8, 4);
+  truck.cargo!.res = { ore: truck.cargo!.cap };
+  assert.ok(route(fac.id, depot.id, 'ammo').ok);
+  assert.ok(truck.haul!.stops[0].once && truck.haul!.stops.length === 3, 'a one-off drop stop goes first');
+  for (let i = 0; i < 4000 && (depot.storage.ammo ?? 0) < 1; i++) sim.step(0.1);
+  assert.equal(Math.round(truck.cargo!.res.ore ?? 0), 0, 'the ore was dropped');
+  assert.ok((depot.storage.ammo ?? 0) > 0, 'and ammo delivered');
+  assert.equal(truck.haul!.stops.length, 2, 'the drop stop is gone from the loop');
+  // a full destination: the truck waits there instead of driving back and forth
+  const full = mk('warehouse', -6, -4, { metal: sim.storageCap({ def: 'warehouse' } as any) });
+  truck.cargo!.res = {};
+  assert.ok(route(store.id, full.id, 'metal').ok);
+  let changes = 0, last = truck.haul!.idx;
+  for (let i = 0; i < 3000; i++) {
+    sim.step(0.1);
+    if (truck.haul!.idx !== last) (changes++, (last = truck.haul!.idx));
+  }
+  assert.ok(changes <= 1 && truck.haul!.state === 'unloading' && truck.haul!.waiting, `waits at the full store (${changes} stop changes)`);
+  full.storage.metal = 0;
+  run(sim, 6);
+  assert.ok((full.storage.metal ?? 0) > 0, 'unloads once there is room');
+  // low on fuel: off to fill up, then back on the route
+  truck.fuel = truck.maxFuel! * 0.1;
+  run(sim, 3);
+  assert.ok(truck.haul!.refuelAt, 'heads off to refuel');
+  for (let i = 0; i < 3000 && truck.haul!.refuelAt; i++) sim.step(0.1);
+  assert.ok(!truck.haul!.refuelAt && truck.fuel! > truck.maxFuel! * 0.9, `filled up (${Math.round(truck.fuel!)}) and back on the route`);
+  console.log('route fixes ok: no-store stops refused, old cargo dropped, waits at a full store, refuels');
+}
+
 // --- the map follows the troops: an unopposed unit just past the line drags the front forward at once ---
 {
   const sim = fresh();

@@ -14,12 +14,15 @@ export interface Pickers {
   launchFrom?: { building: number; units: number[] } | null;
   /** Set a production building's rally point with the next map click. */
   rally?: { building: number } | null;
+  /** The route just sent: put back for editing if the server refuses it. */
+  sentRoute?: { route: NonNullable<Pickers['route']>; at: number } | null;
 }
 
 export interface RouteStop {
   action: 'load' | 'unload' | 'via';
   building?: number;
   pos?: LngLat;
+  once?: boolean;
 }
 
 /** How the next move orders are given (kept between selections). */
@@ -95,7 +98,8 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     const res = hl.resType ? ` [${RES_LABEL[hl.resType] ?? hl.resType}]` : '';
     if (hl.noTrack) lines.push('No track to the next station: waiting for a connection');
     else if (hl.state === 'loading') lines.push(hl.waiting ? `Waiting for ${hl.minLoad && hl.minLoad > 1 ? `at least ${hl.minLoad}` : 'goods'} to load${res}` : `Loading${res} (${Math.ceil(hl.timer ?? 5)}s)`);
-    else if (hl.state === 'unloading') lines.push(`Unloading${res} (${Math.ceil(hl.timer ?? 4)}s)`);
+    else if (hl.state === 'unloading') lines.push(hl.waiting ? 'Waiting for room to unload: the store there is full' : `Unloading${res} (${Math.ceil(hl.timer ?? 4)}s)`);
+    else if (hl.refuelAt) lines.push('Low on fuel: filling up, then back on the route');
     else {
       const eta = etaSeconds(first, d0, c.roadMult, c.pos(first));
       const st = hl.stops[hl.idx];
@@ -246,7 +250,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
           h('button', { class: 'hud-btn sm' + (ready ? ' active' : ''), disabled: !ready || undefined, onClick: (e: MouseEvent) => {
             e.stopPropagation();
             c.send({ type: 'setRoute', unit: first.id, stops: r.stops.map((x) => ({ action: x.action, building: x.building, pos: x.pos as [number, number] | undefined })), resType: r.resType, minLoad: r.minLoad });
-            c.toast('Delivery route set');
+            c.pick.sentRoute = { route: r, at: Date.now() };
             c.pick.route = null;
             c.rerender();
           } }, 'Start route'),
@@ -255,7 +259,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
       const hl = first.haul;
       control = h('div', { class: 'route-box' },
         h('b', {}, `Route${hl.resType ? ` (${RES_LABEL[hl.resType] ?? hl.resType})` : ''}${hl.minLoad && hl.minLoad > 1 && hl.minLoad < (d0.cargoCap ?? 0) ? ` · leaves with ${hl.minLoad}+` : ''}`),
-        h('div', { class: 'route-line' }, ...hl.stops.map((st, i) => h('span', { class: i === hl.idx ? 'cur' : '' }, `${i ? '→ ' : ''}${ACT[st.action]}${st.action === 'via' ? '' : ` ${bname(st.building)}`}`))),
+        h('div', { class: 'route-line' }, ...hl.stops.map((st, i) => h('span', { class: i === hl.idx ? 'cur' : '' }, `${i ? '→ ' : ''}${st.once ? 'Drop old cargo at' : ACT[st.action]}${st.action === 'via' ? '' : ` ${bname(st.building)}`}`))),
         h('button', { class: 'hud-btn sm warn', onClick: () => c.send({ type: 'stop', units: [first.id] }) }, 'Stop route'));
     } else {
       control = h('button', { class: 'hud-btn', title: 'Set up a standing delivery: load and unload stops and waypoints in a loop', onClick: () => {
