@@ -48,16 +48,29 @@ export interface UnitCargo {
   drones?: number[]; // ids of launchable drones carried (pickups)
 }
 
-/** A standing delivery order for a truck: load at one building, unload at another, repeat. */
+/** One stop of a delivery route: load or unload at a building, or just drive through a waypoint. */
+export interface HaulStop {
+  action: 'load' | 'unload' | 'via';
+  building?: number;
+  pos?: LngLat;
+}
+
+/** A standing delivery order for a truck: 2–6 stops driven in a loop (load, unload, waypoints), repeat. */
 export interface Haul {
-  fromBuilding: number;
-  toBuilding: number;
+  stops: HaulStop[];
+  /** The stop it is heading for (or working at). */
+  idx: number;
+  state?: 'moving' | 'loading' | 'unloading';
   resType?: string;
-  state?: 'to_from' | 'loading' | 'to_to' | 'unloading';
+  /** Leave the last loading stop only with at least this much on board (or full). */
+  minLoad?: number;
   timer?: number;
-  /** At the source with nothing to load yet. */
+  /** At a loading stop, waiting for enough goods. */
   waiting?: boolean;
 }
+
+export type Stance = 'hold' | 'defend' | 'aggressive';
+export type Formation = 'spread' | 'line' | 'column' | 'wedge';
 
 export interface SmokeCloud {
   id: number;
@@ -90,6 +103,15 @@ export interface Unit {
   stamina?: number; // infantry, 0..100
   sprint?: boolean; // double speed: drains stamina (infantry) or burns 1.5x fuel (vehicles)
   fireMode?: 'auto' | 'return' | 'hold';
+  /** Behaviour when idle: hold = never moves on its own; defend = engages enemies near its post and returns; aggressive = chases what it sees. */
+  stance?: Stance;
+  /** Where it was put (a defending unit returns here). */
+  post?: LngLat;
+  /** Falls back to a hospital or base by itself below this share of its health (0 = never). */
+  retreatAt?: number;
+  retreating?: boolean;
+  /** Moving with an attack-move order: stops to fight whatever it meets. */
+  attackMove?: boolean;
   fuel?: number;
   maxFuel?: number;
   /** Rounds left (see UnitDef.maxAmmo). */
@@ -103,6 +125,9 @@ export interface Unit {
   loiterRadius?: number;
   isLoitering?: boolean;
   bombardTarget?: LngLat | null; // artillery barrage area
+  /** Aiming (artillery): what it is laying its guns on and how long until it can fire. */
+  aimKey?: string;
+  aim?: number;
   bearing?: number; // degrees, 0 = north
   /** Seconds spent unopposed on the enemy's side of the front (builds a grey zone). */
   infil: number;

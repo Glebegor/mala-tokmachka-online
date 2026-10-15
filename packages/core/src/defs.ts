@@ -41,6 +41,8 @@ export interface BuildingDef {
   supply?: { radiusKm: number; rounds: number };
   /** May also be built inside your side's grey zones (contested ground), even behind the enemy line. */
   buildInGrey?: boolean;
+  /** Two buildings of this kind must stay this far apart (km), e.g. ore mines. */
+  sameKindKm?: number;
   /** Supply-chain links: these buildings must stay `minBuildSpacing` km apart (checked both ways), so goods go by truck. */
   spacedFrom?: string[];
   /** Static weapon, e.g. air defence. */
@@ -103,6 +105,8 @@ export interface UnitDef {
   side?: 'ua' | 'ru';
   /** Indirect fire: cannot hit closer than this (km) and needs a friendly spotter on the target. */
   minRange?: number;
+  /** Seconds it needs to aim at a new target before the first shot (artillery). */
+  aimTime?: number;
   /** How easily it is spotted (<1 stealthy, >1 loud). Default 1 on foot, 1.35 for vehicles. */
   stealth?: number;
   /** Rounds carried when full; 0 (or missing) = carries no weapon ammunition. */

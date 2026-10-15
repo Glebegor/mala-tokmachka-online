@@ -333,12 +333,13 @@
     "fx": "arc",
     "missRate": 0.35,
     "airDamage": 0,
-    "description": "Indirect fire from 3 to 20 km. Only fires at what your side can see (spot for it with recon or drones), or barrage a chosen area. Never drives up to the front line.",
-    "minRange": 3,
+    "description": "Indirect fire from 4 to 20 km (nothing closer than a fifth of its range). Takes 2.5 s to aim at each new target. Only fires at what your side can see (spot for it with recon or drones), or barrage a chosen area. Never drives up to the front line.",
+    "minRange": 4,
     "maxFuel": 90,
     "maxAmmo": 30,
     "ammoCost": 6,
-    "ammoPerShot": 1
+    "ammoPerShot": 1,
+    "aimTime": 2.5
   },
   {
     "id": "drone",

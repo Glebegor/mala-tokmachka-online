@@ -5,7 +5,7 @@ import { buildFront, distToFrontKm, findPinch, normalOf, OccupiedIndex, pocketAt
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
-import { LIBERATED_CELL, type Building, type FrontNode, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
+import { LIBERATED_CELL, type Building, type FrontNode, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
 export interface Hooks {
@@ -189,6 +189,10 @@ export class Sim {
       id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0,
       transport: false, encircled: false, infil: 0, status: [], enter: 0, path: [], cap: 0,
       fireMode: 'auto',
+      // players' troops stay where they are put; bots go after what they see
+      stance: p.bot ? 'aggressive' : 'hold',
+      post: [pos[0], pos[1]],
+      retreatAt: 0,
       sprint: false,
       stamina: d.kind === 'ground' && (d.mobility ?? 'foot') === 'foot' && !d.maxFuel ? 100 : undefined,
       fuel: d.maxFuel,
@@ -479,7 +483,9 @@ export class Sim {
   spacingBetween(d: BuildingDef, other: string, inZone = false): number {
     const r = this.ruleset.rules;
     const o = this.defs.b.get(other);
-    return o && this.chained(d, o) && !inZone ? r.minBuildSpacing : r.fieldWorkSpacing;
+    if (o && this.chained(d, o) && !inZone) return r.minBuildSpacing;
+    if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
+    return r.fieldWorkSpacing;
   }
 
   /** Which team holds the ground here: cauldrons first, then the main front. */
@@ -560,7 +566,7 @@ export class Sim {
           const clash = w.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, cmd.pos) < this.spacingBetween(d, x.def, !!zone));
           if (clash) {
             const other = this.defs.b.get(clash.def)!;
-            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : 'space occupied');
+            return fail(this.chained(d, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : other.id === d.id && d.sameKindKm ? `keep ${d.sameKindKm} km from the next ${d.name}` : 'space occupied');
           }
         }
         if (!this.canPay(p, d.cost)) return fail(Object.keys(d.cost).some((k) => this.isGood(k)) ? 'not enough resources (materials come from your HQ and warehouses)' : 'not enough resources');
@@ -610,9 +616,22 @@ export class Sim {
         const set = new Set(cmd.units);
         const mine = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
-        for (const u of mine) (u.haul = undefined), (u.fuelTo = undefined); // a manual order cancels a delivery round or a fuel run
-        const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct');
+        for (const u of mine) (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false); // a manual order cancels a delivery round or a fuel run
+        const formation = (['spread', 'line', 'column', 'wedge'] as const).includes(cmd.formation as never) ? cmd.formation : 'spread';
+        const moved = this.orderMove(mine, cmd.to, !!cmd.cohesion, !!cmd.queue, cmd.mode === 'direct', formation);
         return moved ? ok() : fail('no way across the water: use a bridge or build a pontoon crossing');
+      }
+      case 'stance': {
+        if (!['hold', 'defend', 'aggressive'].includes(cmd.stance)) return fail('bad stance');
+        const set = new Set(cmd.units);
+        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) (u.stance = cmd.stance), (u.post = u.path.length ? u.post : [u.pos[0], u.pos[1]]);
+        return ok();
+      }
+      case 'retreat': {
+        const at = [0, 0.25, 0.5].includes(cmd.at) ? cmd.at : 0;
+        const set = new Set(cmd.units);
+        for (const u of w.units) if (set.has(u.id) && u.owner === p.id) u.retreatAt = at;
+        return ok();
       }
       case 'stop': {
         const set = new Set(cmd.units);
@@ -642,20 +661,43 @@ export class Sim {
       case 'setRoute': {
         const u = w.units.find((x) => x.id === cmd.unit && x.owner === p.id);
         if (!u) return fail('unit not found');
-        if (!this.defs.u.get(u.def)!.cargoCap) return fail('not a transport');
-        const from = w.buildings.find((x) => x.id === cmd.fromBuilding && x.team === p.team);
-        const to = w.buildings.find((x) => x.id === cmd.toBuilding && x.team === p.team);
-        if (!from || !to || from === to) return fail('pick two different buildings of your side');
-        if (!this.usable(from, p.id) || !this.usable(to, p.id)) return fail('a teammate keeps that building to themselves');
-        // only goods the destination can store; tankers carry fuel only
         const ud = this.defs.u.get(u.def)!;
-        const accepts = this.storageFor(this.defs.b.get(to.def)!);
+        if (!ud.cargoCap) return fail('not a transport');
+        // two buildings (the quick form) or a list of stops with actions and waypoints
+        const raw = cmd.stops?.length ? cmd.stops : [{ action: 'load' as const, building: cmd.fromBuilding }, { action: 'unload' as const, building: cmd.toBuilding }];
+        if (!Array.isArray(raw) || raw.length < 2 || raw.length > 6) return fail('a route has 2 to 6 stops');
+        const stops: HaulStop[] = [];
+        for (const st of raw) {
+          if (st.action === 'via') {
+            if (!st.pos || !isFinitePos(st.pos) || !inBounds(this.map, st.pos)) return fail('bad waypoint');
+            stops.push({ action: 'via', pos: [st.pos[0], st.pos[1]] });
+            continue;
+          }
+          if (st.action !== 'load' && st.action !== 'unload') return fail('bad stop');
+          const b = w.buildings.find((x) => x.id === st.building && x.team === p.team);
+          if (!b) return fail('pick buildings of your side');
+          if (!this.usable(b, p.id)) return fail('a teammate keeps that building to themselves');
+          stops.push({ action: st.action, building: b.id });
+        }
+        const loads = stops.filter((x) => x.action === 'load'), unloads = stops.filter((x) => x.action === 'unload');
+        if (!loads.length || !unloads.length) return fail('a route needs somewhere to load and somewhere to unload');
+        if (cmd.fromBuilding !== undefined && !cmd.stops?.length && cmd.fromBuilding === cmd.toBuilding) return fail('pick two different buildings of your side');
+        // every unloading stop must take what is carried; tankers carry fuel only
         const want = ud.fuelOnly ? 'fuel' : cmd.resType && cmd.resType !== 'any' ? cmd.resType : null;
-        if (want && accepts.length && !accepts.includes(want)) return fail(`the ${this.defs.b.get(to.def)!.name} does not take ${want}`);
-        if (!want && !this.haulKinds(from, to, ud).length) return fail(`nothing the ${this.defs.b.get(from.def)!.name} holds is wanted at the ${this.defs.b.get(to.def)!.name}`);
+        for (const st of unloads) {
+          const to = w.buildings.find((x) => x.id === st.building)!;
+          const accepts = this.storageFor(this.defs.b.get(to.def)!);
+          if (want && accepts.length && !accepts.includes(want)) return fail(`the ${this.defs.b.get(to.def)!.name} does not take ${want}`);
+          if (!want && !loads.some((l) => this.haulKinds(w.buildings.find((x) => x.id === l.building)!, to, ud).length)) {
+            return fail(`nothing on this route is wanted at the ${this.defs.b.get(to.def)!.name}`);
+          }
+        }
         const loaded = !!u.cargo && Object.values(u.cargo.res).some((v) => v > 0);
-        this.orderMove([u], loaded ? to.pos : from.pos, false, false, false);
-        u.haul = { fromBuilding: from.id, toBuilding: to.id, resType: cmd.resType, state: loaded ? 'to_to' : 'to_from' };
+        const minLoad = Math.max(1, Math.min(ud.cargoCap, Math.round(Number(cmd.minLoad) || 1)));
+        // already carrying something: start at the first unloading stop
+        const idx = loaded ? stops.findIndex((x) => x.action === 'unload') : 0;
+        u.haul = { stops, idx, state: 'moving', resType: cmd.resType, minLoad };
+        this.haulGo(u);
         return ok();
       }
       case 'board': {
@@ -708,7 +750,7 @@ export class Sim {
         p.share = !!cmd.allow;
         // a closed door also stops teammates' standing deliveries to and from these buildings
         if (!p.share) for (const u of w.units) if (u.haul && u.owner !== p.id && u.team === p.team) {
-          const ends = [u.haul.fromBuilding, u.haul.toBuilding].map((id) => w.buildings.find((b) => b.id === id));
+          const ends = u.haul.stops.map((st) => w.buildings.find((b) => b.id === st.building));
           if (ends.some((b) => b?.owner === p.id)) (u.haul = undefined), (u.path = []), (u.target = null);
         }
         return ok();
@@ -913,7 +955,7 @@ export class Sim {
    * Plan routes for a move order. Ground units travel by road in transport mode when that is quicker, rivers are only
    * crossed on bridges (roads) or at boat crossings. Returns how many units got a route.
    */
-  private orderMove(units: Unit[], to: LngLat, cohesion: boolean, queue: boolean, direct: boolean): number {
+  private orderMove(units: Unit[], to: LngLat, cohesion: boolean, queue: boolean, direct: boolean, formation: 'spread' | 'line' | 'column' | 'wedge' = 'spread'): number {
     if (!units.length) return 0;
     const r = this.ruleset.rules;
     const cap = cohesion ? Math.min(...units.map((u) => this.defs.u.get(u.def)!.speed)) : 0;
@@ -950,8 +992,7 @@ export class Sim {
       if (this.peaceLeft() > 0 && this.side(to) !== u.team) return; // ceasefire: the front is closed
       // artillery never drives up to (or over) the front line
       if (d.minRange && distToFrontKm(this.world.front, to) * (u.team === 0 ? 1 : -1) < 0.5) return;
-      const ring = Math.ceil(Math.sqrt(i));
-      let dest: LngLat = [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
+      let dest: LngLat = this.formationSpot(formation, i, units.length, centre, to);
       let leg: Waypoint[] | null;
       {
         // never park a unit in the river because of its place in the formation
@@ -978,6 +1019,31 @@ export class Sim {
       moved++;
     });
     return moved;
+  }
+
+  /**
+   * Where the i-th of n units stands when a group arrives: spread (a loose cluster), a line across the direction of
+   * travel, a column along it, or a wedge pointing forward. Spacing ~350 m.
+   */
+  private formationSpot(f: 'spread' | 'line' | 'column' | 'wedge', i: number, n: number, from: LngLat, to: LngLat): LngLat {
+    if (f === 'spread' || n < 2) {
+      const ring = Math.ceil(Math.sqrt(i));
+      return [to[0] + 0.012 * ring * Math.cos(i * 2.4), to[1] + 0.009 * ring * Math.sin(i * 2.4)];
+    }
+    const dx = (to[0] - from[0]) * kmPerDegLng(to[1]), dy = (to[1] - from[1]) * 111.32;
+    const len = Math.hypot(dx, dy) || 1;
+    const fx = dx / len, fy = dy / len; // forward
+    const rx = fy, ry = -fx; // right
+    const s = 0.35;
+    let side = 0, back = 0;
+    if (f === 'line') side = (i - (n - 1) / 2) * s;
+    else if (f === 'column') back = i * s;
+    else {
+      const k = Math.ceil(i / 2);
+      side = (i % 2 ? 1 : -1) * k * s;
+      back = k * s;
+    }
+    return offsetKm(to, rx * side - fx * back, ry * side - fy * back);
   }
 
   private rankUp(u: Unit) {
@@ -1452,6 +1518,17 @@ export class Sim {
     return seen;
   }
 
+  /**
+   * Aiming: a unit with `aimTime` needs that long on a new target before it can fire; switching targets starts over.
+   * Returns true while it is still aiming.
+   */
+  private aiming(u: Unit, d: UnitDef, key: string, dt: number): boolean {
+    if (!d.aimTime) return false;
+    if (u.aimKey !== key) (u.aimKey = key), (u.aim = d.aimTime);
+    u.aim = Math.max(0, (u.aim ?? 0) - dt);
+    return u.aim > 0;
+  }
+
   /** Damage a ground unit actually takes from a hit, after terrain, fortifications, nearby cities and column order. */
   private hitUnit(attacker: Unit, target: Unit, raw: number): number {
     const r = this.ruleset.rules;
@@ -1566,59 +1643,93 @@ export class Sim {
     return kinds.filter((k) => !accepts.length || accepts.includes(k));
   }
 
-  /** Delivery rounds: drive to the source, load (5 s), drive to the destination, unload (4 s), repeat. */
+  /** Where a route stop is (a building or a waypoint); null if the building is gone. */
+  private stopPos(st: HaulStop): LngLat | null {
+    if (st.pos) return st.pos;
+    return this.world.buildings.find((x) => x.id === st.building)?.pos ?? null;
+  }
+
+  /** Head for the current stop of the route. */
+  private haulGo(u: Unit) {
+    const h = u.haul!;
+    const at = this.stopPos(h.stops[h.idx]);
+    if (at) this.orderMove([u], at, false, false, false);
+  }
+
+  /**
+   * Delivery rounds: drive from stop to stop in a loop. At a loading stop it takes what the next unloading stop wants
+   * (5 s); at the last loading stop before an unload it waits until it has at least `minLoad` (or a full load). At an
+   * unloading stop it hands over what the building takes (4 s). Waypoints are just driven through.
+   */
   private haulStep(u: Unit, d: UnitDef, dt: number) {
     const h = u.haul!;
     const w = this.world;
-    const from = w.buildings.find((x) => x.id === h.fromBuilding && x.team === u.team);
-    const to = w.buildings.find((x) => x.id === h.toBuilding && x.team === u.team);
-    if (!from || !to || !u.cargo) return void (u.haul = undefined);
-    const go = (b: Building) => this.orderMove([u], b.pos, false, false, false);
-    switch (h.state ?? 'to_from') {
-      case 'to_from':
-        if (distKm(u.pos, from.pos) <= 3.5) (h.state = 'loading'), (h.timer = 5), (u.path = []);
-        else if (!u.path.length && (u.id + this.world.tick) % 20 === 0) go(from); // lost the way: plan again
-        break;
-      case 'loading': {
-        if ((h.timer = (h.timer ?? 5) - dt) > 0) break;
-        from.storage ??= {};
-        let room = u.cargo.cap - Object.values(u.cargo.res).reduce((a, v) => a + v, 0);
-        for (const k of this.haulKinds(from, to, d, h.resType)) {
-          if (room <= 0) break;
-          const take = Math.min(room, from.storage[k] ?? 0);
-          if (take <= 0) continue;
-          from.storage[k] -= take;
-          u.cargo.res[k] = (u.cargo.res[k] ?? 0) + take;
-          room -= take;
-        }
-        // nothing to take yet: wait at the source rather than drive an empty lap
-        if (!Object.values(u.cargo.res).some((v) => v >= 1)) {
-          h.timer = 5;
-          h.waiting = true;
-          break;
-        }
-        (h.state = 'to_to'), (h.timer = undefined), (h.waiting = undefined);
-        go(to);
+    if (!u.cargo || !h.stops?.length) return void (u.haul = undefined);
+    const st = h.stops[h.idx];
+    const b = st.building !== undefined ? w.buildings.find((x) => x.id === st.building && x.team === u.team) : undefined;
+    if (st.action !== 'via' && !b) return void (u.haul = undefined); // a stop's building is gone: the route ends
+    const next = () => {
+      (h.idx = (h.idx + 1) % h.stops.length), (h.state = 'moving'), (h.timer = undefined), (h.waiting = undefined);
+      this.haulGo(u);
+    };
+    const load = () => Object.values(u.cargo!.res).reduce((a, v) => a + v, 0);
+    switch (h.state ?? 'moving') {
+      case 'moving': {
+        const at = this.stopPos(st)!;
+        if (distKm(u.pos, at) <= (st.action === 'via' ? 0.6 : 3.5)) {
+          u.path = [];
+          if (st.action === 'via') return next();
+          (h.state = st.action === 'load' ? 'loading' : 'unloading'), (h.timer = st.action === 'load' ? 5 : 4);
+        } else if (!u.path.length && (u.id + w.tick) % 20 === 0) this.haulGo(u); // lost the way: plan again
         break;
       }
-      case 'to_to':
-        if (distKm(u.pos, to.pos) <= 3.5) (h.state = 'unloading'), (h.timer = 4), (u.path = []);
-        else if (!u.path.length && (u.id + this.world.tick) % 20 === 0) go(to);
-        break;
-      case 'unloading':
-        if ((h.timer = (h.timer ?? 4) - dt) > 0) break;
-        to.storage ??= {};
-        const accepts = this.storageFor(this.defs.b.get(to.def)!);
-        const cap = this.storageCap(to);
-        for (const [k, v] of Object.entries(u.cargo.res)) {
-          if (accepts.length && !accepts.includes(k)) continue;
-          const put = Math.min(v, Math.max(0, cap - (to.storage[k] ?? 0)));
-          to.storage[k] = (to.storage[k] ?? 0) + put;
-          u.cargo.res[k] = v - put;
+      case 'loading': {
+        if ((h.timer = (h.timer ?? 5) - dt) > 0) break;
+        b!.storage ??= {};
+        // what to take: what the next unloading stop wants
+        let dest: Building | undefined;
+        for (let i = 1; i <= h.stops.length && !dest; i++) {
+          const s2 = h.stops[(h.idx + i) % h.stops.length];
+          if (s2.action === 'unload') dest = w.buildings.find((x) => x.id === s2.building);
         }
-        (h.state = 'to_from'), (h.timer = undefined);
-        go(from);
+        if (!dest) return void (u.haul = undefined);
+        let room = u.cargo.cap - load();
+        for (const kind of this.haulKinds(b!, dest, d, h.resType)) {
+          if (room <= 0) break;
+          const take = Math.min(room, b!.storage[kind] ?? 0);
+          if (take <= 0) continue;
+          b!.storage[kind] -= take;
+          u.cargo.res[kind] = (u.cargo.res[kind] ?? 0) + take;
+          room -= take;
+        }
+        // the last loading stop before unloading: wait for the minimum load (or a full truck)
+        let lastLoad = true;
+        for (let i = 1; i < h.stops.length; i++) {
+          const s2 = h.stops[(h.idx + i) % h.stops.length];
+          if (s2.action === 'unload') break;
+          if (s2.action === 'load') lastLoad = false;
+        }
+        if (lastLoad && load() < Math.min(h.minLoad ?? 1, u.cargo.cap) && room > 0) {
+          (h.timer = 5), (h.waiting = true);
+          break;
+        }
+        next();
         break;
+      }
+      case 'unloading': {
+        if ((h.timer = (h.timer ?? 4) - dt) > 0) break;
+        b!.storage ??= {};
+        const accepts = this.storageFor(this.defs.b.get(b!.def)!);
+        const cap = this.storageCap(b!);
+        for (const [kind, v] of Object.entries(u.cargo.res)) {
+          if (accepts.length && !accepts.includes(kind)) continue;
+          const put = Math.min(v, Math.max(0, cap - (b!.storage[kind] ?? 0)));
+          b!.storage[kind] = (b!.storage[kind] ?? 0) + put;
+          u.cargo.res[kind] = v - put;
+        }
+        next();
+        break;
+      }
     }
   }
 
@@ -1666,7 +1777,9 @@ export class Sim {
         const dist = distKm(u.pos, u.bombardTarget);
         if (dist >= minR && dist <= range) {
           barrage = true;
-          if (u.cooldown === 0) {
+          if (this.aiming(u, d, `b:${u.bombardTarget[0].toFixed(3)},${u.bombardTarget[1].toFixed(3)}`, dt)) {
+            // laying the guns on a new area
+          } else if (u.cooldown === 0) {
             u.cooldown = 2;
             const ang = Math.random() * Math.PI * 2;
             const spread = Math.random() * 0.4;
@@ -1727,8 +1840,11 @@ export class Sim {
       }
       // a column that runs into the enemy halts and deploys; it drives on once the way is clear
       const engaged = !!(tu || tb) || barrage;
+      if (!engaged) u.aimKey = undefined; // a gun that loses its target lays again on the next one
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
-      if ((tu || tb) && u.cooldown === 0) {
+      // guns lay on a new target before the first round
+      const aimingNow = !!(tu || tb) && !!d.aimTime && this.aiming(u, d, tu ? `u:${(tu as Unit).id}` : `b:${(tb as Building).id}`, dt);
+      if ((tu || tb) && !aimingNow && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
         if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
         const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1);
@@ -1752,8 +1868,12 @@ export class Sim {
       if (d.kind === 'air') {
         this.advanceAir(u, d, dt);
       } else if (u.path.length) {
-        if (!(engaged && u.path[0].road)) this.advance(u, d, dt);
-      } else if (!tu && !tb && canFire && !u.haul && !barrage && !d.minRange) {
+        // a column on the road halts to fight; an attack-move stops for anything it meets; a plain move pushes through
+        if (!(engaged && (u.path[0].road || u.attackMove))) this.advance(u, d, dt);
+      } else if (!tu && !tb && canFire && !u.haul && !barrage && !d.minRange && u.stance !== 'hold' && u.stance !== undefined) {
+        // stance: aggressive units go after what they see; defenders only within 3 km of their post, then walk back
+        const post = u.post ?? u.pos;
+        const leash = u.stance === 'defend' ? 3 : Infinity;
         let chase: LngLat | null = null;
         let near = d.vision * 0.7;
         const airDamage = d.airDamage ?? r.airDamageDefault;
@@ -1761,11 +1881,14 @@ export class Sim {
           if (e.team === u.team || e.embarkedIn) return;
           // only close with what it can actually hit
           if (this.defs.u.get(e.def)!.kind === 'air' ? airDamage <= 0 : d.targets === 'air') return;
+          if (distKm(e.pos, post) > leash) return;
           const dist = distKm(u.pos, e.pos);
           if (dist < near) (near = dist), (chase = e.pos);
         });
-        if (chase && (u.fuel ?? 1) > 0 && this.isPlayableGround(chase)) this.stepOffRoad(u, d, chase, d.speed * dt);
+        if (chase && this.isPlayableGround(chase)) this.stepOffRoad(u, d, chase, d.speed * dt * ((u.fuel ?? 1) > 0 ? 1 : 0.2));
+        else if (!chase && u.stance === 'defend' && distKm(u.pos, post) > 0.3) this.stepOffRoad(u, d, post, d.speed * dt);
       }
+      if (!u.path.length && !tu && !tb && u.retreatAt && !u.retreating && d.kind !== 'air' && w.tick % r.tickRate === u.id % r.tickRate && u.hp < this.maxHp(u) * u.retreatAt) this.fallBack(u);
     }
 
     // static weapons (air defence and the like)
@@ -1812,6 +1935,20 @@ export class Sim {
       w.buildings = w.buildings.filter((b) => b.hp > 0);
       deadB.forEach((b) => this.hooks.emit('buildingDestroyed', { id: b.id, def: b.def, owner: b.owner }));
     }
+  }
+
+  /** Badly hurt: fall back to the nearest field hospital, else the nearest base, and hold there. */
+  private fallBack(u: Unit) {
+    // hospitals first (they heal), then bases; the nearest of the best kind
+    const rank = (b: Building) => (this.defs.b.get(b.def)!.heals ? 0 : 1);
+    let best: Building | null = null;
+    for (const b of this.world.buildings) {
+      if (b.team !== u.team || b.progress < 1 || !(this.defs.b.get(b.def)!.heals || b.def === 'hq')) continue;
+      if (!best || rank(b) < rank(best) || (rank(b) === rank(best) && distKm(b.pos, u.pos) < distKm(best.pos, u.pos))) best = b;
+    }
+    if (!best) return;
+    u.retreating = true;
+    this.orderMove([u], best.pos, false, false, false);
   }
 
   /** A closed circle of waypoints around the loiter centre, starting from the current heading. */
@@ -1918,6 +2055,7 @@ export class Sim {
       let rate = 0;
       for (const x of healers) if (x.team === u.team && x.h.targets === kind && x.h.perSecond > rate && distKm(x.pos, u.pos) <= x.h.radiusKm) rate = x.h.perSecond;
       if (rate) u.hp = Math.min(max, u.hp + max * rate);
+      if (u.retreating && u.hp >= max * 0.9) u.retreating = false; // patched up: ready for orders again
       u.healing = rate > 0;
     }
   }
@@ -1974,8 +2112,9 @@ export class Sim {
   }
 
   private advance(u: Unit, d: UnitDef, dt: number) {
-    if (u.fuel !== undefined && u.fuel <= 0) return; // out of fuel: stuck until a tanker comes
-    const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * (u.sprint ? 2 : 1);
+    // out of fuel: it can still crawl at a fifth of its speed (pushed, towed, coasting) until a tanker comes
+    const dry = u.fuel !== undefined && u.fuel <= 0;
+    const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * (u.sprint && !dry ? 2 : 1) * (dry ? 0.2 : 1);
     const roadMult = this.ruleset.rules.roadSpeedMult;
     const start: LngLat = [u.pos[0], u.pos[1]];
     let budget = dt;
@@ -2020,7 +2159,7 @@ export class Sim {
         if (u.fuel <= 0) u.sprint = false;
       }
     }
-    if (!u.path.length) (u.target = null), (u.cap = 0), (u.transport = false);
+    if (!u.path.length) (u.target = null), (u.cap = 0), (u.transport = false), (u.attackMove = false), (u.post = [u.pos[0], u.pos[1]]);
     else u.target = u.path[u.path.length - 1].p;
   }
 

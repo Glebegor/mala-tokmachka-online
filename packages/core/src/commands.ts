@@ -1,12 +1,20 @@
 import type { LngLat } from './geo';
+import type { Formation, Stance } from './state';
 
 export type Command =
   | { type: 'build'; def: string; pos: LngLat }
   | { type: 'train'; building: number; unit: string }
   /** Cancel one of your own training orders (full refund). */
   | { type: 'cancelTrain'; item: number }
-  /** `queue` appends to the current orders; `mode: 'direct'` skips roads and stays combat-ready when the way is open. */
-  | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean; queue?: boolean; mode?: 'fast' | 'direct' }
+  /**
+   * `queue` appends to the current orders; `mode: 'direct'` skips roads and stays combat-ready when the way is open;
+   * `attack` stops to fight whatever it meets on the way. `formation` arranges a group at the destination.
+   */
+  | { type: 'move'; units: number[]; to: LngLat; cohesion?: boolean; queue?: boolean; mode?: 'fast' | 'direct'; attack?: boolean; formation?: Formation }
+  /** How units behave on their own: hold position, defend their post, or go after what they see. */
+  | { type: 'stance'; units: number[]; stance: Stance }
+  /** Fall back to a hospital or base by themselves below this share of health (0 = never). */
+  | { type: 'retreat'; units: number[]; at: number }
   | { type: 'stop'; units: number[] }
   /** Send ground units into a training centre. */
   | { type: 'enter'; units: number[]; building: number }
@@ -19,8 +27,12 @@ export type Command =
   | { type: 'upgrade'; building: number }
   | { type: 'fireMode'; units: number[]; mode: 'auto' | 'return' | 'hold' }
   | { type: 'sprint'; units: number[]; active: boolean }
-  /** Standing delivery order for a truck (resType: what to carry, 'any' for anything but fuel). */
-  | { type: 'setRoute'; unit: number; fromBuilding: number; toBuilding: number; resType?: string }
+  /**
+   * Standing delivery order for a truck (resType: what to carry, 'any' for anything but fuel). Either two buildings
+   * (load at the first, unload at the second) or 2–6 stops with actions and waypoints; `minLoad`: leave the last loading
+   * stop only with at least this much (or a full load).
+   */
+  | { type: 'setRoute'; unit: number; fromBuilding?: number; toBuilding?: number; stops?: { action: 'load' | 'unload' | 'via'; building?: number; pos?: [number, number] }[]; resType?: string; minLoad?: number }
   /** Infantry ride in a vehicle with seats; small drones ride on a vehicle with a launcher (`droneCap`). */
   | { type: 'board'; unit: number; transport: number }
   /** Launch the drones a vehicle carries, optionally straight at a target. */

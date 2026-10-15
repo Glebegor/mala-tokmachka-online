@@ -43,7 +43,10 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   assert.ok(sim.apply('a', { type: 'build', def: 'warehouse', pos: offsetKm(hq.pos, 12, 2) }).ok, 'a warehouse too');
   assert.equal(sim.apply('a', { type: 'build', def: 'power_plant', pos: offsetKm(hq.pos, 12.5, 0) }).ok, false, 'but not on top of another site');
   assert.equal(sim.apply('a', { type: 'build', def: 'metalworks', pos: offsetKm(hq.pos, 25, 0) }).ok, false, 'metal works 15 km from the mine: refused');
-  assert.equal(sim.apply('a', { type: 'build', def: 'machine_factory', pos: offsetKm(hq.pos, -20, 0) }).ok, false, 'machine factory 20 km from the base: refused');
+  assert.equal(sim.apply('a', { type: 'build', def: 'machine_factory', pos: offsetKm(hq.pos, -12, 0) }).ok, false, 'machine factory 12 km from the base: refused (17.5 km)');
+  assert.ok(sim.apply('a', { type: 'build', def: 'mine', pos: offsetKm(hq.pos, 0, 30) }).ok, 'a second mine far away');
+  const second = sim.apply('a', { type: 'build', def: 'mine', pos: offsetKm(hq.pos, 0, 38) });
+  assert.ok(!second.ok && /11.7/.test(second.reason), 'but not within 11.7 km of another mine');
   assert.ok(sim.apply('a', { type: 'build', def: 'trench', pos: offsetKm(hq.pos, 3, 0) }).ok, 'field works fit near the base');
   const city = sim.map.capturePoints.find((cp, i) => sim.world.points[i].owner === 0 && sim.cities.has(cp.id))!;
   assert.equal(sim.apply('a', { type: 'build', def: 'housing', pos: offsetKm(city.pos, 60, 60) }).ok, false, 'housing outside a city is refused');
@@ -91,9 +94,13 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   sim.apply('a', { type: 'move', units: [tank.id], to: offsetKm(away, -20, 0) });
   run(sim, 120);
   assert.equal(tank.fuel, 0, 'tank burns its fuel');
-  const stuck = [...tank.pos];
+  const stuck = [...tank.pos] as [number, number];
+  const free = sim.spawnUnit('tank', sim.player('a')!, stuck);
+  free.path = tank.path.map((w) => ({ ...w, p: [w.p[0], w.p[1]] as [number, number] })); // the same route
   run(sim, 10);
-  assert.deepEqual(tank.pos, stuck, 'no fuel, no movement');
+  const crawl = distKm(stuck, tank.pos), normal = distKm(stuck, free.pos);
+  assert.ok(crawl > 0 && Math.abs(crawl / normal - 0.2) < 0.05, `no fuel: crawls at a fifth of the speed (${crawl.toFixed(2)} vs ${normal.toFixed(2)} km)`);
+  free.hp = 0;
   const station = place(sim, 'a', 'gas_station', tank.pos, 0);
   assert.equal(station.storage!.fuel, 0, 'a new filling station is empty: fuel comes by tanker');
   station.storage!.fuel = 500;

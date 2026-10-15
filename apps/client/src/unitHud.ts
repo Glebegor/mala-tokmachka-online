@@ -1,9 +1,10 @@
-import { distKm, isReconDrone, isStrikeDrone, type BuildingDef, type Command, type LngLat, type SnapMsg, type UnitDef, type UnitView } from '@sw/core';
+import { distKm, isReconDrone, isStrikeDrone, type BuildingDef, type Command, type Formation, type LngLat, type SnapMsg, type Stance, type UnitDef, type UnitView } from '@sw/core';
 import { clear, h } from './dom';
 
 /** Picking state shared with the map: route = two clicks on buildings, barrage and launch = one click on the map. */
 export interface Pickers {
-  route: { unitId: number; fromBuilding?: number; resType?: string } | null;
+  /** Delivery route being put together: stops in order (buildings load or unload, map clicks are waypoints). */
+  route: { unitId: number; stops: RouteStop[]; resType?: string; minLoad?: number } | null;
   /** Click a vehicle to drive over and give it fuel. */
   fuel: { unitId: number } | null;
   bombard: { unitIds: number[] } | null;
@@ -11,7 +12,20 @@ export interface Pickers {
   launch: { transport: number } | null;
 }
 
+export interface RouteStop {
+  action: 'load' | 'unload' | 'via';
+  building?: number;
+  pos?: LngLat;
+}
+
+/** How the next move orders are given (kept between selections). */
+export interface OrderStyle {
+  attack: boolean;
+  formation: Formation;
+}
+
 export interface HudContext {
+  orders: OrderStyle;
   snap: SnapMsg;
   me: string;
   myTeam: 0 | 1;
@@ -71,12 +85,14 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     lines.push(`Fuel for ~${formatEta(avg / Math.max(burn, 1e-4))} of driving`);
   }
   if (first.haul) {
-    const res = first.haul.resType ? ` [${RES_LABEL[first.haul.resType] ?? first.haul.resType}]` : '';
-    if (first.haul.state === 'loading') lines.push(first.haul.waiting ? `Waiting for goods to load${res}` : `Loading${res} (${Math.ceil(first.haul.timer ?? 5)}s)`);
-    else if (first.haul.state === 'unloading') lines.push(`Unloading${res} (${Math.ceil(first.haul.timer ?? 4)}s)`);
+    const hl = first.haul;
+    const res = hl.resType ? ` [${RES_LABEL[hl.resType] ?? hl.resType}]` : '';
+    if (hl.state === 'loading') lines.push(hl.waiting ? `Waiting for ${hl.minLoad && hl.minLoad > 1 ? `at least ${hl.minLoad}` : 'goods'} to load${res}` : `Loading${res} (${Math.ceil(hl.timer ?? 5)}s)`);
+    else if (hl.state === 'unloading') lines.push(`Unloading${res} (${Math.ceil(hl.timer ?? 4)}s)`);
     else {
       const eta = etaSeconds(first, d0, c.roadMult, c.pos(first));
-      lines.push(`${first.haul.state === 'to_to' ? 'To unloading' : 'To loading'}${res}${eta ? `: ~${formatEta(eta)}` : ''}`);
+      const st = hl.stops[hl.idx];
+      lines.push(`${st?.action === 'load' ? 'To loading' : st?.action === 'unload' ? 'To unloading' : 'Via waypoint'} (stop ${hl.idx + 1}/${hl.stops.length})${res}${eta ? `: ~${formatEta(eta)}` : ''}`);
     }
   } else if (first.fuelTo) {
     const t = c.snap.units.find((u) => u.id === first.fuelTo);
@@ -105,6 +121,27 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     c.rerender();
   } }, 'Stop'));
 
+  // 2b. behaviour: stance, retreat, how moves are carried out
+  const ground = list.filter((u) => c.defU.get(u.def)!.kind !== 'air');
+  if (ground.length) {
+    const stance = ground[0].stance ?? 'hold';
+    const st = (s: Stance, label: string, title: string) => h('button', { class: stance === s ? 'active' : '', title, onClick: () => c.send({ type: 'stance', units: ids, stance: s }) }, label);
+    el.append(h('div', { class: 'btn-group', title: 'Stance: what they do on their own' },
+      st('hold', 'Hold', 'Hold position: never move on their own, fire at what comes into range'),
+      st('defend', 'Defend', 'Defend: engage enemies within 3 km of their post, then return to it'),
+      st('aggressive', 'Aggressive', 'Aggressive: go after any enemy they see')));
+    const ret = ground[0].retreatAt ?? 0;
+    const rt = (v: number, label: string) => h('button', { class: ret === v ? 'active' : '', onClick: () => c.send({ type: 'retreat', units: ids, at: v }) }, label);
+    el.append(h('div', { class: 'btn-group', title: 'Fall back to a field hospital or base by themselves when health drops below this' }, h('span', { class: 'bg-label' }, 'Retreat'), rt(0, 'Off'), rt(0.25, '25%'), rt(0.5, '50%')));
+    const om = (attack: boolean, label: string, title: string) => h('button', { class: c.orders.attack === attack ? 'active' : '', title, onClick: () => ((c.orders.attack = attack), c.rerender()) }, label);
+    el.append(h('div', { class: 'btn-group', title: 'How right click orders are carried out (A toggles)' },
+      om(false, 'Move', 'Move: push through, firing on the way'), om(true, 'Attack', 'Attack-move: stop and fight whatever they meet')));
+    if (ground.length > 1) {
+      const fm = (f: Formation, label: string) => h('button', { class: c.orders.formation === f ? 'active' : '', onClick: () => ((c.orders.formation = f), c.rerender()) }, label);
+      el.append(h('div', { class: 'btn-group', title: 'Formation at the destination (F cycles)' }, fm('spread', 'Spread'), fm('line', 'Line'), fm('column', 'Column'), fm('wedge', 'Wedge')));
+    }
+  }
+
   // 3. fire discipline
   const mode = first.fireMode ?? 'auto';
   const fm = (m: 'auto' | 'return' | 'hold', label: string, title: string) =>
@@ -115,7 +152,6 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     fm('hold', 'Hold fire', 'Never shoot (stay hidden)')));
 
   // 4. sprint and stamina (ground only)
-  const ground = list.filter((u) => c.defU.get(u.def)!.kind !== 'air');
   if (ground.length) {
     const on = ground.some((u) => u.sprint);
     el.append(h('button', { class: 'hud-btn' + (on ? ' active' : ''), title: 'Double speed: infantry tire (60 s of running, 3 min to recover), vehicles burn 50% more fuel', onClick: () => c.send({ type: 'sprint', units: ids, active: !on }) }, `Sprint ${on ? 'ON' : 'OFF'}`));
@@ -159,26 +195,53 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     const cargo = first.cargo?.res ?? {};
     const load = Object.values(cargo).reduce((a, v) => a + v, 0);
     let control: HTMLElement;
+    const bname = (id?: number) => c.defB.get(c.snap.buildings.find((b) => b.id === id)?.def ?? '')?.name ?? 'site';
+    const ACT: Record<string, string> = { load: 'Load', unload: 'Unload', via: 'Via' };
     if (c.pick.route?.unitId === first.id) {
-      const from = c.pick.route.fromBuilding ? c.snap.buildings.find((b) => b.id === c.pick.route!.fromBuilding) : null;
-      // the goods the loading site actually keeps (fuel is for tankers); "any" lets the truck take what the destination wants
+      const r = c.pick.route;
+      const firstLoad = r.stops.find((x) => x.action === 'load');
+      const from = firstLoad ? c.snap.buildings.find((b) => b.id === firstLoad.building) : null;
+      // the goods the loading site actually keeps (fuel is for tankers); "any" lets the truck take what each destination wants
       const stock = from?.storage ?? {};
       const opts = d0.fuelOnly ? [] : [...Object.keys(stock).filter((k) => k !== 'fuel'), 'any'];
-      if (from && opts.length && !c.pick.route.resType) c.pick.route.resType = 'any';
+      r.resType ??= 'any';
+      r.minLoad ??= d0.cargoCap;
+      const ready = r.stops.some((x) => x.action === 'load') && r.stops.some((x) => x.action === 'unload');
+      const stopRow = (st: RouteStop, i: number) => h('div', { class: 'route-stop' },
+        h('span', { class: 'n' }, String(i + 1)),
+        st.action === 'via' ? h('span', {}, 'Waypoint') : h('button', { class: 'hud-btn sm', title: 'Switch between loading and unloading here', onClick: (e: MouseEvent) => (e.stopPropagation(), (st.action = st.action === 'load' ? 'unload' : 'load'), c.rerender()) }, ACT[st.action]),
+        st.action !== 'via' ? h('span', {}, bname(st.building)) : null,
+        h('button', { class: 'hud-btn sm warn', title: 'Remove this stop', onClick: (e: MouseEvent) => (e.stopPropagation(), r.stops.splice(i, 1), c.rerender()) }, '×'));
+      const presets = [0, 150, 200, 500, 1000].filter((v) => v < (d0.cargoCap ?? 0));
+      const minInput = h('input', { type: 'number', min: 1, max: d0.cargoCap, value: r.minLoad, class: 'min-load', title: 'Leave the last loading stop only with at least this much' });
+      minInput.addEventListener('change', () => ((r.minLoad = Math.max(1, Math.min(d0.cargoCap!, Number((minInput as HTMLInputElement).value) || 1))), c.rerender()));
       control = h('div', { class: 'route-box' },
-        h('b', {}, from ? 'Step 2 of 2: click where to unload' : 'Step 1 of 2: click where to load'),
-        from && opts.length ? h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Carry:'), ...opts.map((o) =>
-          h('button', { class: 'hud-btn sm' + (c.pick.route!.resType === o ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (c.pick.route!.resType = o), c.rerender()) },
+        h('b', {}, r.stops.length ? `Route: ${r.stops.length} stop${r.stops.length === 1 ? '' : 's'} (click buildings to add, the map for a waypoint; up to 6)` : 'Click the building to load at'),
+        ...r.stops.map(stopRow),
+        opts.length ? h('div', { class: 'row' }, h('span', { class: 'muted' }, 'Carry:'), ...opts.map((o) =>
+          h('button', { class: 'hud-btn sm' + (r.resType === o ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (r.resType = o), c.rerender()) },
             o === 'any' ? RES_LABEL.any : `${RES_LABEL[o] ?? o} ${Math.floor(stock[o] ?? 0)}`))) : null,
-        h('button', { class: 'hud-btn sm warn', onClick: () => ((c.pick.route = null), c.rerender()) }, 'Cancel (Esc)'));
+        h('div', { class: 'row' }, h('span', { class: 'muted', title: 'Leave the last loading stop only with at least this much on board' }, 'Leave with:'),
+          ...presets.map((v) => h('button', { class: 'hud-btn sm' + ((v === 0 ? r.minLoad === d0.cargoCap : r.minLoad === v) ? ' active' : ''), onClick: (e: MouseEvent) => (e.stopPropagation(), (r.minLoad = v === 0 ? d0.cargoCap : v), c.rerender()) }, v === 0 ? 'Full' : String(v))),
+          minInput),
+        h('div', { class: 'row' },
+          h('button', { class: 'hud-btn sm' + (ready ? ' active' : ''), disabled: !ready || undefined, onClick: (e: MouseEvent) => {
+            e.stopPropagation();
+            c.send({ type: 'setRoute', unit: first.id, stops: r.stops.map((x) => ({ action: x.action, building: x.building, pos: x.pos as [number, number] | undefined })), resType: r.resType, minLoad: r.minLoad });
+            c.toast('Delivery route set');
+            c.pick.route = null;
+            c.rerender();
+          } }, 'Start route'),
+          h('button', { class: 'hud-btn sm warn', onClick: () => ((c.pick.route = null), c.rerender()) }, 'Cancel (Esc)')));
     } else if (first.haul) {
-      const name = (id: number) => c.defB.get(c.snap.buildings.find((b) => b.id === id)?.def ?? '')?.name ?? 'site';
+      const hl = first.haul;
       control = h('div', { class: 'route-box' },
-        h('b', {}, `Route: ${name(first.haul.fromBuilding)} → ${name(first.haul.toBuilding)}${first.haul.resType ? ` (${RES_LABEL[first.haul.resType] ?? first.haul.resType})` : ''}`),
+        h('b', {}, `Route${hl.resType ? ` (${RES_LABEL[hl.resType] ?? hl.resType})` : ''}${hl.minLoad && hl.minLoad > 1 && hl.minLoad < (d0.cargoCap ?? 0) ? ` · leaves with ${hl.minLoad}+` : ''}`),
+        h('div', { class: 'route-line' }, ...hl.stops.map((st, i) => h('span', { class: i === hl.idx ? 'cur' : '' }, `${i ? '→ ' : ''}${ACT[st.action]}${st.action === 'via' ? '' : ` ${bname(st.building)}`}`))),
         h('button', { class: 'hud-btn sm warn', onClick: () => c.send({ type: 'stop', units: [first.id] }) }, 'Stop route'));
     } else {
-      control = h('button', { class: 'hud-btn', title: 'Set up a standing delivery between two of your buildings', onClick: () => {
-        c.pick.route = { unitId: first.id };
+      control = h('button', { class: 'hud-btn', title: 'Set up a standing delivery: load and unload stops and waypoints in a loop', onClick: () => {
+        c.pick.route = { unitId: first.id, stops: [] };
         c.toast('Delivery route: click the building to load at');
         c.rerender();
       } }, 'Set delivery route');
