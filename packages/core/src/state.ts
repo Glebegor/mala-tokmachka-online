@@ -107,6 +107,10 @@ export interface Unit {
   morale?: number;
   /** Shaken after its bunker fell: cannot fire and takes more damage until this time. */
   suppressedUntil?: number;
+  /** What an aggressive or defending unit was last closing with (server side). */
+  chase?: LngLat;
+  /** Had a target last time it looked (server side). */
+  engaged?: boolean;
   /** Seconds it has stood still (digging in: the longer, the better protected). */
   still?: number;
   /** Sim time it last took damage (healing waits until it has been out of the fight for a while). */

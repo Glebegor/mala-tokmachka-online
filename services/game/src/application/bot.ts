@@ -9,6 +9,7 @@ const BUILD_ORDER = [
 export class Bot {
   private step = 0;
   private lastThink = 0;
+  private lastArmyOrder = -100;
   private readonly interval: number;
   private readonly attackSize: number;
   constructor(readonly playerId: string, difficulty: BotDifficulty = 'normal') {
@@ -176,6 +177,9 @@ export class Bot {
 
     const idle = army.filter((u) => !u.target);
     if (!idle.length) return;
+    // route planning is the costly part: re-order the army at most every 8 s
+    if (w.time - this.lastArmyOrder < 8) return;
+    this.lastArmyOrder = w.time;
     if (army.length >= this.attackSize && enemyPoints.length) {
       const goal = enemyPoints.reduce((a, b) => (distKm(a.pos, anchor) < distKm(b.pos, anchor) ? a : b));
       sim.apply(p.id, { type: 'move', units: idle.map((u) => u.id), to: goal.pos, cohesion: true });

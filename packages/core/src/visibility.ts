@@ -24,7 +24,24 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       watchers.push({ pos: u.pos, r: d.vision * (d.kind === 'air' ? 1 : sim.terrainAt(u.pos).vision ?? 1) });
     }
   }
-  const seen = (p: LngLat, conceal = 1) => !fog || watchers.some((s) => distKm(s.pos, p) <= s.r * conceal);
+  // watchers bucketed by ~0.25° cells (each in every cell its sight touches): an object only checks the watchers of its cell
+  const CELL = 0.25;
+  const grid = new Map<number, { pos: LngLat; r: number }[]>();
+  const key = (x: number, y: number) => x * 100000 + y;
+  for (const s of watchers) {
+    const ry = Math.ceil(s.r / 111 / CELL), rx = Math.ceil(s.r / (111 * Math.cos((s.pos[1] * Math.PI) / 180)) / CELL);
+    const cx = Math.floor(s.pos[0] / CELL), cy = Math.floor(s.pos[1] / CELL);
+    for (let x = cx - rx; x <= cx + rx; x++) for (let y = cy - ry; y <= cy + ry; y++) {
+      const k = key(x, y);
+      const l = grid.get(k);
+      l ? l.push(s) : grid.set(k, [s]);
+    }
+  }
+  const seen = (p: LngLat, conceal = 1) => {
+    if (!fog) return true;
+    const l = grid.get(key(Math.floor(p[0] / CELL), Math.floor(p[1] / CELL)));
+    return !!l && l.some((s) => distKm(s.pos, p) <= s.r * conceal);
+  };
   const me = w.players.find((p) => p.id === playerId);
 
   return {
