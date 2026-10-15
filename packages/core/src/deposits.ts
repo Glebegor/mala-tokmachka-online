@@ -438,7 +438,9 @@ export function generateMatchDeposits(
       const names = type === 'iron' ? ironNames : oilNames;
       for (let i = 0; i < 8; i++) {
         let bestPt: LngLat | null = null;
-        for (let attempt = 0; attempt < 250; attempt++) {
+        let bestPoly: LngLat[] | null = null;
+        let bestRadius = 25;
+        for (let attempt = 0; attempt < 300; attempt++) {
           const lng = minLng + rand() * (maxLng - minLng);
           const lat = minLat + rand() * (maxLat - minLat);
           const pt: LngLat = [lng, lat];
@@ -455,19 +457,25 @@ export function generateMatchDeposits(
           const minDist = attempt < 150 ? 45 : 28;
           if (deposits.some((d) => distKm(d.center, pt) < minDist)) continue;
 
+          const radiusKm = 10 + rand() * 30;
+          const poly = createOrganicPolygon(pt, radiusKm, rand() * 10000);
+          // Strictly verify that no vertex of the deposit polygon is in foreign territory or water
+          if (poly.some((p) => foreignFn(p) || sideFn(p) !== team || (terrainGrid && terrainGrid.at(p) === 'water'))) continue;
+
           bestPt = pt;
+          bestPoly = poly;
+          bestRadius = radiusKm;
           break;
         }
 
         if (!bestPt) {
           bestPt = team === 0
-            ? [29.0 + (i % 4) * 2.2, 49.0 + Math.floor(i / 4) * 1.5]
+            ? [28.0 + (i % 4) * 2.2, 48.8 + Math.floor(i / 4) * 1.4]
             : [43.0 + (i % 4) * 2.5, 52.0 + Math.floor(i / 4) * 2.0];
+          bestRadius = 20;
+          bestPoly = createOrganicPolygon(bestPt, bestRadius, rand() * 10000);
         }
 
-        // Diameter 20 to 80 km (radius 10 to 40 km)
-        const radiusKm = 10 + rand() * 30;
-        const polySeed = rand() * 10000;
         const depId = `${type}_${team === 0 ? 'ua' : 'ru'}_${i + 1}`;
         const name = names[i % names.length] || `${type === 'iron' ? 'Месторождение железа' : 'Нефтяное месторождение'} #${i + 1}`;
 
@@ -477,8 +485,8 @@ export function generateMatchDeposits(
           team,
           name,
           center: bestPt,
-          radiusKm,
-          polygon: createOrganicPolygon(bestPt, radiusKm, polySeed),
+          radiusKm: bestRadius,
+          polygon: bestPoly || createOrganicPolygon(bestPt, bestRadius, rand() * 10000),
         });
       }
     }

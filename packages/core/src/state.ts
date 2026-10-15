@@ -43,6 +43,16 @@ export interface Building {
   inside: Unit[];
   /** Training course in progress. */
   course: { remaining: number; total: number } | null;
+  /** Sub-houses in a housing district (each has 50 HP). */
+  houses?: CityHouse[];
+}
+
+export interface CityHouse {
+  id: number;
+  pos: LngLat;
+  hp: number;
+  maxHp: number; // 50
+  poly: LngLat[];
 }
 
 export type BuildingView = Omit<Building, 'inside'> & {

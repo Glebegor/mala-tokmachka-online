@@ -10,3 +10,4 @@ export * from './roads';
 export * from './terrain';
 export * from './specialZones';
 export * from './deposits';
+export * from './housing';

@@ -489,3 +489,19 @@ kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); bo
   0%, 100% { box-shadow: 0 0 8px rgba(74, 222, 128, 0.5); }
   50% { box-shadow: 0 0 18px rgba(74, 222, 128, 0.95); }
 }
+
+.placement-zone-badge {
+  background: rgba(15, 23, 42, 0.92);
+  border: 1.5px solid #f59e0b;
+  color: #fbbf24;
+  font-size: 13px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: 6px;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.6), 0 0 10px rgba(245, 158, 11, 0.4);
+  pointer-events: none;
+  white-space: nowrap;
+  transform: translate(-50%, -50%);
+  letter-spacing: 0.3px;
+}
+

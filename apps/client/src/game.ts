@@ -180,8 +180,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (poly && !inPolygon([cx, cy], poly)) continue;
       }
 
-      const lenKm = 0.028 + rnd() * 0.024;
-      const widKm = 0.014 + rnd() * 0.008;
+      const lenKm = (0.028 + rnd() * 0.024) * 1.5;
+      const widKm = (0.014 + rnd() * 0.008) * 1.5;
       const hx = lenKm / 2;
       const hy = widKm / 2;
       const bType = Math.floor(rnd() * 4);
@@ -1347,12 +1347,63 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (roads?.isNear(p, 2)) terrainChip.append(h('span', { class: 'road' }, `road ×${init.ruleset.rules.roadSpeedMult}`));
   }
 
+  let zoneMarkers: maplibregl.Marker[] = [];
+
+  function clearZoneMarkers() {
+    for (const m of zoneMarkers) m.remove();
+    zoneMarkers = [];
+  }
+
   // ---------- placement ----------
   /** While placing: red exclusion rings around existing sites, and the special zones this building could use. */
   function showPlacementAids() {
     if (!mapReady || !init || !snap) return;
-    const zones = placing ? SPECIAL_ZONES.filter((z) => z.side === (init!.team === 0 ? 'ua' : 'ru') && z.buildingDef === placing!.id) : [];
-    (map.getSource('zones') as GeoJSONSource).setData({ type: 'FeatureCollection', features: zones.map((z) => ({ type: 'Feature', properties: { color: z.color, name: z.name }, geometry: { type: 'Polygon', coordinates: [z.polygon] } })) } as any);
+    clearZoneMarkers();
+    const zoneFeatures: any[] = [];
+    if (placing) {
+      if (placing.id === 'refinery') {
+        if (init.team === 0) {
+          const center: LngLat = [33.4397, 49.0703];
+          zoneFeatures.push({
+            type: 'Feature',
+            properties: { color: '#f59e0b', name: 'Зона НПЗ: Кременчуг (25 км)' },
+            geometry: { type: 'Polygon', coordinates: [circle(center, 25, 64)] },
+          });
+          const el = h('div', { class: 'placement-zone-badge' }, '⚡ Зона НПЗ: Кременчуг (25 км)');
+          const m = new maplibregl.Marker({ element: el }).setLngLat(center).addTo(map);
+          zoneMarkers.push(m);
+        } else {
+          const center: LngLat = [39.7203, 47.2357];
+          zoneFeatures.push({
+            type: 'Feature',
+            properties: { color: '#f59e0b', name: 'Зона НПЗ: Ростов-на-Дону (65 км)' },
+            geometry: { type: 'Polygon', coordinates: [circle(center, 65, 64)] },
+          });
+          const el = h('div', { class: 'placement-zone-badge' }, '⚡ Зона НПЗ: Ростов-на-Дону (65 км)');
+          const m = new maplibregl.Marker({ element: el }).setLngLat(center).addTo(map);
+          zoneMarkers.push(m);
+        }
+      } else {
+        const zones = SPECIAL_ZONES.filter((z) => z.side === (init!.team === 0 ? 'ua' : 'ru') && z.buildingDef === placing!.id);
+        for (const z of zones) {
+          zoneFeatures.push({
+            type: 'Feature',
+            properties: { color: z.color, name: z.name },
+            geometry: { type: 'Polygon', coordinates: [z.polygon] },
+          });
+          const lats = z.polygon.map((p) => p[1]);
+          const lngs = z.polygon.map((p) => p[0]);
+          const c: LngLat = [(Math.min(...lngs) + Math.max(...lngs)) / 2, (Math.min(...lats) + Math.max(...lats)) / 2];
+          const el = h('div', { class: 'placement-zone-badge' }, z.name);
+          const m = new maplibregl.Marker({ element: el }).setLngLat(c).addTo(map);
+          zoneMarkers.push(m);
+        }
+      }
+    }
+    (map.getSource('zones') as GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: zoneFeatures,
+    } as any);
     const r = init.ruleset.rules;
     const rings = placing && placing.id !== 'housing'
       ? snap.buildings.filter((b) => b.def !== 'housing' && spacingBetween(placing!, b.def, false) > r.fieldWorkSpacing).map((b) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(b.pos, spacingBetween(placing!, b.def, false), 64)] } }))
@@ -1362,6 +1413,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   function cancelPlacing() {
     if (!placing) return;
+    clearZoneMarkers();
     lineStart = null;
     map.dragPan.enable(); // panning back on after drawing lines
     placing = null;
@@ -1477,7 +1529,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!city) return 'Жилой квартал можно строить только внутри города';
       const cityIdx = init.map.capturePoints.indexOf(city);
       if (cityIdx >= 0 && snap.points[cityIdx]?.owner !== init.team) return 'Город должен контролироваться вашей командой';
-      const limit = init.ruleset.rules.cityHousingLimit ?? 5;
+      const limit = init.ruleset.rules.cityHousingLimit ?? 2;
       if (snap.buildings.filter((b) => b.def === 'housing' && cityAt(b.pos) === city).length >= limit) return `В городе ${city.name} уже построено максимум ${limit} жилых кварталов`;
       const clash = snap.buildings.find((b) => b.def === 'housing' && distKm(b.pos, p) < 0.08);
       if (clash) return 'Слишком близко к другому жилому кварталу';
@@ -1618,12 +1670,18 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         : b.id === 'warehouse'
           ? 'Размещение: Склад — выберите точку на своей территории (минимум 100 км от других складов, Esc — отмена)'
           : b.id === 'mine'
-            ? 'Размещение: Шахта — выберите точку на месторождении железа (Esc — отмена)'
-            : b.id === 'housing'
-              ? 'Размещение: Жилой квартал — выберите точку внутри города своей команды (максимум 5 на город, Esc — отмена)'
-              : b.line
-                ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
-                : `Размещение: ${b.name} — кликните на карте (Shift — серийное строительство, Esc — отмена)`;
+            ? 'Размещение: Шахта — выберите точку на месторождении железа (1 на игрока, Esc — отмена)'
+            : b.id === 'oil_rig'
+              ? 'Размещение: Нефтяная вышка — выберите точку на месторождении нефти (1 на игрока, Esc — отмена)'
+              : b.id === 'refinery'
+                ? (init?.team === 0
+                    ? 'Размещение: НПЗ — 1 должен быть в Кременчуге (подсвечен кругом), 2-й в любой точке Украины (макс 2 на команду, Esc — отмена)'
+                    : 'Размещение: НПЗ — 1 должен быть возле Ростова-на-Дону (подсвечен кругом), 2-й в любой точке РФ (макс 2 на команду, Esc — отмена)')
+                : b.id === 'housing'
+                  ? 'Размещение: Жилой квартал — выберите точку внутри города своей команды (максимум 2 на город, Esc — отмена)'
+                  : b.line
+                    ? `${b.name}: press and drag on the map the way it should run, release to build (Esc cancels)`
+                    : `Размещение: ${b.name} — кликните на карте (Shift — серийное строительство, Esc — отмена)`;
     buildPalette();
   }
 
@@ -1766,7 +1824,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         }
         if (b.def === 'housing') {
           const city = cityAt(b.pos);
-          if (city) side.append(h('div', { class: 'stat' }, `${city.name}: ${snap.buildings.filter((x) => x.def === 'housing' && cityAt(x.pos) === city).length}/${rules.cityHousingLimit} housing blocks`));
+          const limit = rules.cityHousingLimit ?? 2;
+          if (city) side.append(h('div', { class: 'stat' }, `Город: ${city.name} (${snap.buildings.filter((x) => x.def === 'housing' && cityAt(x.pos) === city).length}/${limit} районов)`));
+          if (b.houses && b.houses.length > 0) {
+            const alive = b.houses.filter((h) => h.hp > 0).length;
+            const pct = Math.round((alive / b.houses.length) * 100);
+            side.append(h('div', { class: 'stat' }, `Уцелевшие дома: ${alive}/${b.houses.length} (50 HP каждый)`));
+            side.append(h('div', { class: 'stat', style: { color: pct < 50 ? '#ef4444' : pct < 100 ? '#f59e0b' : '#10b981' } }, `Доход района: ${pct}% (5 монет / 5 сек при 100%)`));
+          }
         }
         const zone = specialZoneAt(b.pos);
         if (zone && zone.buildingDef === b.def) side.append(h('div', { class: 'stat', style: { color: zone.color } }, `★ ${zone.bonusTitle}`));
@@ -2223,13 +2288,25 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const housingFeatures: any[] = [];
     for (const b of snap.buildings) {
       if (b.def !== 'housing') continue;
-      const polys = generateCityHousePolygons(b.pos, b.id);
-      for (const poly of polys) {
-        housingFeatures.push({
-          type: 'Feature',
-          properties: { team: b.team },
-          geometry: { type: 'Polygon', coordinates: poly },
-        });
+      if (b.houses && b.houses.length > 0) {
+        for (const h of b.houses) {
+          if (h.hp > 0) {
+            housingFeatures.push({
+              type: 'Feature',
+              properties: { team: b.team, id: h.id, hp: h.hp, maxHp: h.maxHp },
+              geometry: { type: 'Polygon', coordinates: [h.poly] },
+            });
+          }
+        }
+      } else {
+        const polys = generateCityHousePolygons(b.pos, b.id);
+        for (const poly of polys) {
+          housingFeatures.push({
+            type: 'Feature',
+            properties: { team: b.team },
+            geometry: { type: 'Polygon', coordinates: poly },
+          });
+        }
       }
     }
     (map.getSource('housing-osm') as GeoJSONSource)?.setData({

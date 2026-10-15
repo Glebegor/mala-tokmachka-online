@@ -60,7 +60,8 @@ assert.equal(refDef.maxPerTeam, 2, '2 refineries per team');
 
 const houseDef = rs.buildings.find((b) => b.id === 'housing')!;
 assert.equal(houseDef.cost.money, 2000, 'Housing costs 2000');
-assert.equal(houseDef.produces?.money, 10, 'Housing produces 10 $/s');
+assert.equal(houseDef.hp, 500, 'Housing has 500 HP (10 houses * 50 HP)');
+assert.equal(houseDef.produces?.money, 1, 'Housing produces 1 $/s (5 coins per 5s)');
 console.log('✓ Buildings defined: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing verified');
 
 // 4. Procedural Terrain Full Map Coverage
@@ -301,34 +302,89 @@ assert.equal(houseNonCity.reason, 'housing can only be built inside a city');
 const friendlyCity = sim.map.capturePoints.find((cp, idx) => sim.world.points[idx]?.owner === 0)!;
 assert.ok(friendlyCity, 'Friendly city found');
 
-// Build 5 housing blocks in this city
-for (let i = 0; i < 5; i++) {
-  const pPos = offsetKm(friendlyCity.pos, (i - 2) * 0.15, 0.1);
-  const hRes = sim.apply('player1', { type: 'build', def: 'housing', pos: pPos });
-  assert.ok(hRes.ok, `Housing block ${i + 1} placement succeeded`);
+// Build 2 housing blocks in this city (max 2)
+const pPos1 = offsetKm(friendlyCity.pos, -0.2, 0.1);
+const hRes1 = sim.apply('player1', { type: 'build', def: 'housing', pos: pPos1 });
+assert.ok(hRes1.ok, 'Housing block 1 placement succeeded');
+const house1 = sim.world.buildings.find((b) => b.owner === 'player1' && b.def === 'housing')!;
+assert.ok(house1, 'Housing block 1 found in world');
+assert.equal(house1.houses?.length, 10, 'Housing district contains 10 individual houses');
+assert.equal(house1.hp, 500, 'Housing district initial HP is 500 (10 houses * 50 HP)');
+
+for (const h of house1.houses!) {
+  assert.equal(h.hp, 50, 'Each house starts with 50 HP');
+  assert.equal(h.maxHp, 50, 'Each house maxHp is 50');
 }
 
-// 6th housing block in the same city should be rejected (max 5)
-const pPos6 = offsetKm(friendlyCity.pos, 0.5, 0.5);
-const hRes6 = sim.apply('player1', { type: 'build', def: 'housing', pos: pPos6 });
-assert.equal(hRes6.ok, false, '6th housing block in city rejected');
-assert.equal(hRes6.reason, 'at most 5 housing blocks per city');
+// Check non-overlapping: each pair of houses has distance >= 0.05 km (50m)
+for (let i = 0; i < house1.houses!.length; i++) {
+  for (let j = i + 1; j < house1.houses!.length; j++) {
+    const d = distKm(house1.houses![i].pos, house1.houses![j].pos);
+    assert.ok(d >= 0.05, `Houses ${i} and ${j} do not overlap (dist=${(d * 1000).toFixed(0)}m >= 50m)`);
+  }
+}
+
+const pPos2 = offsetKm(friendlyCity.pos, 0.2, 0.1);
+const hRes2 = sim.apply('player1', { type: 'build', def: 'housing', pos: pPos2 });
+assert.ok(hRes2.ok, 'Housing block 2 placement succeeded');
+
+// 3rd housing block in the same city should be rejected (max 2)
+const pPos3 = offsetKm(friendlyCity.pos, 0.5, 0.5);
+const hRes3 = sim.apply('player1', { type: 'build', def: 'housing', pos: pPos3 });
+assert.equal(hRes3.ok, false, '3rd housing block in city rejected');
+assert.equal(hRes3.reason, 'at most 2 housing blocks per city');
 
 // Finish housing construction (30s)
 sim.step(30);
 
-// Check income splitting: each housing produces 10 $/s.
+// Check income splitting: each housing produces 1 $/s (5 coins per 5s).
+// 2 full housing blocks = 2 $/s total.
 // Team 0 has 2 players: 'player1' and 'botUA'.
-// Each player gets 10 / 2 = 5 $/s per housing.
+// Each player gets 2 / 2 = 1 $/s.
 const p1MoneyBefore = sim.player('player1')!.res.money;
 const botMoneyBefore = sim.player('botUA')!.res.money;
 sim.step(1);
 const p1MoneyGain = sim.player('player1')!.res.money - p1MoneyBefore;
 const botMoneyGain = sim.player('botUA')!.res.money - botMoneyBefore;
-assert.ok(p1MoneyGain > 0, 'player1 received housing income');
-assert.ok(botMoneyGain > 0, 'botUA received equal share of housing income');
-assert.ok(Math.abs(p1MoneyGain - botMoneyGain) < 0.1, 'Income is split equally among team members');
-console.log('✓ Housing: max 5 per city, 10 $/s split equally among team players');
+assert.ok(p1MoneyGain > 0.8 && p1MoneyGain < 1.2, `player1 received ~1 $/s (actual=${p1MoneyGain.toFixed(2)})`);
+assert.ok(botMoneyGain > 0.8 && botMoneyGain < 1.2, `botUA received ~1 $/s (actual=${botMoneyGain.toFixed(2)})`);
+assert.ok(Math.abs(p1MoneyGain - botMoneyGain) < 0.01, 'Income is split equally among team members');
+
+// Test house destruction & proportional income drop:
+// Destroy 5 of 10 houses in house1 -> profit drops by 50%
+for (let i = 0; i < 5; i++) {
+  house1.houses![i].hp = 0;
+}
+house1.hp = house1.houses!.reduce((acc, h) => acc + Math.max(0, h.hp), 0);
+assert.equal(house1.hp, 250, 'house1 HP is 250 after 5 houses destroyed');
+
+const p1DamagedBefore = sim.player('player1')!.res.money;
+sim.step(1);
+const p1DamagedGain = sim.player('player1')!.res.money - p1DamagedBefore;
+// house1 output halved (-50%), house2 full -> team output drops from ~2.3 to ~1.72 -> ~0.86 per player
+assert.ok(p1DamagedGain < p1MoneyGain && p1DamagedGain > 0.6 && p1DamagedGain < 0.95, `player1 income scaled down with destroyed houses (actual=${p1DamagedGain.toFixed(2)} < before=${p1MoneyGain.toFixed(2)})`);
+
+// Destroy remaining 5 houses of house1 -> all houses destroyed -> house disappears completely
+for (let i = 5; i < 10; i++) {
+  house1.houses![i].hp = 0;
+}
+house1.hp = 0;
+sim.step(1);
+assert.equal(sim.world.buildings.some((b) => b.id === house1.id), false, 'house1 disappeared completely after all houses destroyed');
+console.log('✓ Housing: max 2 per city, 10 houses * 50 HP, proportional damage, and total destruction verified');
+
+// Test foreign borders & deposit containment:
+assert.equal(sim.foreign([27.57, 47.16]), true, 'Iași (Romania) is foreign territory');
+assert.equal(sim.foreign([25.35, 47.34]), true, 'Vatra Dornei (Romania) is foreign territory');
+assert.equal(sim.foreign([28.86, 47.01]), true, 'Chișinău (Moldova) is foreign territory');
+assert.equal(sim.foreign([30.52, 50.45]), false, 'Kyiv (Ukraine) is not foreign territory');
+
+for (const dep of sim.deposits) {
+  for (const pt of dep.polygon) {
+    assert.equal(sim.foreign(pt), false, `Deposit ${dep.id} vertex [${pt}] must not be in foreign territory`);
+  }
+}
+console.log('✓ Foreign borders: Romania and Moldova properly excluded from deposits and traversal');
 
 // 11. Bot AI: HQ, Military Bases, Warehouses
 const bUA = new Bot('botUA', 'normal');

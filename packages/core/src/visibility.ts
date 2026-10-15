@@ -63,6 +63,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
         course: b.team === team && b.course ? { remaining: Math.ceil(b.course.remaining), total: b.course.total } : null,
         inside: b.team === team && b.inside.length ? b.inside.map((u) => ({ def: u.def, rank: u.rank, ready: sim.canTrain(u) })) : undefined,
         storage: b.team === team && b.storage ? Object.fromEntries(Object.entries(b.storage).map(([k, v]) => [k, Math.floor(v)])) : undefined,
+        houses: b.houses ? b.houses.map((h) => ({ id: h.id, pos: [Math.round(h.pos[0] * 1e5) / 1e5, Math.round(h.pos[1] * 1e5) / 1e5] as LngLat, hp: Math.round(h.hp), maxHp: h.maxHp, poly: h.poly.map((pt) => [Math.round(pt[0] * 1e5) / 1e5, Math.round(pt[1] * 1e5) / 1e5] as LngLat) })) : undefined,
       })),
     units: w.units
       .filter((u) => {

@@ -6,6 +6,7 @@ import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
 import { specialZoneAt } from './specialZones';
 import { generateMatchDeposits, inDeposit, type ResourceDeposit } from './deposits';
+import { generateCityHouses } from './housing';
 import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
 
@@ -30,16 +31,44 @@ export { inPolygon };
 
 /** Rings for the non-playable neighbours, stitched from the map's border lines. */
 export function forbiddenRings(map: MapDef): LngLat[][] {
-  const byName: Record<string, LngLat[]> = {};
-  for (const f of map.borders?.features ?? []) if (f.properties?.type === 'border' && f.geometry?.coordinates) byName[f.properties.name] = f.geometry.coordinates;
+  const feats: any[] = (map.borders?.features ?? []).filter((f: any) => f.properties?.type === 'border' && f.geometry?.coordinates);
+  const byNameLongest = (name: string) => {
+    let best: LngLat[] | null = null;
+    for (const f of feats) if (f.properties?.name === name && (!best || f.geometry.coordinates.length > best.length)) best = f.geometry.coordinates;
+    return best;
+  };
+  const uaPl = byNameLongest('Ukraine — Poland');
+  const uaSk = byNameLongest('Ukraine — Slovakia');
+  const uaHu = byNameLongest('Ukraine — Hungary');
+  const uaRoMain = feats.find((f: any) => f.properties?.name === 'Ukraine — Romania' && f.geometry.coordinates.length > 30)?.geometry.coordinates;
+  const uaRoDanube = feats.find((f: any) => f.properties?.name === 'Ukraine — Romania' && f.geometry.coordinates[0][0] > 27)?.geometry.coordinates;
+  const uaMd = byNameLongest('Ukraine — Moldova');
+  const mdRo = byNameLongest('Moldova — Romania');
+  const uaBy = byNameLongest('Ukraine — Belarus');
+  const byRu = byNameLongest('Belarus — Russia');
+  const ltBy = byNameLongest('Lithuania — Belarus');
+  const plBy = byNameLongest('Poland — Belarus');
+
   const rings: LngLat[][] = [];
-  const has = (...n: string[]) => n.every((x) => byName[x]);
-  if (has('Ukraine — Belarus', 'Belarus — Russia', 'Poland — Belarus', 'Lithuania — Belarus')) {
-    rings.push([...byName['Ukraine — Belarus'], ...byName['Belarus — Russia'].slice(1), [26.595, 55.667], ...[...byName['Lithuania — Belarus']].reverse().slice(1), ...[...byName['Poland — Belarus']].reverse().slice(1)]);
+  if (uaBy && byRu && ltBy && plBy) {
+    rings.push([...uaBy, ...byRu.slice(1), [26.595, 55.667], ...[...ltBy].reverse().slice(1), ...[...plBy].reverse().slice(1)]);
   }
-  if (has('Ukraine — Moldova', 'Moldova — Romania')) rings.push([...byName['Ukraine — Moldova'], ...[...byName['Moldova — Romania']].reverse().slice(1)]);
-  if (has('Ukraine — Poland', 'Ukraine — Slovakia', 'Ukraine — Hungary', 'Ukraine — Romania')) {
-    rings.push([[21.0, 52.0], ...[...byName['Ukraine — Poland']].reverse(), ...[...byName['Ukraine — Slovakia']].reverse().slice(1), ...byName['Ukraine — Hungary'].slice(1), ...byName['Ukraine — Romania'].slice(1), [26.618, 44.0], [21.0, 44.0]]);
+  if (uaMd && mdRo) {
+    rings.push([...uaMd, ...[...mdRo].reverse().slice(1)]);
+  }
+  if (uaPl && uaSk && uaHu && uaRoMain && mdRo && uaRoDanube) {
+    rings.push([
+      [21.0, 52.0],
+      ...[...uaPl].reverse(),
+      ...[...uaSk].reverse().slice(1),
+      ...uaHu.slice(1),
+      ...uaRoMain.slice(1),
+      ...mdRo.slice(1),
+      ...uaRoDanube.slice(1),
+      [29.7, 43.0],
+      [21.0, 43.0],
+      [21.0, 52.0],
+    ]);
   }
   return rings;
 }
@@ -168,6 +197,13 @@ export class Sim {
     const stock = (k: string) => (this.ruleset.rules.sandbox ? this.storageCap({ def } as Building) : this.starterStock(d, k, p, done));
     const storage = goods.length ? Object.fromEntries(goods.map((k) => [k, stock(k)])) : undefined;
     const b: Building = { id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp, progress: done ? 1 : 0, road, cooldown: 0, level: 1, upgrade: null, inside: [], course: null, storage };
+    if (def === 'housing') {
+      const city = this.cityAt(pos);
+      const polys = city ? this.cities.get(city.id) : null;
+      const existingHouses = this.world.buildings.flatMap((x) => x.houses ?? []);
+      b.houses = generateCityHouses(pos, b.id, polys?.[0], this.map.roads, existingHouses);
+      b.hp = b.houses.length * 50; // 50 HP per house
+    }
     this.world.buildings.push(b);
     return b;
   }
@@ -519,6 +555,16 @@ export class Sim {
 
   /** Distance from p to a building: to its line for line structures, else to its spot. */
   reachKm(b: Building, p: LngLat): number {
+    if (b.def === 'housing' && b.houses && b.houses.length > 0) {
+      let minD = distKm(b.pos, p);
+      for (const h of b.houses) {
+        if (h.hp > 0) {
+          const d = distKm(h.pos, p);
+          if (d < minD) minD = d;
+        }
+      }
+      return minD;
+    }
     if (!b.line) return distKm(b.pos, p);
     const [a, c] = b.line;
     const kx = kmPerDegLng(p[1]);
@@ -681,7 +727,7 @@ export class Sim {
           if (!city) return fail('housing can only be built inside a city');
           const cityIdx = this.map.capturePoints.indexOf(city);
           if (cityIdx >= 0 && w.points[cityIdx]?.owner !== p.team) return fail('your side must hold the city');
-          const limit = r.cityHousingLimit ?? 5;
+          const limit = r.cityHousingLimit ?? 2;
           if (w.buildings.filter((x) => x.def === 'housing' && this.inCity(x.pos, city)).length >= limit) return fail(`at most ${limit} housing blocks per city`);
           if (w.buildings.some((x) => x.def === 'housing' && distKm(x.pos, cmd.pos) < 0.08)) return fail('too close to another housing block');
         } else {
@@ -1720,9 +1766,19 @@ export class Sim {
           inc[k] = (inc[k] ?? 0) - v / n;
         }
       }
+      let houseRatio = 1;
+      if (b.def === 'housing') {
+        if (b.houses && b.houses.length > 0) {
+          const alive = b.houses.filter((h) => h.hp > 0).length;
+          houseRatio = alive / b.houses.length;
+        } else if (d.hp > 0) {
+          houseRatio = Math.max(0, b.hp / d.hp);
+        }
+      }
+      if (houseRatio <= 0) continue;
       for (const [k, v] of Object.entries(d.produces)) {
         if (k === 'energy') continue;
-        let made = v * m * dt;
+        let made = v * m * dt * houseRatio;
         if (k !== 'money' && k !== 'people') {
           // goods go into the building's own stock first
           const cap = this.storageCap(b);
@@ -1733,7 +1789,7 @@ export class Sim {
           // money and people go to the treasury; goods stay in the building (see `goods`)
           if (!this.isGood(k)) tp.res[k] = Math.min(caps.get(k) ?? 1e9, (tp.res[k] ?? 0) + made / n);
           const inc = this.income.get(tp.id)!;
-          inc[k] = (inc[k] ?? 0) + (v * m) / n;
+          inc[k] = (inc[k] ?? 0) + (v * m * houseRatio) / n;
         }
       }
     }
@@ -1967,8 +2023,22 @@ export class Sim {
   private hitBuilding(attacker: Unit, b: Building, raw: number, blast = false): number {
     const dealt = raw / this.holdMult(b.team, b.pos);
     b.lastHitBy = blast ? 'blast' : 'direct';
-    b.hp -= dealt;
     b.lastDamagedTime = this.world.time;
+    if (b.def === 'housing' && b.houses && b.houses.length > 0) {
+      let remaining = dealt;
+      const alive = b.houses
+        .filter((h) => h.hp > 0)
+        .sort((h1, h2) => distKm(h1.pos, attacker.pos) - distKm(h2.pos, attacker.pos));
+      for (const h of alive) {
+        if (remaining <= 0) break;
+        const take = Math.min(h.hp, remaining);
+        h.hp -= take;
+        remaining -= take;
+      }
+      b.hp = b.houses.reduce((acc, h) => acc + Math.max(0, h.hp), 0);
+    } else {
+      b.hp -= dealt;
+    }
     if (b.hp <= 0) this.stat(attacker.owner).buildingsDestroyed++;
     return dealt;
   }
@@ -1983,8 +2053,28 @@ export class Sim {
     }
     for (const b of this.world.buildings) {
       if (b.team === attacker.team || b.hp <= 0) continue;
-      const d = this.reachKm(b, at); // a bridge or trench is hit anywhere along its length
-      if (d <= radius) total += this.hitBuilding(attacker, b, damage * 0.8 * (1 - d / radius), true);
+      if (b.def === 'housing' && b.houses && b.houses.length > 0) {
+        let anyHit = false;
+        for (const h of b.houses) {
+          if (h.hp <= 0) continue;
+          const d = distKm(at, h.pos);
+          if (d <= radius) {
+            anyHit = true;
+            const hDamage = (damage * 0.8 * (1 - d / radius)) / this.holdMult(b.team, h.pos);
+            h.hp = Math.max(0, h.hp - hDamage);
+            total += hDamage;
+          }
+        }
+        if (anyHit) {
+          b.lastHitBy = 'blast';
+          b.lastDamagedTime = this.world.time;
+          b.hp = b.houses.reduce((acc, h) => acc + Math.max(0, h.hp), 0);
+          if (b.hp <= 0) this.stat(attacker.owner).buildingsDestroyed++;
+        }
+      } else {
+        const d = this.reachKm(b, at); // a bridge or trench is hit anywhere along its length
+        if (d <= radius) total += this.hitBuilding(attacker, b, damage * 0.8 * (1 - d / radius), true);
+      }
     }
     if (hitsCities) {
       this.map.capturePoints.forEach((cp, i) => {
