@@ -369,3 +369,9 @@ kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); bo
 .route-line { display: flex; flex-wrap: wrap; gap: 4px; font-size: 11px; color: var(--muted); }
 .route-line .cur { color: var(--accent); font-weight: 700; }
 .min-load { width: 70px; padding: 2px 4px; }
+.meter-fill.morale { background: #a78bfa; }
+
+/* interface size (UI %): every panel scales, the map underneath does not */
+:root { --ui: 1; }
+.game > :not(.map):not(.selbox), .lobby, .center, .overlay > .card, .info-card { zoom: var(--ui); }
+.ui-scale { padding: 3px 6px; font-size: 12px; }

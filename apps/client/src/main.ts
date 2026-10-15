@@ -3,6 +3,9 @@ import { api, session } from './api';
 import { h, clear } from './dom';
 import { showLobby } from './lobby';
 import { startGame } from './game';
+import { setUiScale, uiScale } from './uiScale';
+
+setUiScale(uiScale());
 
 const app = document.getElementById('app')!;
 

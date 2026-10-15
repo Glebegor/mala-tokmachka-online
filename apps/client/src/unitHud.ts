@@ -159,6 +159,10 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     if (tired.length) el.append(meter('Stamina', tired.reduce((a, u) => a + (u.stamina ?? 100), 0) / tired.length, 'stamina'));
   }
 
+  // 4a. morale
+  const spirited = list.filter((u) => u.morale !== undefined);
+  if (spirited.length) el.append(h('div', { class: 'hud-sec', title: 'Morale: falls when encircled, out of ammo or under fire; below 50 they fight worse; encircled at 0 they surrender' }, meter('Morale', spirited.reduce((a, u) => a + (u.morale ?? 100), 0) / spirited.length, 'morale')));
+
   // 4b. ammunition
   const armed = list.filter((u) => u.ammo !== undefined && c.defU.get(u.def)!.maxAmmo);
   if (armed.length) {

@@ -2,7 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { distKm, offsetKm, Sim, snapshotFor, type LngLat, type RulesConfig, type Team } from '../src';
+import { distKm, distToFrontKm, offsetKm, Sim, snapshotFor, type LngLat, type RulesConfig, type Team } from '../src';
 
 const base = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 const fresh = (rules: Partial<RulesConfig> = {}) => {
@@ -594,4 +594,56 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(sawVia, 'drove through the waypoint');
   assert.ok((wh2.storage.metal ?? 0) > 300, `unloaded at the warehouse (${Math.round(wh2.storage.metal)})`);
   console.log('multi-stop routes ok');
+}
+
+// --- the map follows the troops: an unopposed unit just past the line drags the front forward at once ---
+{
+  const sim = fresh();
+  const [p0, p1] = acrossTheLine(sim);
+  const a = sim.player('a')!;
+  const beyond: LngLat = [p1[0] + (p1[0] - p0[0]) * 3.3, p1[1] + (p1[1] - p0[1]) * 3.3]; // ~2 km past the line (p0–p1 is 0.6 km)
+  assert.equal(sim.side(beyond), 1);
+  const u = sim.spawnUnit('infantry', a, beyond);
+  u.fireMode = 'hold';
+  assert.ok(Math.abs(distToFrontKm(sim.world.front, beyond)) < 3, 'just past the line');
+  run(sim, 1.2);
+  assert.equal(sim.side(u.pos), 0, 'within a second the ground under it is ours');
+  // an opposed unit does not move the line
+  const sim2 = fresh();
+  const [q0, q1] = acrossTheLine(sim2);
+  const there: LngLat = [q1[0] + (q1[0] - q0[0]) * 3.3, q1[1] + (q1[1] - q0[1]) * 3.3];
+  const v = sim2.spawnUnit('infantry', sim2.player('a')!, there);
+  const foe = sim2.spawnUnit('infantry', sim2.player('b')!, offsetKm(there, 1, 0));
+  (v.fireMode = 'hold'), (foe.fireMode = 'hold'), (v.hp = foe.hp = 1e6);
+  run(sim2, 1.2);
+  assert.equal(sim2.side(v.pos), 1, 'with the enemy beside it, it is only grey (penetration) ground');
+  assert.ok(sim2.liberatedAt(v.pos), 'shown as grey');
+  console.log('front follows the troops ok');
+}
+
+// --- morale: falls in a cauldron and under fire, weakens a unit, and an encircled unit at zero surrenders ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const u = sim.spawnUnit('infantry', a, offsetKm(hq.pos, 30, 0));
+  assert.equal(u.morale, 100);
+  u.morale = 30;
+  assert.ok(Math.abs(sim.moraleMult(u) - 0.8) < 1e-9, 'shaken: 80% damage at 30 morale');
+  run(sim, 0.5);
+  assert.ok(u.status.some(([id]) => id === 'broken' || id === 'lowmorale'));
+  run(sim, 5);
+  assert.ok(u.morale! > 30, 'recovers out of the fight');
+  // encircled: drains, no resupply, surrenders at zero
+  const before = sim.world.scores[1];
+  u.morale = 4;
+  u.ammo = 0;
+  u.encircled = true;
+  (sim as any).morale();
+  assert.ok(u.morale! < 4);
+  (sim as any).morale();
+  (sim as any).morale();
+  assert.equal(u.hp, 0, 'surrenders at zero');
+  assert.ok(sim.world.scores[1] > before, 'and the enemy scores for it');
+  console.log('morale ok');
 }

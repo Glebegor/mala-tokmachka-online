@@ -15,6 +15,7 @@ import { aircraftSprite } from './sprites';
 import { cellsToMultiPolygon } from './contours';
 import { statsView } from './stats';
 import { openGuide } from './guide';
+import { uiScale, uiScaleControl } from './uiScale';
 import { ProductionDock, QueueList, type QueueContext } from './queue';
 
 /**
@@ -223,7 +224,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
   app.append(
     h('div', { class: 'game' }, mapEl, dock.el, queueSlot, effectsSlot,
-      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
+      h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, uiScaleControl('ghost'), h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner, markMenu),
   );
 
@@ -338,8 +339,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       card.append(h('b', {}, title), h('p', {}, text ?? ''), ...facts.map((f) => h('div', { class: 'fact' }, f)));
       const r = el.getBoundingClientRect();
       card.style.display = 'block';
-      card.style.top = `${Math.max(8, Math.min(window.innerHeight - card.offsetHeight - 8, r.top))}px`;
-      card.style.left = side === 'right' ? `${r.right + 10}px` : `${r.left - card.offsetWidth - 10}px`;
+      // the card is zoomed with the interface: its left/top are in zoomed pixels
+      const z = uiScale();
+      const top = Math.max(8, Math.min(window.innerHeight - card.offsetHeight * z - 8, r.top));
+      const left = side === 'right' ? r.right + 10 : r.left - card.offsetWidth * z - 10;
+      card.style.top = `${top / z}px`;
+      card.style.left = `${left / z}px`;
     });
     el.addEventListener('mouseleave', () => (card.style.display = 'none'));
   }
@@ -458,7 +463,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
 
     map.on('load', () => {
-      for (const id of ['borders', 'cities', 'occupied', 'grey', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'drone-units']) map.addSource(id, { type: 'geojson', data: empty() });
+      for (const id of ['borders', 'cities', 'occupied', 'front', 'pockets', 'units', 'formations', 'sel', 'rings', 'ghost', 'roads', 'smokes', 'zones', 'restricted', 'power-lines', 'orbits', 'fuel-stations', 'liberated', 'freed', 'freed-new', 'drone-units']) map.addSource(id, { type: 'geojson', data: empty() });
 
       if (terrain) {
         map.addSource('terrain', { type: 'image', url: terrainImage(), coordinates: [[terrain.data.west, terrain.data.north], [terrain.data.east, terrain.data.north], [terrain.data.east, terrain.data.south], [terrain.data.west, terrain.data.south]] });
@@ -480,12 +485,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({
         id: 'roads-minor', type: 'line', source: 'roads', filter: ['!=', ['get', 'major'], 1], minzoom: 6,
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#8a7a4a', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.2, 8.5, 0.45], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.5, 8.5, 0.9, 11, 1.4] },
+        paint: { 'line-color': '#9a8a56', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 6, 0.3, 8.5, 0.6], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 0.7, 8.5, 1.15, 11, 1.8] },
       });
       map.addLayer({
         id: 'roads', type: 'line', source: 'roads', filter: ['==', ['get', 'major'], 1],
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#e8c35a', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.35, 8, 0.6], 'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.7, 8, 1.6, 11, 2.6] },
+        paint: { 'line-color': '#f0cb5e', 'line-opacity': ['interpolate', ['linear'], ['zoom'], 4.5, 0.48, 8, 0.75], 'line-width': ['interpolate', ['linear'], ['zoom'], 4.5, 0.95, 8, 2, 11, 3.2] },
       });
       // state borders
       if (m.borders) (map.getSource('borders') as GeoJSONSource).setData(m.borders);
@@ -499,14 +504,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
       map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
       map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
-      // DeepState-style areas: grey where ground just changed hands and the enemy is still about, blue where Ukraine liberated it
-      map.addLayer({ id: 'freed-fill', type: 'fill', source: 'freed', paint: { 'fill-color': '#3d8bff', 'fill-opacity': 0.24 } }, 'front-zone');
-      map.addLayer({ id: 'freed-line', type: 'line', source: 'freed', paint: { 'line-color': '#5c9dff', 'line-width': 1.1, 'line-opacity': 0.85 } }, 'front-zone');
-      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#b3b8bf', 'fill-opacity': 0.55 } }, 'front-zone');
-      map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#e3e7ec', 'line-width': 1.1, 'line-opacity': 0.8, 'line-dasharray': [3, 2] } }, 'front-zone');
-      // grey zone: contested ground behind the line
-      map.addLayer({ id: 'grey-fill', type: 'fill', source: 'grey', paint: { 'fill-color': '#b9bfc8', 'fill-opacity': 0.34 } });
-      map.addLayer({ id: 'grey-line', type: 'line', source: 'grey', paint: { 'line-color': '#e3e7ec', 'line-width': 1.2, 'line-opacity': 0.7, 'line-dasharray': [2, 2] } });
+      // DeepState-style areas: grey = penetration area (contested: troops beyond their line, ground just taken),
+      // blue = liberated by Ukraine, bright blue = liberated in the last few minutes
+      map.addLayer({ id: 'freed-fill', type: 'fill', source: 'freed', paint: { 'fill-color': '#2f7bff', 'fill-opacity': 0.22 } }, 'front-zone');
+      map.addLayer({ id: 'freed-line', type: 'line', source: 'freed', paint: { 'line-color': '#4f8fff', 'line-width': 1, 'line-opacity': 0.8 } }, 'front-zone');
+      map.addLayer({ id: 'freed-new-fill', type: 'fill', source: 'freed-new', paint: { 'fill-color': '#38bdf8', 'fill-opacity': 0.38 } }, 'front-zone');
+      map.addLayer({ id: 'freed-new-line', type: 'line', source: 'freed-new', paint: { 'line-color': '#7dd3fc', 'line-width': 1.2, 'line-opacity': 0.9 } }, 'front-zone');
+      map.addLayer({ id: 'liberated-fill', type: 'fill', source: 'liberated', paint: { 'fill-color': '#8c929b', 'fill-opacity': 0.62 } }, 'front-zone');
+      map.addLayer({ id: 'liberated-line', type: 'line', source: 'liberated', paint: { 'line-color': '#c9ced6', 'line-width': 1, 'line-opacity': 0.75 } }, 'front-zone');
       // cauldrons: yellow broken ring around the cut-off ground
       map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
       map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
@@ -524,11 +529,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'power-lines', type: 'line', source: 'power-lines', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#38bdf8', 'line-width': 1.2, 'line-dasharray': [4, 3], 'line-opacity': 0.6, 'line-offset': 3 } });
       map.addLayer({ id: 'orbits', type: 'line', source: 'orbits', paint: { 'line-color': '#a7f3d0', 'line-width': 1.4, 'line-dasharray': [4, 2], 'line-opacity': 0.8 } });
       map.addLayer({ id: 'smokes', type: 'symbol', source: 'smokes', layout: { 'icon-image': 'smoke', 'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.0125, 8, 0.2, 12, 3.2], 'icon-allow-overlap': true, 'icon-ignore-placement': true }, paint: { 'icon-opacity': ['get', 'opacity'] } });
-      map.addLayer({ id: 'rings', type: 'line', source: 'rings', paint: { 'line-color': ['get', 'color'], 'line-width': 1, 'line-opacity': 0.4, 'line-dasharray': [2, 3] } });
+      map.addLayer({ id: 'rings', type: 'line', source: 'rings', paint: { 'line-color': ['get', 'color'], 'line-width': ['coalesce', ['get', 'w'], 1], 'line-opacity': ['coalesce', ['get', 'o'], 0.4], 'line-dasharray': [2, 3] } });
+      // the selected building's ranges, filled lightly so its reach is easy to read
+      map.addLayer({ id: 'rings-sel', type: 'fill', source: 'rings', filter: ['==', ['get', 'sel'], true], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.06 } }, 'rings');
       map.addLayer({ id: 'ghost-fill', type: 'fill', source: 'ghost', paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.12 } });
       map.addLayer({ id: 'ghost-line', type: 'line', source: 'ghost', paint: { 'line-color': ['get', 'color'], 'line-width': 1.4, 'line-dasharray': [3, 2] } });
-      map.addLayer({ id: 'sel-line', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], paint: { 'line-color': '#ffffff', 'line-width': 1, 'line-opacity': 0.55, 'line-dasharray': [1, 3] } });
-      map.addLayer({ id: 'sel-pts', type: 'circle', source: 'sel', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 3.5, 'circle-color': '#0b0d10', 'circle-stroke-color': '#ffffff', 'circle-stroke-width': 1.5 } });
+      // where the selected units are going: a bright dashed line on a dark casing, readable over any terrain
+      map.addLayer({ id: 'sel-case', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#0b0d10', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3, 10, 5], 'line-opacity': 0.55 } });
+      map.addLayer({ id: 'sel-line', type: 'line', source: 'sel', filter: ['==', ['geometry-type'], 'LineString'], layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ffe45c', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.4, 10, 2.4], 'line-opacity': 0.95, 'line-dasharray': [2, 1.5] } });
+      map.addLayer({ id: 'sel-pts', type: 'circle', source: 'sel', filter: ['==', ['geometry-type'], 'Point'], paint: { 'circle-radius': 5, 'circle-color': '#0b0d10', 'circle-stroke-color': '#ffe45c', 'circle-stroke-width': 2 } });
 
       const iconSize: any = ['interpolate', ['linear'], ['zoom'], 5, 0.4, 8, 0.58, 11, 0.85];
       // a marker = base image + overlays (rank, pips, echelon, cauldron ring) drawn on the same spot by extra layers
@@ -1265,7 +1274,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const courseNote = next && d.kind !== 'air' ? (u.rank === 0 ? 'Can take a course at a Training Centre' : (u.combat ?? 0) > 0 ? `${u.combat} kill${u.combat === 1 ? '' : 's'} since its last course: can take the next one` : 'Needs a kill before its next course') : '';
         side.append(
           h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, rk[u.rank]?.name ?? ''))),
-          h('div', { class: 'stat' }, `HP ${u.hp}/${Math.round(maxHp(u))}`),
+          h('div', { class: 'stat' }, `HP ${u.hp}/${Math.round(maxHp(u))}${u.morale !== undefined ? ` · morale ${u.morale}` : ''}`),
           h('div', { class: 'stat' + (d.maxAmmo && (u.ammo ?? 0) < (d.ammoPerShot ?? 1) ? ' warn' : '') }, d.maxAmmo ? `Ammo ${u.ammo ?? 0}/${d.maxAmmo} · ${Math.floor((u.ammo ?? 0) / (d.ammoPerShot ?? 1))} shots left` : 'No ammunition (unarmed)'),
           h('div', { class: 'stat' }, next ? `XP ${u.xp}/${next.xp} → ${next.name}` : `XP ${u.xp} · top rank`),
           h('div', { class: 'stat muted' }, courseNote),
@@ -1453,9 +1462,24 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
     // vision rings for own long-range assets
     const rings: any[] = [];
+    // the selected building: every range it has, bold (what it covers while you read its description)
+    const selB = selBuilding !== null ? snap.buildings.find((x) => x.id === selBuilding) : null;
+    if (selB) {
+      const d = defB.get(selB.def)!;
+      const r = init.ruleset.rules;
+      const big = (km: number, color: string) => rings.push({ type: 'Feature', properties: { color, w: 2, o: 0.9, sel: true }, geometry: { type: 'Polygon', coordinates: [circle(selB.pos, km, 96)] } });
+      if (d.aura) big(d.aura.radiusKm, '#a3e635');
+      if (d.defense) big(d.defense.radiusKm, '#4ade80');
+      if (d.supply) big(d.supply.radiusKm, '#e39b4f');
+      if (d.heals) big(d.heals.radiusKm, '#f472b6');
+      if (d.attack) big(d.attack.range, '#ffd84a');
+      if (d.crossing) big(d.crossing.radiusKm, '#7fe7ff');
+      if (selB.def === 'power_plant') big(r.powerGridKm, '#38bdf8');
+      if (d.vision) big(d.vision, '#94a3b8');
+    }
     for (const b of snap.buildings) {
       const d = defB.get(b.def)!;
-      if (b.team !== myTeam || b.progress < 1) continue;
+      if (b.team !== myTeam || b.progress < 1 || b === selB) continue;
       const ring = (km: number, color: string) => rings.push({ type: 'Feature', properties: { color }, geometry: { type: 'LineString', coordinates: circle(b.pos, km, 64) } });
       if (b.owner === me && (d.vision ?? 0) >= 20) ring(d.vision!, TEAM_COLOR[b.team]);
       if (d.attack) ring(d.attack.range, '#ffd84a');
@@ -1554,19 +1578,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       libDirty = false;
       // traced into smooth outlines: grey = contested after a side took it, blue = liberated by Ukraine
       const { lng: cw, lat: ch } = LIBERATED_CELL;
-      const grey: [number, number][] = [], free: [number, number][] = [];
+      const grey: [number, number][] = [], free: [number, number][] = [], fresh: [number, number][] = [];
       for (let k = 0; k < libRuns.length; k += 4) {
         const [iy, kind, ix, n] = [libRuns[k], libRuns[k + 1], libRuns[k + 2], libRuns[k + 3]];
-        for (let i = 0; i < n; i++) (kind === 2 ? free : grey).push([ix + i, iy]);
+        for (let i = 0; i < n; i++) (kind === 3 ? fresh : kind === 2 ? free : grey).push([ix + i, iy]);
       }
       const shape = (cells: [number, number][]) => ({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: cellsToMultiPolygon(cells, cw, ch) } });
       (map.getSource('liberated') as GeoJSONSource).setData(shape(grey) as any);
       (map.getSource('freed') as GeoJSONSource).setData(shape(free) as any);
-    }
-    const greyKey = snap.grey.map((z) => `${z.pos[0]},${z.pos[1]}`).join('|');
-    if (greyKey !== lastGrey) {
-      lastGrey = greyKey;
-      (map.getSource('grey') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.grey.map((z) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [circle(z.pos, z.r, 40)] } })) });
+      (map.getSource('freed-new') as GeoJSONSource).setData(shape(fresh) as any);
     }
 
     snap.points.forEach((p) => {
@@ -1708,7 +1728,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
   let frontDrawn = false;
   let lastUnitDraw = 0;
-  let lastGrey = '-';
   /** Contested liberated ground: runs [iy, team, ix, n, …] from the server, and a lookup of its cells. */
   let libRuns: number[] = [];
   let libCells = new Map<number, number>();
