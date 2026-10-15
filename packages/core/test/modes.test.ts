@@ -473,3 +473,125 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(Math.abs(hurt.hp - (20 + 4 * 3)) < 3.1, `hospital: 3 hp a second for infantry (${hurt.hp.toFixed(1)})`);
   console.log('healing ok');
 }
+
+// --- artillery: dead zone of a fifth of its range, 2.5 s to lay the guns on a new target ---
+{
+  const sim = fresh();
+  const [p0, p1] = acrossTheLine(sim);
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const away = (p: LngLat, km: number): LngLat => offsetKm(p, (p[0] - p1[0]) * km * 270, (p[1] - p1[1]) * km * 370); // back from the line
+  const gun = sim.spawnUnit('artillery', a, away(p0, 6));
+  const spotter = sim.spawnUnit('infantry_recon', a, p0);
+  spotter.fireMode = 'hold';
+  const near = sim.spawnUnit('infantry', b, offsetKm(gun.pos, 3, 0)); // inside the 4 km dead zone (and our side: it just stands there)
+  (near.fireMode = 'hold'), (near.hp = 1e6);
+  sim.spawnUnit('infantry_recon', a, near.pos).fireMode = 'hold'; // it is seen
+  const hp0 = near.hp;
+  run(sim, 5);
+  assert.equal(near.hp, hp0, 'no shot inside the dead zone');
+  near.hp = 0;
+  const far = sim.spawnUnit('infantry', b, p1);
+  (far.fireMode = 'hold'), (far.hp = 1e6);
+  const d = distKm(gun.pos, far.pos);
+  assert.ok(d > 4 && d < 20, `target ${d.toFixed(1)} km away`);
+  let first = 0;
+  for (let i = 1; i <= 60 && !first; i++) {
+    sim.step(0.1);
+    if (far.hp < 1e6) first = i / 10;
+  }
+  assert.ok(first >= 2.4 && first <= 3.2, `first shell after aiming (${first}s)`);
+  console.log(`artillery ok: dead zone 4 km, first shell after ${first}s`);
+}
+
+// --- combat system: stances, attack-move, formations, retreat ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const hq = hqOf(sim, 'a');
+  const at = offsetKm(hq.pos, 25, 0);
+  // an enemy 3 km off, sitting tight (out of rifle range, in sight)
+  const foe = sim.spawnUnit('infantry', b, offsetKm(at, 2.5, 0));
+  (foe.fireMode = 'hold'), (foe.hp = 1e6);
+  const holder = sim.spawnUnit('infantry', a, at);
+  assert.equal(holder.stance, 'hold', 'players\' units hold position by default');
+  run(sim, 10);
+  assert.ok(distKm(holder.pos, at) < 0.01, 'a holding unit does not chase');
+  sim.apply('a', { type: 'stance', units: [holder.id], stance: 'aggressive' });
+  run(sim, 10);
+  assert.ok(distKm(holder.pos, at) > 0.8, 'an aggressive one closes in');
+  // defend: chases inside its 3 km leash only, then returns to its post
+  const post = offsetKm(at, 0, 10);
+  const def = sim.spawnUnit('infantry', a, post);
+  sim.apply('a', { type: 'stance', units: [def.id], stance: 'defend' });
+  const far = sim.spawnUnit('infantry', b, offsetKm(post, 3.4, 0)); // seen (4 km sight * 0.7 = 2.8) — out of reach
+  (far.fireMode = 'hold'), (far.hp = 1e6);
+  run(sim, 8);
+  assert.ok(distKm(def.pos, post) < 0.01, 'a defender ignores enemies beyond its leash');
+  const close = sim.spawnUnit('infantry', b, offsetKm(post, 2, 0));
+  (close.fireMode = 'hold'), (close.hp = 1e6);
+  run(sim, 5);
+  const out = distKm(def.pos, post);
+  assert.ok(out > 0.3, `a defender steps out for an enemy near its post (${out.toFixed(2)} km)`);
+  close.hp = 0;
+  run(sim, 30);
+  assert.ok(distKm(def.pos, post) <= 0.35, 'and walks back once it is gone');
+  // attack-move stops to fight, a plain move pushes on
+  const start = offsetKm(at, 0, -12);
+  const blocker = sim.spawnUnit('infantry', b, offsetKm(start, 1.5, 0.4));
+  (blocker.fireMode = 'hold'), (blocker.hp = 1e6);
+  const mover = sim.spawnUnit('infantry', a, start);
+  const raider = sim.spawnUnit('infantry', a, offsetKm(start, 0, 0.05));
+  sim.apply('a', { type: 'move', units: [mover.id], to: offsetKm(start, 5, 0), mode: 'direct' });
+  sim.apply('a', { type: 'move', units: [raider.id], to: offsetKm(start, 5, 0.05), mode: 'direct', attack: true });
+  run(sim, 40);
+  assert.ok(distKm(mover.pos, offsetKm(start, 5, 0)) < 0.5, `a plain move pushes through (${distKm(mover.pos, offsetKm(start, 5, 0)).toFixed(2)} km short, path ${mover.path.length}, at ${distKm(mover.pos, start).toFixed(2)} km)`);
+  assert.ok(distKm(raider.pos, start) < 2 && raider.attackMove, `attack-move stops to fight (${distKm(raider.pos, start).toFixed(1)} km on)`);
+  // formations: a line across the direction of travel
+  const squad = Array.from({ length: 5 }, (_, i) => sim.spawnUnit('infantry', a, offsetKm(at, -20, i * 0.05)));
+  const goal = offsetKm(at, -20, 6);
+  sim.apply('a', { type: 'move', units: squad.map((u) => u.id), to: goal, mode: 'direct', formation: 'line' });
+  const ends = squad.map((u) => u.path[u.path.length - 1].p);
+  const spanEW = distKm(ends[0], ends[4]);
+  assert.ok(spanEW > 1.2 && Math.abs(ends[0][1] - ends[4][1]) < 0.005, `line formation: side by side across the way (${spanEW.toFixed(2)} km wide)`);
+  // retreat: below the threshold a unit falls back to a field hospital by itself
+  sim.world.buildings.push({ ...hq, id: sim.world.nextId++, def: 'med_center', hp: 450, pos: offsetKm(hq.pos, 5, 5), storage: undefined, inside: [], course: null, upgrade: null });
+  const hurt = sim.spawnUnit('infantry', a, offsetKm(hq.pos, 30, 20));
+  sim.apply('a', { type: 'retreat', units: [hurt.id], at: 0.5 });
+  hurt.hp = 30;
+  run(sim, 2);
+  assert.ok(hurt.retreating && hurt.path.length > 0, 'a battered unit falls back');
+  console.log('combat system ok: stances, attack-move, formations, retreat');
+}
+
+// --- multi-stop delivery routes: load, via a waypoint, unload at two sites; leave only with the minimum load ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const mk = (def: string, dx: number, dy: number, storage: Record<string, number>) => {
+    const b = { ...hq, id: sim.world.nextId++, def, hp: 500, pos: offsetKm(hq.pos, dx, dy), storage, inside: [], course: null, upgrade: null };
+    sim.world.buildings.push(b);
+    return b;
+  };
+  const store = mk('warehouse', 4, -4, { ore: 0, metal: 120, fuel: 0, ammo: 0 });
+  const wh2 = mk('warehouse', 8, -4, { ore: 0, metal: 0, fuel: 0, ammo: 0 });
+  const truck = sim.spawnUnit('truck', a, store.pos);
+  const via = offsetKm(hq.pos, 6, -7);
+  assert.equal(sim.apply('a', { type: 'setRoute', unit: truck.id, stops: [{ action: 'load', building: store.id }] }).ok, false, 'needs at least two stops');
+  assert.equal(sim.apply('a', { type: 'setRoute', unit: truck.id, stops: [{ action: 'load', building: store.id }, { action: 'via', pos: via }] }).ok, false, 'and somewhere to unload');
+  assert.ok(sim.apply('a', { type: 'setRoute', unit: truck.id, resType: 'metal', minLoad: 300, stops: [{ action: 'load', building: store.id }, { action: 'via', pos: via }, { action: 'unload', building: wh2.id }, { action: 'unload', building: hq.id }] }).ok);
+  run(sim, 15);
+  assert.equal(truck.haul?.state, 'loading', 'only 120 metal there: it waits for 300');
+  assert.ok(truck.haul?.waiting);
+  store.storage.metal = 400;
+  run(sim, 7);
+  assert.ok(truck.haul!.idx >= 1, 'leaves once it has 300+');
+  let sawVia = false;
+  for (let i = 0; i < 2000 && (wh2.storage.metal ?? 0) < 1; i++) {
+    sim.step(0.1);
+    if (distKm(truck.pos, via) < 0.7) sawVia = true;
+  }
+  assert.ok(sawVia, 'drove through the waypoint');
+  assert.ok((wh2.storage.metal ?? 0) > 300, `unloaded at the warehouse (${Math.round(wh2.storage.metal)})`);
+  console.log('multi-stop routes ok');
+}

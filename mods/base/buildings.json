@@ -79,7 +79,7 @@
     "buildTime": 12,
     "hp": 350,
     "produces": {
-      "ore": 1.0
+      "ore": 2.0
     },
     "consumes": {
       "energy": 1.5
@@ -87,7 +87,8 @@
     "vision": 3,
     "spacedFrom": [
       "metalworks"
-    ]
+    ],
+    "sameKindKm": 11.7
   },
   {
     "id": "metalworks",
@@ -101,23 +102,24 @@
     "buildTime": 16,
     "hp": 450,
     "produces": {
-      "metal": 0.6
+      "metal": 1.2
     },
     "consumes": {
-      "ore": 1.0,
+      "ore": 2.0,
       "energy": 2
     },
     "vision": 3,
     "spacedFrom": [
       "machine_factory"
-    ]
+    ],
+    "sameKindKm": 11.7
   },
   {
     "id": "oil_refinery",
     "name": "Oil Refinery",
     "category": "civil",
     "icon": "⬣",
-    "description": "Refines fuel (2.5/s) into its tank. Fuel trucks take it to filling stations, airfields and bases. Built in the Kremenchuk zone (Ukraine only) it makes 50% more.",
+    "description": "Refines fuel (5/s) into its tank. Fuel trucks take it to filling stations, airfields and bases. Built in the Kremenchuk zone (Ukraine only) it makes 50% more.",
     "cost": {
       "money": 450,
       "metal": 35
@@ -125,7 +127,7 @@
     "buildTime": 16,
     "hp": 550,
     "produces": {
-      "fuel": 2.5
+      "fuel": 5.0
     },
     "consumes": {
       "energy": 2.0
@@ -429,7 +431,7 @@
     "name": "Ammo Factory",
     "category": "military",
     "icon": "✸",
-    "description": "Turns metal into ammunition (3/s) in its own store. Trucks carry the ammo to depots near the front. Needs metal delivered and energy.",
+    "description": "Turns metal into ammunition (6/s) in its own store. Trucks carry the ammo to depots near the front. Needs metal delivered and energy.",
     "cost": {
       "money": 600,
       "metal": 50
@@ -438,10 +440,10 @@
     "hp": 900,
     "vision": 5,
     "produces": {
-      "ammo": 3
+      "ammo": 6
     },
     "consumes": {
-      "metal": 0.6,
+      "metal": 1.2,
       "energy": 1
     }
   },
@@ -450,7 +452,7 @@
     "name": "Ammo Depot",
     "category": "military",
     "icon": "⊞",
-    "description": "Field ammunition store (6,000). Your units within 15 km refill their rounds from it (up to 10 a second each; a tank shell costs 4 ammo, an artillery shell 6, an anti-tank missile 3). Can be set up inside your grey zones, even behind the enemy line, and stands as long as the grey zone does. Keep it stocked by truck from an ammo factory.",
+    "description": "Field ammunition store (6,000). Your units within 18.75 km refill their rounds from it (up to 10 a second each; a tank shell costs 4 ammo, an artillery shell 6, an anti-tank missile 3). Can be set up inside your grey zones, even behind the enemy line, and stands as long as the grey zone does. Keep it stocked by truck from an ammo factory.",
     "cost": {
       "money": 180,
       "metal": 15
@@ -462,7 +464,7 @@
     "fieldWork": true,
     "buildInGrey": true,
     "supply": {
-      "radiusKm": 15,
+      "radiusKm": 18.75,
       "rounds": 10
     }
   },

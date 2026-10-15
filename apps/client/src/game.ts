@@ -9,7 +9,7 @@ import { clear, h } from './dom';
 import { ShotFx } from './fx';
 import { iconHtml, STATUS, statusIconHtml } from './icons';
 import { FogOverlay } from './fog';
-import { renderUnitHud, type Pickers } from './unitHud';
+import { renderUnitHud, type OrderStyle, type Pickers } from './unitHud';
 import { ALLY_COLOR, drawNato, drawNatoImage, echelonFor, NATION_COLOR, natoLayers, type Relation } from './nato';
 import { aircraftSprite } from './sprites';
 import { cellsToMultiPolygon } from './contours';
@@ -73,6 +73,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let fog: FogOverlay | null = null;
   /** Click modes for delivery routes and artillery barrages. */
   const pick: Pickers = { route: null, bombard: null, launch: null, fuel: null };
+  /** Attack-move or plain move, and the formation for group moves (set in the command panel, A / F). */
+  const orders: OrderStyle = { attack: false, formation: 'spread' };
   /** City boundaries per capture point (housing may only go inside a held city). */
   const cityPolys = new Map<string, LngLat[][]>();
   /** Smoothly interpolated unit positions between 5 Hz snapshots. */
@@ -202,6 +204,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let sideQueue: { list: QueueList; building: number } | null = null;
   /** The queue panel sits to the left of the building's description window. */
   const queueSlot = h('div', { class: 'queue-slot' });
+  /** Buffs and debuffs of the selected units, beside the description window. */
+  const effectsSlot = h('div', { class: 'effects-slot' });
   /** Orders seen in the last snapshot, to announce units as they are ready. */
   let lastQueue = new Map<number, SnapMsg['queue'][number]>();
   function updateQueues(s: SnapMsg) {
@@ -218,7 +222,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   }
 
   app.append(
-    h('div', { class: 'game' }, mapEl, dock.el, queueSlot,
+    h('div', { class: 'game' }, mapEl, dock.el, queueSlot, effectsSlot,
       h('div', { class: 'hud top' }, resBar, modeBadge, scoreBar, h('button', { class: 'ghost', title: 'Guidebook (H)', onClick: () => showGuide() }, 'Guide'), markBtn, shareBtn, terrainBtn, basemapBtn, h('button', { class: 'ghost', onClick: leave }, 'Leave')),
       palette, side, groupBar, terrainChip, toasts, hint, boxEl, countEl, unitHud, routeBanner, peaceBanner, markMenu),
   );
@@ -282,7 +286,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.trains?.length) f.push(`Trains ${d.trains.filter((u) => !defU.get(u)?.side || defU.get(u)?.side === (init?.team === 0 ? 'ua' : 'ru')).map((u) => defU.get(u)?.name ?? u).join(', ')}`);
     if (d.storageCap) f.push(`Store ${d.storageCap.toLocaleString('en-US')}`);
     const partners = init ? init.ruleset.buildings.filter((o) => chained(d, o)).map((o) => o.name) : [];
-    if (partners.length) f.push(`Keep ${init?.ruleset.rules.minBuildSpacing ?? 35} km from: ${partners.join(', ')}`);
+    if (partners.length) f.push(`Keep ${init?.ruleset.rules.minBuildSpacing ?? 17.5} km from: ${partners.join(', ')}`);
+    if (d.sameKindKm) f.push(`Keep ${d.sameKindKm} km from another ${d.name}`);
     if (d.vision) f.push(`Sees ${d.vision} km`);
     if (d.maxPerPlayer) f.push(`Limit ${d.maxPerPlayer} per player`);
     return f;
@@ -314,7 +319,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const spacingBetween = (d: BuildingDef, other: string, inZone: boolean) => {
     const r = init!.ruleset.rules;
     const o = defB.get(other);
-    return o && chained(d, o) && !inZone ? r.minBuildSpacing : r.fieldWorkSpacing;
+    if (o && chained(d, o) && !inZone) return r.minBuildSpacing;
+    if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
+    return r.fieldWorkSpacing;
   };
   /** Which side holds the ground (same rule as the server: the painted occupied area, cauldrons first). */
   function sideAt(p: LngLat): 0 | 1 {
@@ -613,7 +620,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         pick.fuel = null;
         return render();
       }
-      if (pick.route) return toast('Click one of your buildings (Esc cancels)');
+      if (pick.route) {
+        // a click on open map: a waypoint the truck drives through
+        if (pick.route.stops.length >= 6) return toast('A route has at most 6 stops', true);
+        pick.route.stops.push({ action: 'via', pos: p });
+        return render();
+      }
       if (placing) {
         send({ type: 'build', def: placing.id, pos: p });
         if (!e.originalEvent.shiftKey) cancelPlacing();
@@ -632,7 +644,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (!selUnits.size) return;
       const ev = e.originalEvent;
       // Shift queues another waypoint, Alt goes straight across country (no roads, stays combat-ready)
-      send({ type: 'move', units: [...selUnits], to: [e.lngLat.lng, e.lngLat.lat], cohesion: formation && selUnits.size > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast' });
+      send({ type: 'move', units: [...selUnits], to: [e.lngLat.lng, e.lngLat.lat], cohesion: formation && selUnits.size > 1, queue: ev.shiftKey, mode: ev.altKey ? 'direct' : 'fast', attack: orders.attack, formation: orders.formation });
     });
     window.addEventListener('keydown', onKey);
 
@@ -719,6 +731,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     }
     const k = e.key.toLowerCase();
     if (k === 's' && selUnits.size) return void send({ type: 'stop', units: [...selUnits] });
+    if (k === 'a' && selUnits.size) return void ((orders.attack = !orders.attack), toast(orders.attack ? 'Orders: attack-move (stop and fight)' : 'Orders: move (push through)'), renderHud());
+    if (k === 'f' && selUnits.size) {
+      const all = ['spread', 'line', 'column', 'wedge'] as const;
+      orders.formation = all[(all.indexOf(orders.formation) + 1) % all.length];
+      toast(`Formation: ${orders.formation}`);
+      return renderHud();
+    }
     if (k === 't') return toggleTerrain();
     if (k === 'm') return toggleBasemap();
     if (k === 'g' && selUnits.size) return makeGroup();
@@ -994,7 +1013,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const clash = snap.buildings.find((b) => b.def !== 'housing' && distKm(b.pos, p) < spacingBetween(def, b.def, !!zone));
       if (clash) {
         const other = defB.get(clash.def)!;
-        return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : 'space occupied';
+        return chained(def, other) ? `keep ${r.minBuildSpacing} km from the ${other.name} (goods go by truck)` : other.id === def.id && def.sameKindKm ? `keep ${def.sameKindKm} km from the next ${def.name}` : 'space occupied';
       }
     }
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'not enough resources';
@@ -1233,6 +1252,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (b.def !== 'hq' && b.owner === me) side.append(h('button', { class: 'ghost', onClick: () => (send({ type: 'demolish', building: b.id }), (selBuilding = null)) }, 'Demolish (40% refund)'));
       }
     } else if (selUnits.size) {
+      let effects: { id: string; v: number; n: number }[] = [];
       const mine = snap.units.filter((u) => selUnits.has(u.id));
       const rk = ranks();
       const group = [...groups.values()].find((g) => g.ids.size === mine.length && mine.every((u) => g.ids.has(u.id)));
@@ -1246,6 +1266,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         side.append(
           h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, rk[u.rank]?.name ?? ''))),
           h('div', { class: 'stat' }, `HP ${u.hp}/${Math.round(maxHp(u))}`),
+          h('div', { class: 'stat' + (d.maxAmmo && (u.ammo ?? 0) < (d.ammoPerShot ?? 1) ? ' warn' : '') }, d.maxAmmo ? `Ammo ${u.ammo ?? 0}/${d.maxAmmo} · ${Math.floor((u.ammo ?? 0) / (d.ammoPerShot ?? 1))} shots left` : 'No ammunition (unarmed)'),
           h('div', { class: 'stat' }, next ? `XP ${u.xp}/${next.xp} → ${next.name}` : `XP ${u.xp} · top rank`),
           h('div', { class: 'stat muted' }, courseNote),
           h('div', { class: 'stat muted' }, `damage ×${rk[u.rank]?.damage ?? 1} · range ×${rk[u.rank]?.range ?? 1}`),
@@ -1253,7 +1274,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           ...unitFacts(d).map((f) => h('div', { class: 'fact' }, f)),
         );
         if (u.entering) side.append(h('div', { class: 'stat', style: { color: 'var(--accent)' } }, 'Heading to the training centre'));
-        side.append(statusList(u.status.map(([id, v]) => ({ id, v, n: 1 })), true));
+        effects = u.status.map(([id, v]) => ({ id, v, n: 1 }));
       } else {
         const by = new Map<string, UnitView[]>();
         mine.forEach((u) => by.set(u.def, [...(by.get(u.def) ?? []), u]));
@@ -1268,7 +1289,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         // how many of the selected units are under each effect
         const agg = new Map<string, { id: string; v: number; n: number }>();
         for (const u of mine) for (const [id, v] of u.status) agg.set(id, { id, v, n: (agg.get(id)?.n ?? 0) + 1 });
-        side.append(statusList([...agg.values()], false));
+        effects = [...agg.values()];
       }
       if (mine.some((u) => rk[u.rank + 1] && defU.get(u.def)?.kind !== 'air')) {
         side.append(h('div', { class: 'muted' }, `Ranks are earned in combat (${init.ruleset.rules.xpPerKill} XP per kill) or in a Training Centre: right click one with these units selected.`));
@@ -1285,29 +1306,35 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         ),
         h('div', { class: 'muted' }, 'Right click: fastest route (roads in transport mode, bridges over rivers). Shift+right click: add a waypoint. Alt+right click: straight across country.'),
       );
+      renderEffects(effects);
     }
+    if (!selUnits.size || selBuilding !== null) renderEffects(null);
     side.classList.toggle('open', side.childElementCount > 0);
   }
 
-  /** Buffs and debuffs spelled out: icon, name and (for a single unit) exactly what each one does. */
-  function statusList(items: { id: string; v: number; n: number }[], detailed: boolean) {
-    const box = h('div', { class: 'status-list' });
-    if (!items.length) {
-      box.append(h('div', { class: 'muted' }, 'No buffs or debuffs.'));
-      return box;
-    }
+  /**
+   * Buffs and debuffs of the selection: their own small panel left of the description window (where the production queue
+   * goes for buildings). Icon and name only; hovering one shows what it does. Rebuilt only when the set changes.
+   */
+  let effectsKey = '';
+  function renderEffects(items: { id: string; v: number; n: number }[] | null) {
+    const key = items ? items.map((x) => `${x.id}:${x.n}:${x.v.toFixed(2)}`).join('|') : '';
+    if (key === effectsKey && (items ? effectsSlot.childElementCount > 0 : effectsSlot.childElementCount === 0)) return;
+    effectsKey = key;
+    effectsSlot.replaceChildren();
+    if (!items) return;
     items.sort((a, b) => Number(DEBUFFS.has(a.id)) - Number(DEBUFFS.has(b.id)));
+    const box = h('div', { class: 'effects-panel' }, h('div', { class: 'queue-head' }, h('em', {}, 'Effects'), h('span', {}, items.length ? `${items.filter((x) => !DEBUFFS.has(x.id)).length} buffs · ${items.filter((x) => DEBUFFS.has(x.id)).length} debuffs` : 'none')));
     for (const it of items) {
       const good = !DEBUFFS.has(it.id);
       const def = STATUS[it.id];
       const ico = h('span', { class: 'st' });
       ico.innerHTML = statusIconHtml(it.id, good);
-      box.append(
-        h('div', { class: 'status ' + (good ? 'good' : 'bad') }, ico,
-          h('div', {}, h('b', {}, `${def?.name ?? it.id}${it.n > 1 || !detailed ? ` ×${it.n}` : ''}`), detailed || it.n ? h('small', {}, def?.text(it.v) ?? '') : null)),
-      );
+      const row = h('div', { class: 'effect ' + (good ? 'good' : 'bad') }, ico, h('b', {}, def?.name ?? it.id), it.n > 1 ? h('em', {}, `×${it.n}`) : null);
+      describe(row, def?.name ?? it.id, def?.text(it.v) ?? '', it.n > 1 ? [`${it.n} of the selected units`] : [], 'left');
+      box.append(row);
     }
-    return box;
+    effectsSlot.append(box);
   }
 
   function unitIcon(d: UnitDef, rank: number) {
@@ -1361,11 +1388,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function renderHud() {
     if (!init || !snap) return;
     renderUnitHud(unitHud, {
-      snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, fuelPerKm: init.ruleset.rules.fuelPerKm, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
+      orders, snap, me, myTeam: init.team, sel: selUnits, defU, defB, roadMult: init.ruleset.rules.roadSpeedMult, fuelPerKm: init.ruleset.rules.fuelPerKm, pick, send, toast, rerender: render, icon: unitIcon, pos: posOf,
     });
     routeBanner.style.display = pick.route ? 'block' : 'none';
     routeBanner.textContent = pick.route
-      ? pick.route.fromBuilding ? 'Delivery route — step 2: click the building to unload at (Esc cancels)' : 'Delivery route — step 1: click the building to load at (Esc cancels)'
+      ? pick.route.stops.length ? 'Delivery route: click buildings to add stops, the map to add a waypoint, then Start route (Esc cancels)' : 'Delivery route: click the building to load at (Esc cancels)'
       : '';
     mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch || pick.fuel));
   }
@@ -1469,17 +1496,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           if (placing || b.team !== myTeam) return;
           ev.stopPropagation();
           if (pick.route) {
-            // delivery route picking: first the loading site, then the unloading site
-            if (!pick.route.fromBuilding) {
-              pick.route.fromBuilding = b.id;
-              toast(`Loading at ${d.name}. Now click where to unload.`);
-            } else if (pick.route.fromBuilding === b.id) {
-              toast('Pick a different building to unload at', true);
-            } else {
-              send({ type: 'setRoute', unit: pick.route.unitId, fromBuilding: pick.route.fromBuilding, toBuilding: b.id, resType: pick.route.resType });
-              toast(`Delivery route set: → ${d.name}`);
-              pick.route = null;
-            }
+            // delivery route: each building is a stop (the first loads, later ones unload; switch it in the panel)
+            if (pick.route.stops.length >= 6) return toast('A route has at most 6 stops', true);
+            const action = pick.route.stops.some((x) => x.action === 'load') ? 'unload' : 'load';
+            pick.route.stops.push({ action, building: b.id });
+            toast(`${action === 'load' ? 'Load' : 'Unload'} at ${d.name}`);
             return render();
           }
           selBuilding = b.id;
@@ -1501,8 +1522,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const done = b.progress >= 1;
       m.el.classList.toggle('building', !done);
       m.el.classList.toggle('mine', b.team === myTeam);
-      m.el.classList.toggle('route-candidate', !!pick.route && pick.route.fromBuilding !== b.id);
-      m.el.classList.toggle('route-from', pick.route?.fromBuilding === b.id);
+      m.el.classList.toggle('route-candidate', !!pick.route && !pick.route.stops.some((x) => x.building === b.id));
+      m.el.classList.toggle('route-from', !!pick.route?.stops.some((x) => x.building === b.id));
       m.el.classList.toggle('selected', selBuilding === b.id);
       m.el.style.setProperty('--p', String(b.progress));
       m.el.dataset.n = b.inside?.length ? String(b.inside.length) : '';

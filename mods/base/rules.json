@@ -11,5 +11,6 @@
     "infantry",
     "drone"
   ],
-  "minBuildSpacing": 35
+  "minBuildSpacing": 17.5,
+  "fieldWorkSpacing": 0.6
 }
