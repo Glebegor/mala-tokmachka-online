@@ -1938,7 +1938,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const isFriendly = p.team === myTeam;
       const empty = p.garrison.length === 0;
       const title = empty
-        ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога')
+        ? (isFriendly ? 'Прорив / порожній рубіж! Правий клік щоб зайняти гарнізон' : 'Порожній рубіж ворога! Правий клік щоб атакувати рубежем')
         : `Гарнізон рубежу: ${p.garrison.length}/${p.cap}${p.advancing ? ' (Наступ)' : ''}`;
       const innerCls = `post-inner ${isFriendly ? 'friendly' : 'hostile'} ${empty ? 'post-empty' : 'post-occupied'}${p.advancing ? ' advancing' : ''}`;
       const innerHtml = empty
@@ -1949,12 +1949,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           class: 'maplibregl-marker post-marker',
           onClick: (e: MouseEvent) => {
             e.stopPropagation();
-            if (isFriendly && selUnits.size) moveOrder(p.pos, e);
+            const cur = snap.posts?.find((x) => x.id === p.id)?.pos ?? p.pos;
+            if (selUnits.size) moveOrder(cur, e);
           },
           onContextmenu: (e: MouseEvent) => {
             e.preventDefault();
             e.stopPropagation();
-            if (isFriendly && selUnits.size) moveOrder(p.pos, e);
+            const cur = snap.posts?.find((x) => x.id === p.id)?.pos ?? p.pos;
+            if (selUnits.size) moveOrder(cur, e);
           },
         });
         const inner = h('div', { class: innerCls, title });

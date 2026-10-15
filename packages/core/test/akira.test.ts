@@ -275,3 +275,59 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   console.log('bot AI reinforces frontline posts and supplies ammo ok');
 }
 
+// --- marching units peace condition & advance into empty sectors ---
+{
+  const sim = fresh();
+  sim.world.time = rs.rules.peaceSeconds + 1; // outside ceasefire
+  const myPost = sim.world.posts.find((p) => p.team === 0)!;
+  const oppPost = sim.world.posts.find((p) => p.team === 1 && p.nodeIdx === myPost.nodeIdx);
+
+  // 1. Marching unit test: unit en route to myPost (targetPost set) does not fight enemy nearby
+  const marching = sim.spawnUnit('infantry', sim.player('a')!, offsetKm(myPost.pos, 5, 0));
+  marching.targetPost = myPost.id;
+  const enemyNear = sim.spawnUnit('infantry', sim.player('b')!, offsetKm(marching.pos, 0.4, 0));
+  const marchHp0 = marching.hp;
+  const enemyHp0 = enemyNear.hp;
+  run(sim, 2);
+  assert.equal(marching.hp, marchHp0, 'marching unit takes no fire from enemy');
+  assert.equal(enemyNear.hp, enemyHp0, 'marching unit does not fire at enemy');
+  assert.equal(marching.engaged, false, 'marching unit is not engaged');
+
+  // 2. Empty sector advance: when opposing sector has 0 defenders, friendly garrison advances and pushes the front
+  if (oppPost) {
+    // clear opposing garrison
+    for (const id of oppPost.garrison) {
+      const u = sim.world.units.find((x) => x.id === id);
+      if (u) u.hp = 0;
+    }
+    oppPost.garrison = [];
+
+    // Ensure myPost has at least 1 unit with ammo
+    if (myPost.garrison.length === 0) {
+      const u = sim.spawnUnit('infantry', sim.player('a')!, myPost.pos);
+      u.frontPost = myPost.id;
+      u.owner = '__front_0';
+      u.ammo = 100;
+      myPost.garrison.push(u.id);
+    } else {
+      for (const id of myPost.garrison) {
+        const u = sim.world.units.find((x) => x.id === id);
+        if (u) u.ammo = 100;
+      }
+    }
+
+    const frontIdx = myPost.nodeIdx;
+    const frontStart = [sim.world.front[frontIdx].lng, sim.world.front[frontIdx].lat];
+    const postStart = [...myPost.pos];
+    run(sim, 5);
+
+    assert.ok(myPost.advancing, 'garrison advances into empty enemy breach');
+    const postShift = distKm(postStart as any, myPost.pos as any);
+    const frontShift = distKm(frontStart as any, [sim.world.front[frontIdx].lng, sim.world.front[frontIdx].lat] as any);
+    assert.ok(postShift > 0.05, `post visibly advances: shift=${postShift.toFixed(3)}km`);
+    assert.ok(frontShift > 0.05, `frontline is pushed: shift=${frontShift.toFixed(3)}km`);
+  }
+
+  console.log('marching peace & empty sector advance ok');
+}
+

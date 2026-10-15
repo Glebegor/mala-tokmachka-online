@@ -733,7 +733,12 @@ export class Sim {
         const all = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
         const mine = all.filter((u) => u.parkedAt === undefined);
         const hasGround = mine.some((u) => this.defs.u.get(u.def)!.kind !== 'air');
-        const targetPost = w.posts?.find((post) => post.team === p.team && distKm(post.pos, cmd.to) <= 1.8);
+        const targetPost = w.posts?.find((post) => post.team === p.team && distKm(post.pos, cmd.to) <= 3.5)
+          ?? (w.posts?.find((post) => post.team !== p.team && distKm(post.pos, cmd.to) <= 3.5)
+              ? w.posts
+                  .filter((post) => post.team === p.team)
+                  .sort((a, b) => distKm(a.pos, cmd.to) - distKm(b.pos, cmd.to))[0]
+              : undefined);
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
         if (r.frontPosts && hasGround && !targetPost && this.side(cmd.to) !== p.team) return fail('Ground troops cannot cross the front line: reinforce frontline garrisons to push the front');
         if (all.length && !mine.length) return fail('launch it from its launcher (or load it on a pickup)');
@@ -2329,7 +2334,8 @@ export class Sim {
       if ((u.id + w.tick) % r.tickRate === 0) this.resupply(u, d, 1);
       // no rounds left, no shooting
       const perShot = d.ammoPerShot ?? 1;
-      const canFire = (u.suppressedUntil ?? 0) <= w.time && (!d.maxAmmo || (u.ammo ?? 0) >= perShot) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
+      const isHeadingToPost = r.frontPosts && u.targetPost !== undefined;
+      const canFire = !isHeadingToPost && (u.suppressedUntil ?? 0) <= w.time && (!d.maxAmmo || (u.ammo ?? 0) >= perShot) && !peace && u.fireMode !== 'hold' && (u.fireMode !== 'return' || u.hp < this.maxHp(u) - 0.5) && d.damage > 0 && !isStrikeDrone(d);
 
       // artillery barrage on a chosen area (2 s salvos, 1 km blast, a little scatter)
       let barrage = false;
@@ -2366,6 +2372,7 @@ export class Sim {
           let best = range;
           this.near(this.unitGrid, u.pos, range, (e) => {
             if (e.team === u.team || e.hp <= 0 || e.embarkedIn || Math.abs(e.pos[1] - u.pos[1]) > dLat) return;
+            if (r.frontPosts && e.targetPost !== undefined) return;
             const air = this.defs.u.get(e.def)!.kind === 'air';
             // only anti-aircraft weapons engage drones and missiles; anti-aircraft teams engage nothing else
             if (air ? airDamage <= 0 : d.targets === 'air') return;
@@ -2384,6 +2391,7 @@ export class Sim {
           const cands: { d: number; u?: Unit; b?: Building }[] = [];
           this.near(this.unitGrid, u.pos, range, (e) => {
             if (e.team === u.team || e.hp <= 0 || e.embarkedIn || Math.abs(e.pos[1] - u.pos[1]) > dLat || this.defs.u.get(e.def)!.kind === 'air') return;
+            if (r.frontPosts && e.targetPost !== undefined) return;
             const dist = distKm(u.pos, e.pos);
             if (dist >= minR && dist <= range) cands.push({ d: dist, u: e });
           });
@@ -2401,7 +2409,7 @@ export class Sim {
         }
       }
       // a column that runs into the enemy halts and deploys; it drives on once the way is clear
-      const engaged = lookNow ? !!(tu || tb) || barrage : !!u.engaged;
+      const engaged = lookNow && !isHeadingToPost ? !!(tu || tb) || barrage : !!u.engaged && !isHeadingToPost;
       u.engaged = engaged;
       if (!engaged) u.aimKey = undefined; // a gun that loses its target lays again on the next one
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
@@ -2439,12 +2447,16 @@ export class Sim {
         const post = u.post ?? u.pos;
         const leash = u.stance === 'defend' ? 3 : Infinity;
         let chase: LngLat | null = u.chase ?? null;
-        if ((u.id + w.tick) % 4 === 0) {
+        if (isHeadingToPost) {
+          chase = null;
+          u.chase = undefined;
+        } else if ((u.id + w.tick) % 4 === 0) {
           chase = null;
           let near = d.vision * 0.7;
           const airDamage = d.airDamage ?? r.airDamageDefault;
           this.near(this.unitGrid, u.pos, near, (e) => {
             if (e.team === u.team || e.embarkedIn) return;
+            if (r.frontPosts && e.targetPost !== undefined) return;
             // only close with what it can actually hit
             if (this.defs.u.get(e.def)!.kind === 'air' ? airDamage <= 0 : d.targets === 'air') return;
             if (distKm(e.pos, post) > leash) return;
@@ -2480,6 +2492,7 @@ export class Sim {
           let best = range;
           this.near(this.unitGrid, b.pos, range, (e) => {
             if (e.team === b.team || e.hp <= 0 || e.embarkedIn || this.defs.u.get(e.def)!.kind === 'air') return;
+            if (r.frontPosts && e.targetPost !== undefined) return;
             const dist = distKm(b.pos, e.pos);
             if (dist <= best) (best = dist), (tgt = e);
           });
@@ -2505,6 +2518,7 @@ export class Sim {
       let best = a.range;
       this.near(this.unitGrid, b.pos, a.range, (e) => {
         if (e.team === b.team || e.hp <= 0 || e.embarkedIn || e.parkedAt !== undefined) return;
+        if (r.frontPosts && e.targetPost !== undefined) return;
         const air = this.defs.u.get(e.def)!.kind === 'air';
         if ((a.targets === 'air' && !air) || (a.targets === 'ground' && air)) return;
         const dist = distKm(b.pos, e.pos);
@@ -2866,25 +2880,28 @@ export class Sim {
         if (u.fuel <= 0) u.sprint = false;
       }
     }
-    if (!u.path.length) {
-      (u.target = null), (u.cap = 0), (u.transport = false), (u.attackMove = false), (u.post = [u.pos[0], u.pos[1]]);
-      if (u.targetPost !== undefined) {
-        const post = this.world.posts?.find((p) => p.id === u.targetPost);
-        if (post && distKm(u.pos, post.pos) <= 2.0) {
-          if (!post.garrison.includes(u.id) && post.garrison.length < post.cap) {
-            post.garrison.push(u.id);
-            u.frontPost = post.id;
-            u.targetPost = undefined;
-            u.stance = 'defend';
-            u.post = [post.pos[0], post.pos[1]];
-            u.owner = '__front_' + u.team;
-          } else {
-            u.targetPost = undefined;
-          }
+    if (u.targetPost !== undefined) {
+      const post = this.world.posts?.find((p) => p.id === u.targetPost);
+      if (post && distKm(u.pos, post.pos) <= 2.2) {
+        if (!post.garrison.includes(u.id) && post.garrison.length < post.cap) {
+          post.garrison.push(u.id);
+          u.frontPost = post.id;
+          u.targetPost = undefined;
+          u.stance = 'defend';
+          u.post = [post.pos[0], post.pos[1]];
+          u.owner = '__front_' + u.team;
+          u.path = [];
+          u.target = null;
+          u.transport = false;
         } else {
           u.targetPost = undefined;
         }
+      } else if (!u.path.length) {
+        u.targetPost = undefined;
       }
+    }
+    if (!u.path.length) {
+      (u.target = null), (u.cap = 0), (u.transport = false), (u.attackMove = false), (u.post = [u.pos[0], u.pos[1]]);
     } else u.target = u.path[u.path.length - 1].p;
   }
 
@@ -2910,7 +2927,7 @@ export class Sim {
 
     // 2. Autonomous advance when force superiority exists (Requirement 4)
     for (const p of w.posts) {
-      if (p.garrison.length < 2 || peace) {
+      if (peace || p.garrison.length === 0) {
         p.advancing = false;
         continue;
       }
@@ -2923,20 +2940,51 @@ export class Sim {
         if (d.maxAmmo && (u.ammo ?? 0) <= 0) hasAmmo = false;
         friendlyPower += (u.hp / this.maxHp(u)) * d.damage;
       }
+
+      let oppPost = w.posts.find((o) => o.team !== p.team && o.nodeIdx === p.nodeIdx);
+      if (!oppPost) {
+        let bestDist = 6.0;
+        for (const o of w.posts) {
+          if (o.team !== p.team) {
+            const d = distKm(o.pos, p.pos);
+            if (d < bestDist) {
+              bestDist = d;
+              oppPost = o;
+            }
+          }
+        }
+      }
+
       let enemyPower = 0;
-      this.near(this.unitGrid, p.pos, 5.0, (e) => {
+      if (oppPost) {
+        for (const id of oppPost.garrison) {
+          const u = this.unitById.get(id);
+          if (u && u.hp > 0) {
+            const ed = this.defs.u.get(u.def)!;
+            enemyPower += (u.hp / this.maxHp(u)) * ed.damage;
+          }
+        }
+      }
+      this.near(this.unitGrid, p.pos, 2.2, (e) => {
         if (e.team === p.team || e.hp <= 0 || e.embarkedIn || this.defs.u.get(e.def)!.kind === 'air') return;
-        if (distKm(e.pos, p.pos) <= 5.0) {
+        if (e.targetPost !== undefined) return;
+        if (oppPost?.garrison.includes(e.id)) return;
+        if (distKm(e.pos, p.pos) <= 2.2) {
           const ed = this.defs.u.get(e.def)!;
           enemyPower += (e.hp / this.maxHp(e)) * ed.damage;
         }
       });
-      if (hasAmmo && friendlyPower > enemyPower * 1.35) {
+
+      const hasSuperiority = enemyPower === 0
+        ? p.garrison.length >= 1
+        : (p.garrison.length >= 2 && friendlyPower > enemyPower * 1.25);
+
+      if (hasAmmo && hasSuperiority) {
         p.advancing = true;
         const ni = nearestNode(w.front, p.pos);
         const [nx, ny] = normalAt(w.front, ni);
         const dir: [number, number] = p.team === 0 ? [nx, ny] : [-nx, -ny];
-        const step = 0.035 * dt;
+        const step = 0.05 * dt;
         const nextPos = offsetKm(p.pos, dir[0] * step, dir[1] * step);
         const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
         if (isDry(nextPos)) {
@@ -2949,7 +2997,27 @@ export class Sim {
               u.post = [p.pos[0], p.pos[1]];
             }
           }
-          w.front[ni].v += p.team === 0 ? 0.03 : -0.03;
+          const kx = kmPerDegLng(w.front[ni].lat);
+          const dLng = (dir[0] * step) / kx;
+          const dLat = (dir[1] * step) / 111.32;
+          const newFrontLng = w.front[ni].lng + dLng;
+          const newFrontLat = w.front[ni].lat + dLat;
+          if (!this.terrain?.isBarrier([newFrontLng, newFrontLat])) {
+            w.front[ni].lng = newFrontLng;
+            w.front[ni].lat = newFrontLat;
+            w.front[ni].v = p.team === 0 ? 0.08 : -0.08;
+            if (ni > 0 && !this.terrain?.isBarrier([w.front[ni - 1].lng + dLng * 0.4, w.front[ni - 1].lat + dLat * 0.4])) {
+              w.front[ni - 1].lng += dLng * 0.4;
+              w.front[ni - 1].lat += dLat * 0.4;
+            }
+            if (ni < w.front.length - 1 && !this.terrain?.isBarrier([w.front[ni + 1].lng + dLng * 0.4, w.front[ni + 1].lat + dLat * 0.4])) {
+              w.front[ni + 1].lng += dLng * 0.4;
+              w.front[ni + 1].lat += dLat * 0.4;
+            }
+          }
+          if (oppPost && oppPost.garrison.length === 0) {
+            oppPost.pos = offsetKm([w.front[ni].lng, w.front[ni].lat], (p.team === 0 ? nx : -nx) * 0.45, (p.team === 0 ? ny : -ny) * 0.45);
+          }
         }
       } else {
         p.advancing = false;
@@ -3012,7 +3080,7 @@ export class Sim {
         const pwr = ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
         if (u.frontPost !== undefined) {
           const post = w.posts?.find((p) => p.id === u.frontPost);
-          if (post?.advancing) push[u.team] += pwr;
+          if (post?.advancing) push[u.team] += pwr * 3.0;
           else {
             const ammoFactor = ud.maxAmmo && (u.ammo ?? 0) <= 0 ? 0.25 : 1.0;
             holdDef[u.team] += pwr * ammoFactor;
