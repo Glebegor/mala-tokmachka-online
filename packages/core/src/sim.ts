@@ -795,7 +795,7 @@ export class Sim {
         if (ud.railOnly && stops.some((x) => x.action === 'via' || w.buildings.find((b) => b.id === x.building)?.def !== 'rail_station')) return fail('a train only stops at railway stations');
         const loads = stops.filter((x) => x.action === 'load'), unloads = stops.filter((x) => x.action === 'unload');
         if (!loads.length || !unloads.length) return fail('a route needs somewhere to load and somewhere to unload');
-        if (cmd.fromBuilding !== undefined && !cmd.stops?.length && cmd.fromBuilding === cmd.toBuilding) return fail('pick two different buildings of your side');
+        if (new Set([...loads, ...unloads].map((x) => x.building)).size < 2) return fail('pick two different buildings of your side');
         // every stop must keep goods; every unloading stop must take what is carried; tankers carry fuel only
         const want = ud.fuelOnly ? 'fuel' : cmd.resType && cmd.resType !== 'any' ? cmd.resType : null;
         const at = (st: HaulStop) => w.buildings.find((x) => x.id === st.building)!;

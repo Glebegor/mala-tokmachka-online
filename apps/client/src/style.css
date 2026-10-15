@@ -384,3 +384,4 @@ kbd { display: inline-block; padding: 1px 6px; border: 1px solid var(--line); bo
 /* enemy building out of sight: where it was last seen */
 .bm.stale { opacity: .5; filter: saturate(.6); cursor: help; }
 .bm.stale .glyph { border-style: dashed; }
+.hint.idle { display: none; }
