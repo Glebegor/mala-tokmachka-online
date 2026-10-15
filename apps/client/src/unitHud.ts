@@ -10,6 +10,10 @@ export interface Pickers {
   bombard: { unitIds: number[] } | null;
   /** Launch the drones a vehicle carries at the clicked spot. */
   launch: { transport: number } | null;
+  /** Launch craft waiting at a launcher at the clicked spot. */
+  launchFrom?: { building: number; units: number[] } | null;
+  /** Set a production building's rally point with the next map click. */
+  rally?: { building: number } | null;
 }
 
 export interface RouteStop {
@@ -26,6 +30,8 @@ export interface OrderStyle {
 
 export interface HudContext {
   orders: OrderStyle;
+  /** Own drones and missiles waiting at launchers (not on the map). */
+  stored: UnitView[];
   snap: SnapMsg;
   me: string;
   myTeam: 0 | 1;
@@ -87,7 +93,8 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
   if (first.haul) {
     const hl = first.haul;
     const res = hl.resType ? ` [${RES_LABEL[hl.resType] ?? hl.resType}]` : '';
-    if (hl.state === 'loading') lines.push(hl.waiting ? `Waiting for ${hl.minLoad && hl.minLoad > 1 ? `at least ${hl.minLoad}` : 'goods'} to load${res}` : `Loading${res} (${Math.ceil(hl.timer ?? 5)}s)`);
+    if (hl.noTrack) lines.push('No track to the next station: waiting for a connection');
+    else if (hl.state === 'loading') lines.push(hl.waiting ? `Waiting for ${hl.minLoad && hl.minLoad > 1 ? `at least ${hl.minLoad}` : 'goods'} to load${res}` : `Loading${res} (${Math.ceil(hl.timer ?? 5)}s)`);
     else if (hl.state === 'unloading') lines.push(`Unloading${res} (${Math.ceil(hl.timer ?? 4)}s)`);
     else {
       const eta = etaSeconds(first, d0, c.roadMult, c.pos(first));
@@ -194,6 +201,13 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     } }, picking ? 'Cancel' : 'Give fuel…'));
   }
 
+  // 6a. armoured carriers: riders only
+  if (single && !d0.cargoCap && d0.passengerCap) {
+    const riders = first.cargo?.passengers?.length ?? 0;
+    el.append(h('div', { class: 'hud-sec col' }, h('div', { class: 'row' }, h('span', { class: 'hud-line' }, `Riders ${riders}/${d0.passengerCap}`),
+      riders ? h('button', { class: 'hud-btn sm', onClick: () => c.send({ type: 'disembark', transport: first.id }) }, `Dismount (${riders})`) : null)));
+  }
+
   // 6. trucks: delivery route, cargo, passengers
   if (single && d0.cargoCap) {
     const cargo = first.cargo?.res ?? {};
@@ -290,6 +304,15 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     } else el.append(h('div', { class: 'hud-line' }, 'Fits a pickup launcher: bring a pickup within 10 km to load it'));
   }
   if (single && d0.droneCap) {
+    // small drones waiting at a launcher nearby can be taken on board
+    const room = (d0.droneCap ?? 0) - (first.cargo?.drones?.length ?? 0);
+    const near = room > 0 ? c.stored.filter((x) => x.parkedAt !== undefined && c.defU.get(x.def)?.launchable && distKm(x.pos, c.pos(first)) <= 10) : [];
+    if (near.length) {
+      const site = c.snap.buildings.find((b) => b.id === near[0].parkedAt);
+      el.append(h('button', { class: 'hud-btn sm', title: 'Take small drones waiting at the launcher nearby on board', onClick: () => {
+        for (const x of near.slice(0, room)) c.send({ type: 'board', unit: x.id, transport: first.id });
+      } }, `Load from ${c.defB.get(site?.def ?? '')?.name ?? 'launcher'} (${Math.min(room, near.length)})`));
+    }
     const carried = (first.cargo?.drones ?? []).length;
     const picking = c.pick.launch?.transport === first.id;
     el.append(h('div', { class: 'hud-sec col' },

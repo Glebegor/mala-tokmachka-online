@@ -12,5 +12,6 @@
     "drone"
   ],
   "minBuildSpacing": 17.5,
-  "fieldWorkSpacing": 0.6
+  "fieldWorkSpacing": 0.6,
+  "civilSpacing": 5
 }

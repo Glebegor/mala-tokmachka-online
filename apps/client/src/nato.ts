@@ -288,6 +288,17 @@ export function drawNato(spec: NatoSpec, parts: NatoParts = ALL): ImageData {
       g.lineWidth = 1.4;
       g.stroke();
       below += 4.5;
+    } else if (spec.mobility === 'rail') {
+      // rail: a row of small wheels on a line
+      below += 1.5;
+      g.strokeStyle = INK;
+      g.lineWidth = 1.2;
+      g.beginPath();
+      g.moveTo(cx - 12 * squeeze, below - 2.6);
+      g.lineTo(cx + 12 * squeeze, below - 2.6);
+      g.stroke();
+      for (const ox of [-9, -3, 3, 9]) wheel(cx + ox * squeeze, below, fill);
+      below += 4.5;
     } else if (spec.transport) {
       // troops on foot riding in column: three wheels
       below += 1.5;

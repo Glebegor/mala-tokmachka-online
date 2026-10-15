@@ -43,6 +43,10 @@ export interface BuildingDef {
   buildInGrey?: boolean;
   /** Drawn as a line (trenches): length limits in km; cost and build time are per km, cover reaches `defense.radiusKm` from the line. */
   line?: { minKm: number; maxKm: number };
+  /** Launcher: drones and missiles of these kinds wait here and take off from here (airfield: recon; launch site: strike). */
+  launches?: ('recon' | 'strike')[];
+  /** Railway track (a line): joins up with stations and other track within 1.5 km into a network trains run on. */
+  rail?: boolean;
   /** A line that must span barrier water with both ends on your dry ground (bridges). */
   spansWater?: boolean;
   /** Two buildings of this kind must stay this far apart (km), e.g. ore mines. */
@@ -121,6 +125,8 @@ export interface UnitDef {
   ammoCost?: number;
   /** Medic or mechanic: heals friendly units of a kind within the radius (share of max HP per second). */
   heals?: HealDef;
+  /** Runs only on railway track between stations (trains). */
+  railOnly?: boolean;
   /** Can repair cities and buildings. */
   repairs?: boolean;
   cost: ResourceAmounts;
@@ -231,7 +237,8 @@ export interface RulesConfig {
   housingGridMult: number; // housing income on the grid
   cityHousingLimit: number;
   storageCap: number; // per resource, per building (default)
-  fieldWorkSpacing: number; // km between fortifications and other field works
+  fieldWorkSpacing: number; // km: the ground any building takes (military sites need no more)
+  civilSpacing: number; // km between two civil sites (power plants, refineries, stations…)
   startStorage: number; // goods a new building starts with
   greyZoneSeconds: number; // unopposed time behind the front before ground turns grey
   greyZoneSoloKm: number; // "unopposed" = no enemy unit this close
@@ -302,6 +309,7 @@ export const DEFAULT_RULES: RulesConfig = {
   cityHousingLimit: 10,
   storageCap: 30000,
   fieldWorkSpacing: 1.2,
+  civilSpacing: 5,
   startStorage: 500,
   greyZoneSeconds: 10,
   greyZoneSoloKm: 6,
