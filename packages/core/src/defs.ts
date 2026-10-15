@@ -133,6 +133,12 @@ export interface UnitDef {
   railOnly?: boolean;
   /** Can repair cities and buildings. */
   repairs?: boolean;
+  /** Number of combatants in the squad (e.g. 20 for infantry). */
+  squadSize?: number;
+  /** Road speed multiplier override for this unit (e.g. 1.25 for +25% bonus). */
+  roadSpeedMult?: number;
+  /** Ground unit cannot cross front line into enemy territory. */
+  cannotCrossFront?: boolean;
   cost: ResourceAmounts;
   trainTime: number;
   hp: number;

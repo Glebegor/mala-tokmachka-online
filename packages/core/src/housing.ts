@@ -15,7 +15,7 @@ export function generateCityHouses(
 ): CityHouse[] {
   const houses: CityHouse[] = [];
   const count = 10;
-  const minDistKm = 0.055; // At least 55 meters between any two houses (no overlap)
+  const minDistKm = 0.085; // At least 85 meters between any two houses (well dispersed)
   const kmPerLat = 111.32;
   const kmPerLng = 111.32 * Math.cos((pos[1] * Math.PI) / 180);
 
@@ -33,7 +33,7 @@ export function generateCityHouses(
         const a: LngLat = [line[i], line[i + 1]];
         const b: LngLat = [line[i + 2], line[i + 3]];
         const mid: LngLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (distKm(pos, mid) <= 0.8) {
+        if (distKm(pos, mid) <= 1.2) {
           const dx = (b[0] - a[0]) * kmPerLng;
           const dy = (b[1] - a[1]) * kmPerLat;
           nearbyRoads.push({ p: mid, ang: Math.atan2(dy, dx) });
@@ -57,18 +57,18 @@ export function generateCityHouses(
         const seg = nearbyRoads[(i + attempt) % nearbyRoads.length];
         angle = seg.ang;
         const side = (i + attempt) % 2 === 0 ? 1 : -1;
-        const setbackKm = 0.024 + rnd() * 0.015;
-        const alongKm = ((Math.floor((i + attempt) / 2) % 4) - 1.5) * 0.065 + (rnd() - 0.5) * 0.012;
+        const setbackKm = 0.035 + rnd() * 0.025;
+        const alongKm = ((Math.floor((i + attempt) / 2) % 4) - 1.5) * 0.11 + (rnd() - 0.5) * 0.025;
         const offX = alongKm * Math.cos(angle) - side * setbackKm * Math.sin(angle);
         const offY = alongKm * Math.sin(angle) + side * setbackKm * Math.cos(angle);
         cx = seg.p[0] + offX / kmPerLng;
         cy = seg.p[1] + offY / kmPerLat;
       } else {
-        const rKm = 0.045 + rnd() * 0.32;
+        const rKm = 0.08 + rnd() * 0.55;
         const a = rnd() * Math.PI * 2;
         cx = pos[0] + (Math.cos(a) * rKm) / kmPerLng;
         cy = pos[1] + (Math.sin(a) * rKm) / kmPerLat;
-        angle = baseAngle + (rnd() - 0.5) * 0.35;
+        angle = baseAngle + (rnd() - 0.5) * 0.45;
       }
 
       const cand: LngLat = [cx, cy];
@@ -94,7 +94,7 @@ export function generateCityHouses(
     if (!bestPos) {
       // Deterministic ring placement fallback guaranteeing spacing
       const fallbackAngle = (i / count) * Math.PI * 2;
-      const rKm = 0.07 + (i % 2) * 0.06;
+      const rKm = 0.14 + (i % 2) * 0.10;
       bestPos = [
         pos[0] + (Math.cos(fallbackAngle) * rKm) / kmPerLng,
         pos[1] + (Math.sin(fallbackAngle) * rKm) / kmPerLat,
@@ -102,9 +102,9 @@ export function generateCityHouses(
       houseAngle = baseAngle;
     }
 
-    // Footprint dimensions: 50% larger than before
-    const lenKm = (0.028 + rnd() * 0.024) * 1.5;
-    const widKm = (0.014 + rnd() * 0.008) * 1.5;
+    // Footprint dimensions: 50% * 130% = 95% larger than original
+    const lenKm = (0.028 + rnd() * 0.024) * 1.5 * 1.3;
+    const widKm = (0.014 + rnd() * 0.008) * 1.5 * 1.3;
     const hx = lenKm / 2;
     const hy = widKm / 2;
     const bType = (i + Math.floor(rnd() * 4)) % 4;

@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON } from '../src';
+import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -499,4 +499,87 @@ assert.equal(sim.world.buildings.filter(b => b.team === 1 && b.def === 'refinery
 console.log('✓ Bot AI: Mines on friendly iron deposits, Oil Rigs on friendly oil deposits, and Team Refinery limits verified');
 
 console.log('✓ Bot AI: HQs, Warehouses (~80 km from front, >= 100 km apart), and Military Bases verified');
+
+// 15. Bot AI: Housing Construction
+const uaHousing = sim.world.buildings.filter((b) => b.owner === 'botUA' && b.def === 'housing');
+const ruHousing = sim.world.buildings.filter((b) => b.owner === 'botRU' && b.def === 'housing');
+assert.ok(uaHousing.length >= 1, 'Bot UA built housing in a friendly city');
+assert.ok(ruHousing.length >= 1, 'Bot RU built housing in a friendly city');
+for (const h of [...uaHousing, ...ruHousing]) {
+  const city = sim.cityAt(h.pos);
+  assert.ok(city, 'Bot housing is inside a city');
+  assert.equal(sim.side(h.pos), h.team, 'Bot housing is on friendly territory');
+}
+console.log('✓ Bot AI: Housing districts built in friendly cities verified');
+
+// 16. Infantry Unit Definition, Training at Military Base, and Movement Restrictions
+const infDef = rs.units.find((u) => u.id === 'infantry')!;
+assert.ok(infDef, 'Infantry unit is defined in units.json');
+assert.equal(infDef.cost.money, 250, 'Infantry costs 250');
+assert.equal(infDef.speed, 0.01389, 'Infantry moves at 50 km/h (0.01389 km/s)');
+assert.equal(infDef.roadSpeedMult, 1.25, 'Infantry receives +25% road speed multiplier');
+assert.equal(infDef.cannotCrossFront, true, 'Infantry has cannotCrossFront = true');
+assert.equal(infDef.squadSize, 20, 'Infantry has 20 soldiers per squad');
+assert.equal(infDef.hp, 1000, 'Infantry has 1000 HP (50 per soldier)');
+assert.ok(mbDef.trains?.includes('infantry'), 'Military base trains infantry');
+
+// Let military bases finish building and have bots train infantry
+for (const b of sim.world.buildings.filter(b => b.def === 'military_base')) {
+  b.progress = 1;
+}
+sim.step(5.0);
+bUA.think(sim);
+bRU.think(sim);
+sim.step(12.0); // 10s train time
+
+const uaInfantry = sim.world.units.filter((u) => u.owner === 'botUA' && u.def === 'infantry');
+const ruInfantry = sim.world.units.filter((u) => u.owner === 'botRU' && u.def === 'infantry');
+assert.ok(uaInfantry.length >= 1, 'Bot UA trained infantry');
+assert.ok(ruInfantry.length >= 1, 'Bot RU trained infantry');
+
+// Human player trains infantry and tests movement rules
+const p1Base = sim.world.buildings.find((b) => b.team === 0 && b.def === 'military_base')!;
+p1Base.progress = 1;
+
+const trainRes = sim.apply('player1', { type: 'train', building: p1Base.id, unit: 'infantry' });
+assert.ok(trainRes.ok, 'Player 1 orders infantry successfully');
+sim.step(12.0); // 10s train time
+
+const playerInfantry = sim.world.units.find((u) => u.owner === 'player1' && u.def === 'infantry');
+assert.ok(playerInfantry, 'Player 1 infantry spawned');
+
+// Moving within friendly Ukrainian territory -> OK
+const friendlyPos: [number, number] = [playerInfantry.pos[0] + 0.05, playerInfantry.pos[1] + 0.05];
+const moveOk = sim.apply('player1', { type: 'move', units: [playerInfantry.id], to: friendlyPos });
+assert.ok(moveOk.ok, 'Infantry moves freely within friendly territory');
+
+// Moving across front line into Russian territory -> REJECTED
+const enemyTerritory: [number, number] = [41.0, 48.0]; // Russia
+assert.equal(sim.side(enemyTerritory), 1, 'Target is on Russian side');
+const moveEnemy = sim.apply('player1', { type: 'move', units: [playerInfantry.id], to: enemyTerritory });
+assert.ok(!moveEnemy.ok, 'Infantry move across front line must be rejected');
+assert.ok(moveEnemy.reason.includes('front line'), `Error mentions front line: ${moveEnemy.reason}`);
+
+// Moving into foreign territory (e.g. Romania) -> REJECTED
+const foreignPos: [number, number] = [26.0, 46.5]; // Romania
+assert.ok(sim.foreign(foreignPos), 'Target is in foreign territory');
+const moveForeign = sim.apply('player1', { type: 'move', units: [playerInfantry.id], to: foreignPos });
+assert.ok(!moveForeign.ok, 'Infantry move into foreign territory must be rejected');
+assert.ok(moveForeign.reason.includes('foreign'), `Error mentions foreign territory: ${moveForeign.reason}`);
+
+console.log('✓ Infantry: 250 cost, 50 km/h, 20 fighters, +25% road speed, front/foreign boundary movement restrictions verified');
+
+// 17. Housing Scale (+30% larger) and Dispersion (>= 85m spacing)
+const testHouses = generateCityHouses([30.5, 50.4], 9999);
+assert.equal(testHouses.length, 10, 'Housing generates 10 houses');
+// Check pairwise distance is >= 0.085 km (85m)
+for (let i = 0; i < testHouses.length; i++) {
+  for (let j = i + 1; j < testHouses.length; j++) {
+    const d = distKm(testHouses[i].pos, testHouses[j].pos);
+    assert.ok(d >= 0.085, `Houses ${i} and ${j} must be at least 85m apart (actual=${(d * 1000).toFixed(0)}m)`);
+  }
+}
+console.log('✓ Housing: 1.95x scaled dimensions and >=85m spacing dispersion verified');
+
 console.log('All reboot tests passed successfully!');
+

@@ -808,7 +808,14 @@ export class Sim {
                   .sort((a, b) => distKm(a.pos, cmd.to) - distKm(b.pos, cmd.to))[0]
               : undefined);
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
-        if (r.frontPosts && hasGround && !targetPost && this.side(cmd.to) !== p.team) return fail('Ground troops cannot cross the front line: reinforce frontline garrisons to push the front');
+        if (hasGround && this.foreign(cmd.to)) return fail('cannot enter foreign territory');
+        const cannotCross = mine.some((u) => {
+          const ud = this.defs.u.get(u.def);
+          return ud?.cannotCrossFront || ud?.id === 'infantry';
+        });
+        if ((cannotCross || (r.frontPosts && hasGround && !targetPost)) && this.side(cmd.to) !== p.team) {
+          return fail('cannot cross the front line');
+        }
         if (all.length && !mine.length) return fail('launch it from its launcher (or load it on a pickup)');
         if (mine.length && mine.every((u) => this.defs.u.get(u.def)!.railOnly)) return fail('trains only run delivery routes between railway stations');
         for (const u of mine) {
@@ -1235,7 +1242,7 @@ export class Sim {
 
   private ringBoxes: [number, number, number, number][] | null = null;
   /** Inside a neighbouring country nobody fights in? */
-  private foreign(p: LngLat): boolean {
+  foreign(p: LngLat): boolean {
     if (!this.forbidden.length) return false;
     this.ringBoxes ??= this.forbidden.map((r) => [Math.min(...r.map((q) => q[0])), Math.min(...r.map((q) => q[1])), Math.max(...r.map((q) => q[0])), Math.max(...r.map((q) => q[1]))]);
     return this.forbidden.some((r, i) => {
@@ -2938,6 +2945,7 @@ export class Sim {
     }
     const next = moveToward(u.pos, to, budgetKm * mult);
     if (this.foreign(next) && !this.foreign(u.pos)) return false;
+    if ((d.cannotCrossFront || d.id === 'infantry') && this.side(next) !== u.team) return false;
     if (blocked && this.terrain!.isBarrier(next) && !this.terrain!.isBarrier(u.pos) && !this.crossings(u.team).some((x) => this.inCrossing(x, next))) return false;
     u.pos = next;
     return true;
@@ -2947,7 +2955,7 @@ export class Sim {
     // out of fuel: it can still crawl at a fifth of its speed (pushed, towed, coasting) until a tanker comes
     const dry = u.fuel !== undefined && u.fuel <= 0;
     const base = (u.cap ? Math.min(d.speed, u.cap) : d.speed) * (u.sprint && !dry ? 2 : 1) * (dry ? 0.2 : 1);
-    const roadMult = this.ruleset.rules.roadSpeedMult;
+    const roadMult = d.roadSpeedMult ?? (d.mobility === 'foot' || d.id === 'infantry' ? 1.25 : this.ruleset.rules.roadSpeedMult);
     const start: LngLat = [u.pos[0], u.pos[1]];
     let budget = dt;
     for (let guard = 0; budget > 1e-6 && u.path.length && guard < 32; guard++) {
@@ -2961,11 +2969,20 @@ export class Sim {
       if (wp.road || wp.rail) {
         const speed = base * (wp.rail ? 1 : roadMult);
         if (speed * budget >= dist) {
+          if ((d.cannotCrossFront || d.id === 'infantry') && (this.side(wp.p) !== u.team || this.foreign(wp.p))) {
+            u.path = [];
+            break;
+          }
           u.pos = [wp.p[0], wp.p[1]];
           budget -= dist / speed;
           u.path.shift();
         } else {
-          u.pos = moveToward(u.pos, wp.p, speed * budget);
+          const next = moveToward(u.pos, wp.p, speed * budget);
+          if ((d.cannotCrossFront || d.id === 'infantry') && (this.side(next) !== u.team || this.foreign(next))) {
+            u.path = [];
+            break;
+          }
+          u.pos = next;
           budget = 0;
         }
       } else {

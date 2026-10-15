@@ -1,4 +1,4 @@
-import { type BotDifficulty, type Building, distKm, distToFrontKm, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
+import { type BotDifficulty, type Building, distKm, distToFrontKm, inDeposit, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
   'military_base',
@@ -141,6 +141,86 @@ function findBotWarehousePos(sim: Sim, team: Team): LngLat | null {
   return list[0];
 }
 
+/** Finds a location for a housing district inside a friendly-controlled city (max 2 per city) */
+function findBotHousingPos(sim: Sim, team: Team): LngLat | null {
+  const w = sim.world;
+  const limit = sim.ruleset.rules.cityHousingLimit ?? 2;
+
+  // Find friendly cities currently controlled by the team with < limit housing blocks
+  const candidates: { cp: (typeof sim.map.capturePoints)[0]; count: number }[] = [];
+  for (let i = 0; i < sim.map.capturePoints.length; i++) {
+    const cp = sim.map.capturePoints[i];
+    if (w.points[i]?.owner !== team) continue;
+    const count = w.buildings.filter((b) => b.def === 'housing' && sim.inCity(b.pos, cp)).length;
+    if (count < limit) {
+      candidates.push({ cp, count });
+    }
+  }
+
+  if (!candidates.length) return null;
+  candidates.sort((a, b) => a.count - b.count);
+
+  for (const { cp } of candidates) {
+    if (
+      sim.isPlayableGround(cp.pos) &&
+      sim.terrainAt(cp.pos).id !== 'water' &&
+      !sim.foreign(cp.pos) &&
+      !w.buildings.some((b) => b.def === 'housing' && distKm(b.pos, cp.pos) < 0.1) &&
+      sim.cityAt(cp.pos)?.id === cp.id
+    ) {
+      return cp.pos;
+    }
+
+    for (const r of [0.15, 0.3, 0.5, 0.8, 1.2]) {
+      for (let step = 0; step < 8; step++) {
+        const ang = (step * Math.PI) / 4;
+        const cand = offsetKm(cp.pos, Math.cos(ang) * r, Math.sin(ang) * r);
+        if (
+          sim.isPlayableGround(cand) &&
+          sim.terrainAt(cand).id !== 'water' &&
+          !sim.foreign(cand) &&
+          sim.cityAt(cand)?.id === cp.id &&
+          !w.buildings.some((b) => b.def === 'housing' && distKm(b.pos, cand) < 0.1)
+        ) {
+          return cand;
+        }
+      }
+    }
+  }
+
+  return null;
+}
+
+/** Finds a valid placement for a mine or oil rig on an authentic resource deposit */
+function findBotDepositPos(sim: Sim, team: Team, type: 'iron' | 'oil'): LngLat | null {
+  const deposits = (sim.deposits ?? []).filter((d) => d.type === type && d.team === team);
+  if (!deposits.length) return null;
+
+  const bDef = sim.defs.b.get(type === 'iron' ? 'mine' : 'oil_rig');
+  if (!bDef) return null;
+
+  const shuffled = [...deposits].sort(() => Math.random() - 0.5);
+
+  for (const dep of shuffled) {
+    const spots: LngLat[] = [dep.center];
+    for (let i = 0; i < 16; i++) {
+      const ang = Math.random() * Math.PI * 2;
+      const r = Math.random() * (dep.radiusKm * 0.65);
+      spots.push(offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r));
+    }
+
+    for (const spot of spots) {
+      if (!inDeposit(type, spot, team, sim.deposits)) continue;
+      if (!sim.isPlayableGround(spot) || sim.terrainAt(spot).id === 'water') continue;
+      if (sim.side(spot) !== team) continue;
+      const clash = sim.world.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, spot) < sim.spacingBetween(bDef, x.def, false));
+      if (!clash) return spot;
+    }
+  }
+
+  return null;
+}
+
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
 export class Bot {
   private step = 0;
@@ -169,7 +249,7 @@ export class Bot {
   private build(sim: Sim, p: Player) {
     const w = sim.world;
     const mine = w.buildings.filter((b) => b.owner === p.id);
-    if (mine.filter((b) => b.progress < 1).length >= 2) return;
+    if (mine.filter((b) => b.progress < 1).length >= 3) return;
     const hq = mine.find((b) => b.def === 'hq');
     if (!hq) {
       const hqPos = findBotHqPos(sim, p.team);
@@ -189,12 +269,27 @@ export class Bot {
       }
     }
 
-    // Build military bases across team territory, prioritizing 20-80 km from front
+    // Build military base (up to 1 per bot, provides troop training)
     const mbDef = sim.defs.b.get('military_base');
     if (mbDef && sim.canPay(p, mbDef.cost)) {
-      const pos = findBotMilitaryBasePos(sim, p.team);
-      if (pos) {
-        sim.apply(p.id, { type: 'build', def: 'military_base', pos });
+      const myBases = mine.filter((b) => b.def === 'military_base');
+      if (myBases.length < 1) {
+        const pos = findBotMilitaryBasePos(sim, p.team);
+        if (pos) {
+          sim.apply(p.id, { type: 'build', def: 'military_base', pos });
+        }
+      }
+    }
+
+    // Build housing districts (up to 2 per city, provides passive income)
+    const houseDef = sim.defs.b.get('housing');
+    if (houseDef && sim.canPay(p, houseDef.cost)) {
+      const myHousing = mine.filter((b) => b.def === 'housing');
+      if (myHousing.length < 2) {
+        const hPos = findBotHousingPos(sim, p.team);
+        if (hPos) {
+          sim.apply(p.id, { type: 'build', def: 'housing', pos: hPos });
+        }
       }
     }
 
@@ -203,15 +298,9 @@ export class Bot {
     if (mineDef && sim.canPay(p, mineDef.cost)) {
       const myMines = mine.filter((b) => b.def === 'mine');
       if (myMines.length < 1) {
-        const ironDeposits = (sim.deposits ?? []).filter((d) => d.type === 'iron' && d.team === p.team);
-        if (ironDeposits.length) {
-          const dep = ironDeposits[Math.floor(Math.random() * ironDeposits.length)];
-          const ang = Math.random() * Math.PI * 2;
-          const r = Math.random() * (dep.radiusKm * 0.55);
-          const spot = offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r);
-          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
-            sim.apply(p.id, { type: 'build', def: 'mine', pos: spot });
-          }
+        const spot = findBotDepositPos(sim, p.team, 'iron');
+        if (spot) {
+          sim.apply(p.id, { type: 'build', def: 'mine', pos: spot });
         }
       }
     }
@@ -221,15 +310,9 @@ export class Bot {
     if (oilDef && sim.canPay(p, oilDef.cost)) {
       const myRigs = mine.filter((b) => b.def === 'oil_rig');
       if (myRigs.length < 1) {
-        const oilDeposits = (sim.deposits ?? []).filter((d) => d.type === 'oil' && d.team === p.team);
-        if (oilDeposits.length) {
-          const dep = oilDeposits[Math.floor(Math.random() * oilDeposits.length)];
-          const ang = Math.random() * Math.PI * 2;
-          const r = Math.random() * (dep.radiusKm * 0.55);
-          const spot = offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r);
-          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
-            sim.apply(p.id, { type: 'build', def: 'oil_rig', pos: spot });
-          }
+        const spot = findBotDepositPos(sim, p.team, 'oil');
+        if (spot) {
+          sim.apply(p.id, { type: 'build', def: 'oil_rig', pos: spot });
         }
       }
     }
@@ -264,9 +347,15 @@ export class Bot {
     const mySide = p.team === 0 ? 'ua' : 'ru';
     const count = (id: string) => w.units.filter((u) => u.owner === p.id && u.def === id).length;
     for (const b of w.buildings) {
-      // factories are shared by the team; the barracks a bot uses are its own
+      // factories are shared by the team; the barracks/base a bot uses are its own
       if (b.team !== p.team || b.progress < 1 || !sim.usable(b, p.id) || (b.owner !== p.id && b.def !== 'machine_factory' && b.def !== 'drone_factory' && b.def !== 'missile_factory')) continue;
       const d = sim.defs.b.get(b.def)!;
+      if (b.def === 'military_base') {
+        if ((p.res.money ?? 0) >= 250 && count('infantry') < 8 && !w.queue.some((q) => q.building === b.id)) {
+          sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+        }
+        continue;
+      }
       if (b.def === 'machine_factory') {
         // a small logistics fleet: trucks for ore, metal, ammo, a tanker, a rescue crew
         const want = count('truck') < (w.buildings.some((x) => x.owner === p.id && x.def === 'ammo_factory') ? 4 : 2) ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : count('mechanic') < 1 ? 'mechanic' : null;

@@ -89,6 +89,9 @@ h2, h3 { margin: 0 0 6px; font-weight: 600; letter-spacing: .04em; }
 .bm.bm-housing .ring { display: none; }
 .bm.bm-housing .blueprint { inset: -2px; }
 .bm.bm-housing .bld-house-ico { width: 75%; height: 75%; }
+.bm.bm-refinery .bld-refinery-ico { width: 78%; height: 78%; }
+.bld .bld-refinery-ico,
+.bld .bld-house-ico { width: 20px; height: 20px; display: inline-block; vertical-align: middle; }
 @keyframes pulse { from { transform: scale(1); opacity: 1; } to { transform: scale(3.2); opacity: 0; } }
 @keyframes drop { from { transform: scale(.2); opacity: 0; } }
 @keyframes bp { 0%, 100% { transform: scale(.9); } 50% { transform: scale(1.15); } }

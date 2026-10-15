@@ -1,1 +1,22 @@
-[]
+[
+  {
+    "id": "infantry",
+    "name": "Пехота",
+    "description": "Отделение пехоты (20 бойцов). Перемещается по своей территории, не может пересекать линию фронта и границы других государств. Бонус скорости по дорогам +25%.",
+    "kind": "ground",
+    "cost": {
+      "money": 250
+    },
+    "trainTime": 10,
+    "hp": 1000,
+    "speed": 0.01389,
+    "roadSpeedMult": 1.25,
+    "cannotCrossFront": true,
+    "squadSize": 20,
+    "range": 1.5,
+    "damage": 50,
+    "vision": 8,
+    "mobility": "foot",
+    "symbol": "infantry"
+  }
+]

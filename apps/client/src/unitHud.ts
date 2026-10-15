@@ -125,7 +125,7 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
   el.append(
     h('div', { class: 'hud-sec' },
       single ? c.icon(d0, first.rank) : null,
-      h('div', {}, h('div', { class: 'hud-title' }, single ? d0.name : `${list.length} units`), ...lines.map((t) => h('div', { class: 'hud-line' }, t))),
+      h('div', {}, h('div', { class: 'hud-title' }, single ? (d0.squadSize ? `${d0.name} (${d0.squadSize} бойцов)` : d0.name) : `${list.length} units`), ...lines.map((t) => h('div', { class: 'hud-line' }, t))),
     ),
   );
 

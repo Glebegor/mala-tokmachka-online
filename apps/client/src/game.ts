@@ -180,8 +180,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         if (poly && !inPolygon([cx, cy], poly)) continue;
       }
 
-      const lenKm = (0.028 + rnd() * 0.024) * 1.5;
-      const widKm = (0.014 + rnd() * 0.008) * 1.5;
+      const lenKm = (0.028 + rnd() * 0.024) * 1.5 * 1.3;
+      const widKm = (0.014 + rnd() * 0.008) * 1.5 * 1.3;
       const hx = lenKm / 2;
       const hy = widKm / 2;
       const bType = Math.floor(rnd() * 4);
@@ -461,9 +461,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (d.maxPerPlayer) f.push(`Limit ${d.maxPerPlayer} per player`);
     return f;
   }
+  const REFINERY_SVG = `<svg class="bld-refinery-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M2 20h20v1.5H2z"/><path d="M4 8h3v11H4z"/><path d="M5 4.5h1v3.5H5z"/><path d="M8.5 6h4v13h-4z"/><path d="M9.5 3.5h2v2.5h-2z"/><path d="M7 10h1.5v1.5H7z"/><path d="M7 14h1.5v1.5H7z"/><path d="M12.5 11h2v1.5h-2z"/><path d="M14.5 9.5h6v9.5h-6z"/><path d="M15 9c0-.9 1.1-1.6 2.5-1.6s2.5.7 2.5 1.6z"/><path d="M17.5 4.5l2-1v4h-2z"/></svg>`;
+
   function unitFacts(u: UnitDef): string[] {
     const air = u.airDamage ?? init?.ruleset.rules.airDamageDefault ?? 0.25;
     const extra: string[] = [];
+    if (u.squadSize) extra.push(`Отряд: ${u.squadSize} бойцов`);
+    if (u.cannotCrossFront) extra.push('Перемещение только по своей территории (без пересечения фронта и границ)');
     if (u.minRange) extra.push(`Indirect fire ${u.minRange}–${u.range} km, needs a spotter`);
     if (u.cargoCap) extra.push(`${u.fuelOnly ? 'Fuel tank' : 'Cargo'} ${u.cargoCap}${u.passengerCap ? ` · carries ${u.passengerCap} infantry` : ''}`);
     if (u.maxAmmo) extra.push(`Ammo ${u.maxAmmo} rounds, ${u.ammoPerShot ?? 1} per shot (${Math.floor(u.maxAmmo / (u.ammoPerShot ?? 1))} shots); refill costs ${u.ammoCost ?? 1} ammo a round; cannot fire with fewer than ${u.ammoPerShot ?? 1} left`);
@@ -475,10 +479,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (u.heals) extra.push(`Heals ${u.heals.targets === 'foot' ? 'troops on foot' : 'vehicles'} within ${u.heals.radiusKm} km: ${Math.round(u.heals.perSecond * 100)}% a second, once out of the fight for 10 s`);
     if (u.droneCap) extra.push(`Launcher for ${u.droneCap} small drones`);
     if (u.side) extra.push(`${u.side === 'ua' ? 'Ukraine' : 'Russia'} only`);
+    const roadMult = u.roadSpeedMult ?? init?.ruleset.rules.roadSpeedMult ?? 1;
+    const bonusPct = Math.round((roadMult - 1) * 100);
+    const speedKmH = Math.round(u.speed * 3600);
     return [
       ...extra,
       `${u.hp} HP · ${u.damage} dmg/s · range ${u.range} km`,
-      `Speed ${(u.speed * 60).toFixed(1)} km/min${u.kind === 'air' ? ' (flies)' : ` · ${u.mobility ?? 'foot'}, ×${init?.ruleset.rules.roadSpeedMult ?? 1} on roads`}`,
+      `Скорость: ${speedKmH} км/ч (${(u.speed * 60).toFixed(1)} км/мин)${u.kind === 'air' ? ' (по воздуху)' : ` · ${u.mobility ?? 'пешком'}, +${bonusPct}% по дорогам`}`,
       `Sees ${u.vision} km · ${air ? `${Math.round(air * 100)}% damage vs aircraft` : 'cannot hit aircraft'}`,
       `Training ${u.trainTime}s`,
     ];
@@ -1718,7 +1725,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               startPlacing(b);
             }
           },
-            h('span', { class: 'ico' }, b.icon),
+            b.id === 'refinery'
+              ? h('span', { class: 'ico', innerHTML: REFINERY_SVG })
+              : b.id === 'housing'
+                ? h('span', { class: 'ico', innerHTML: `<svg class="bld-house-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>` })
+                : h('span', { class: 'ico' }, b.icon),
             h('span', { class: 'meta' }, h('b', {}, b.name), isBuiltHq ? h('span', { class: 'muted' }, 'Построен (клик)') : reachedLimit ? h('span', { class: 'muted' }, 'Лимит') : costHtml(b.cost, snap?.res)),
           );
         describe(btn, b.name, b.description, buildingFacts(b), 'right');
@@ -2326,6 +2337,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
         if (b.def === 'housing') {
           el.querySelector('.glyph')!.innerHTML = `<svg class="bld-house-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`;
+        } else if (b.def === 'refinery') {
+          el.querySelector('.glyph')!.innerHTML = REFINERY_SVG;
         } else {
           el.querySelector('.glyph')!.textContent = d.icon;
         }
@@ -2389,6 +2402,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         el.innerHTML = `<div class="blueprint"></div><svg class="ring" viewBox="0 0 36 36"><circle cx="18" cy="18" r="16" /></svg><div class="glyph"></div><div class="qbar"><i></i></div>`;
         if (b.def === 'housing') {
           el.querySelector('.glyph')!.innerHTML = `<svg class="bld-house-ico" viewBox="0 0 24 24" fill="currentColor"><path d="M10 20v-6h4v6h5v-8h3L12 3 2 12h3v8z"/></svg>`;
+        } else if (b.def === 'refinery') {
+          el.querySelector('.glyph')!.innerHTML = REFINERY_SVG;
         } else {
           el.querySelector('.glyph')!.textContent = defB.get(b.def)?.icon ?? '?';
         }
