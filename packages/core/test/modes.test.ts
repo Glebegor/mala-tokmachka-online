@@ -857,3 +857,23 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(u.status.some(([id]) => id === 'crowded'), 'shown as crowded');
   console.log(`crowding ok: ${u.crowd} together → ×${sim.crowdDealt(u).toFixed(2)} dealt, ×${sim.crowdTaken(u).toFixed(2)} taken`);
 }
+
+// --- medics and mechanics work only out of the fight ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!, b = sim.player('b')!;
+  const hq = hqOf(sim, 'a');
+  const at = offsetKm(hq.pos, 22, 0);
+  const inf = sim.spawnUnit('infantry', a, at);
+  inf.hp = 40;
+  inf.fireMode = 'hold';
+  const medic = sim.spawnUnit('medic', a, offsetKm(at, 0.5, 0));
+  const foe = sim.spawnUnit('infantry', b, offsetKm(medic.pos, 2.5, 0)); // within 3 km of the medic
+  (foe.fireMode = 'hold'), (foe.hp = 1e6);
+  run(sim, 5);
+  assert.equal(inf.hp, 40, 'an enemy close by: the medic does not work');
+  foe.hp = 0;
+  run(sim, 5);
+  assert.ok(inf.hp > 40, 'once it is gone, healing starts');
+  console.log('healers out of the fight ok');
+}

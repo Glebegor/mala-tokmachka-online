@@ -147,7 +147,7 @@
       "perSecond": 0.02,
       "targets": "foot"
     },
-    "description": "Combat medics: troops on foot within 2 km get back 2% of their strength a second once they have been out of the fight for 10 s. Unarmed.",
+    "description": "Combat medics: troops on foot within 2 km get back 2% of their strength a second once they have been out of the fight for 10 s. Unarmed. Works only out of the fight: not under fire for 10 s and no enemy ground troops within 3 km.",
     "maxAmmo": 0
   },
   {
@@ -281,7 +281,7 @@
     "maxFuel": 100,
     "airDamage": 0,
     "repairs": true,
-    "description": "Repairs: inside a city it restores the city and its housing; outside it patches buildings within 2 km. Nothing can be repaired within 60 s of being hit.",
+    "description": "Repairs: inside a city it restores the city and its housing; outside it patches buildings within 2 km. Nothing can be repaired within 60 s of being hit. Works only out of the fight: not under fire for 10 s and no enemy ground troops within 3 km.",
     "maxAmmo": 0
   },
   {
@@ -310,7 +310,7 @@
       "perSecond": 0.02,
       "targets": "vehicle"
     },
-    "description": "Recovery and repair crew: tanks, artillery and other vehicles within 2 km get back 2% of their strength a second once they have been out of the fight for 10 s. Unarmed.",
+    "description": "Recovery and repair crew: tanks, artillery and other vehicles within 2 km get back 2% of their strength a second once they have been out of the fight for 10 s. Unarmed. Works only out of the fight: not under fire for 10 s and no enemy ground troops within 3 km.",
     "maxAmmo": 0
   },
   {
