@@ -2,6 +2,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
+import { Bot } from '../../../services/game/src/application/bot';
 import { distKm, offsetKm, Sim, type LngLat } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
@@ -225,9 +226,52 @@ const hqOf = (sim: Sim, who: string) => sim.world.buildings.find((b) => b.owner 
   run(sim, 2);
   assert.ok(myPost.advancing, 'post is advancing on force superiority');
 
+  // regular ground troops cannot receive orders into enemy territory
+  const hq = hqOf(sim, 'a');
+  const enemyCity = sim.map.capturePoints.find((cp, i) => sim.world.points[i].owner === 1)!;
+  const regularTroop = sim.spawnUnit('infantry', a, offsetKm(hq.pos, 5, 0));
+  const badOrder = sim.apply('a', { type: 'move', units: [regularTroop.id], to: enemyCity.pos });
+  assert.equal(badOrder.ok, false, 'ground troops cannot cross the front line');
+  assert.match(badOrder.reason, /Ground troops cannot cross the front line/);
+
   // no posts in water region (Kherson / Kakhovka reservoir)
   const waterPosts = sim.world.posts.filter((p) => p.pos[0] < 35.3 && p.pos[1] < 47.75);
   assert.equal(waterPosts.length, 0, 'no posts spawned along the Dnipro water line / Kherson water region');
 
   console.log('frontline garrisons & line holding ok');
 }
+
+// --- bot AI: reinforces friendly frontline posts, supplies ammo to depots, never marches ground troops into enemy territory ---
+{
+  const sim = fresh();
+  const bot = new Bot('a', 'normal');
+  const hq = hqOf(sim, 'a');
+  const myPost = sim.world.posts.find((p) => p.team === 0)!;
+  myPost.garrison = []; // empty post that needs reinforcement
+
+  // Bot army unit: idle ground unit
+  const squad = sim.spawnUnit('infantry', sim.player('a')!, offsetKm(hq.pos, 5, 0));
+  assert.equal(squad.targetPost, undefined);
+
+  // Advance time past bot think interval
+  sim.world.time = 10;
+  bot.think(sim);
+
+  // The squad should be ordered to reinforce a friendly post
+  assert.ok(squad.targetPost !== undefined, 'bot dispatches idle squad to reinforce friendly post');
+  const targetPost = sim.world.posts.find((p) => p.id === squad.targetPost);
+  assert.equal(targetPost?.team, 0, 'target post is friendly');
+
+  // Verify logistics: truck routes ammo to ammo_depot
+  const fac = place(sim, 'a', 'ammo_factory', hq.pos, 36);
+  const depot = place(sim, 'a', 'ammo_depot', myPost.pos, 0, 10);
+  const truck = sim.spawnUnit('truck', sim.player('a')!, fac.pos);
+  // Advance time past think interval
+  sim.world.time += 10;
+  bot.think(sim);
+  assert.ok(truck.haul, 'bot assigns haul route to truck');
+  assert.equal(truck.haul.resType, 'ammo', 'truck is assigned to transport ammo');
+
+  console.log('bot AI reinforces frontline posts and supplies ammo ok');
+}
+

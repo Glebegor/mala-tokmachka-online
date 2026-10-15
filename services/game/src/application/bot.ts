@@ -1,8 +1,8 @@
 import { type BotDifficulty, type Building, distKm, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
-  'power_plant', 'housing', 'machine_factory', 'mine', 'drone_factory', 'launch_site', 'metalworks', 'oil_refinery', 'trench', 'gas_station', 'housing',
-  'signal_station', 'antiair', 'airfield', 'training_center', 'bunker', 'housing', 'trench', 'warehouse', 'bunker', 'ammo_factory', 'ammo_depot', 'missile_factory', 'ammo_depot',
+  'power_plant', 'housing', 'machine_factory', 'mine', 'metalworks', 'ammo_factory', 'ammo_depot', 'drone_factory', 'launch_site', 'oil_refinery', 'trench', 'gas_station', 'housing',
+  'signal_station', 'antiair', 'ammo_depot', 'airfield', 'training_center', 'bunker', 'housing', 'trench', 'warehouse', 'bunker', 'missile_factory', 'ammo_depot',
 ];
 
 /** A deliberately simple opponent: builds economy, fortifies, trains a mixed army and pushes the nearest enemy point. */
@@ -82,8 +82,8 @@ export class Bot {
       if (b.team !== p.team || b.progress < 1 || !sim.usable(b, p.id) || (b.owner !== p.id && b.def !== 'machine_factory' && b.def !== 'drone_factory' && b.def !== 'missile_factory')) continue;
       const d = sim.defs.b.get(b.def)!;
       if (b.def === 'machine_factory') {
-        // a small logistics fleet: trucks for ore and metal, a tanker, a rescue crew
-        const want = count('truck') < (w.buildings.some((x) => x.owner === p.id && x.def === 'ammo_factory') ? 3 : 2) ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : count('mechanic') < 1 ? 'mechanic' : null;
+        // a small logistics fleet: trucks for ore, metal, ammo, a tanker, a rescue crew
+        const want = count('truck') < (w.buildings.some((x) => x.owner === p.id && x.def === 'ammo_factory') ? 4 : 2) ? 'truck' : count('fuel_truck') < 1 ? 'fuel_truck' : count('rescuers') < 1 ? 'rescuers' : count('mechanic') < 1 ? 'mechanic' : null;
         if (want && !w.queue.some((q) => q.building === b.id)) sim.apply(p.id, { type: 'train', building: b.id, unit: want });
         continue;
       }
@@ -115,19 +115,26 @@ export class Bot {
     }
   }
 
-  /** Keep the supply chain moving: ore to the metal works, metal and fuel to the bases. */
+  /** Keep the supply chain moving: ore to the metal works, metal to ammo factory and base, ammo to depots. */
   private logistics(sim: Sim, p: Player) {
     const w = sim.world;
     const own = (def: string) => w.buildings.filter((b) => b.team === p.team && b.def === def && b.progress >= 1);
     const nearest = (from: Building, list: Building[]) => list.sort((a, b) => distKm(a.pos, from.pos) - distKm(b.pos, from.pos))[0];
-    const route = (u: Unit, from?: Building, to?: Building, res?: string) => from && to && sim.apply(p.id, { type: 'setRoute', unit: u.id, fromBuilding: from.id, toBuilding: to.id, resType: res });
+    const route = (u: Unit, from?: Building, to?: Building, res?: string) => from && to && sim.apply(p.id, { type: 'setRoute', unit: u.id, fromBuilding: from.id, toBuilding: to.id, resType: res, minLoad: 1 });
     const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul);
     const mines = own('mine'), works = own('metalworks'), bases = own('hq'), refineries = own('oil_refinery');
     const ammo = own('ammo_factory'), depots = own('ammo_depot');
     trucks.forEach((u, i) => {
-      if (i % 3 === 2 && ammo[0] && depots.length) route(u, ammo[0], depots[Math.floor(Math.random() * depots.length)], 'ammo');
-      else if (i % 2 === 0 && mines[0] && works[0]) route(u, mines[0], nearest(mines[0], works), 'ore');
-      else if (works[0] && bases[0]) route(u, works[0], nearest(works[0], bases), 'metal');
+      if (works[0] && ammo[0] && (ammo[0].storage?.metal ?? 0) < 100 && i % 3 === 0) {
+        route(u, works[0], ammo[0], 'metal');
+      } else if (ammo[0] && depots.length && (i % 2 === 1 || depots.some((d) => (d.storage?.ammo ?? 0) < 3000))) {
+        const needyDepot = [...depots].sort((a, b) => (a.storage?.ammo ?? 0) - (b.storage?.ammo ?? 0))[0];
+        route(u, ammo[0], needyDepot, 'ammo');
+      } else if (i % 2 === 0 && mines[0] && works[0]) {
+        route(u, mines[0], nearest(mines[0], works), 'ore');
+      } else if (works[0] && bases[0]) {
+        route(u, works[0], nearest(works[0], bases), 'metal');
+      }
     });
     for (const u of w.units.filter((x) => x.owner === p.id && x.def === 'fuel_truck' && !x.haul)) {
       const target = own('gas_station')[0] ?? bases[0];
@@ -142,7 +149,7 @@ export class Bot {
   private command(sim: Sim, p: Player) {
     const w = sim.world;
     this.logistics(sim, p);
-    const army = w.units.filter((u) => u.owner === p.id && sim.defs.u.get(u.def)!.kind !== 'air' && !sim.defs.u.get(u.def)!.cargoCap && !sim.defs.u.get(u.def)!.repairs);
+    const army = w.units.filter((u) => u.owner === p.id && u.frontPost === undefined && sim.defs.u.get(u.def)!.kind !== 'air' && !sim.defs.u.get(u.def)!.cargoCap && !sim.defs.u.get(u.def)!.repairs);
     const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchor: LngLat = hq?.pos ?? sim.map.center;
@@ -175,20 +182,47 @@ export class Bot {
       }
     }
 
-    const idle = army.filter((u) => !u.target);
+    const idle = army.filter((u) => !u.target && u.targetPost === undefined);
     if (!idle.length) return;
     // route planning is the costly part: re-order the army at most every 8 s
     if (w.time - this.lastArmyOrder < 8) return;
     this.lastArmyOrder = w.time;
-    if (army.length >= this.attackSize && enemyPoints.length) {
-      const goal = enemyPoints.reduce((a, b) => (distKm(a.pos, anchor) < distKm(b.pos, anchor) ? a : b));
-      sim.apply(p.id, { type: 'move', units: idle.map((u) => u.id), to: goal.pos, cohesion: true });
-    } else {
-      // rally just behind the front
-      const front = w.front[nearestNode(w.front, anchor)];
-      const rally = moveToward([front.lng, front.lat], anchor, 6);
-      const far = idle.filter((u) => distKm(u.pos, rally) > 4);
-      if (far.length) sim.apply(p.id, { type: 'move', units: far.map((u) => u.id), to: rally });
+
+    // Bot ground army: reinforce frontline garrisons. If all posts are at capacity, hold in reserve behind the front.
+    if (w.posts?.length) {
+      const myPosts = w.posts.filter((post) => post.team === p.team);
+      const availablePosts = myPosts.filter((post) => {
+        const headingThere = army.filter((x) => x.targetPost === post.id).length;
+        return post.garrison.length + headingThere < post.cap;
+      });
+
+      if (availablePosts.length) {
+        for (const u of idle) {
+          const target = availablePosts.find((post) => {
+            const headingThere = army.filter((x) => x.targetPost === post.id).length;
+            return post.garrison.length + headingThere < post.cap;
+          }) ?? availablePosts[0];
+          if (target) {
+            sim.apply(p.id, { type: 'move', units: [u.id], to: target.pos });
+          }
+        }
+        return;
+      }
+
+      // All friendly posts are at full capacity: rally unassigned troops behind the front as tactical reserve
+      const nearestPost = myPosts.sort((a, b) => distKm(a.pos, anchor) - distKm(b.pos, anchor))[0];
+      if (nearestPost) {
+        const reservePos = moveToward(nearestPost.pos, anchor, 3.5);
+        const far = idle.filter((u) => distKm(u.pos, reservePos) > 3.0);
+        if (far.length) sim.apply(p.id, { type: 'move', units: far.map((u) => u.id), to: reservePos });
+      }
+      return;
     }
+
+    // Fallback when no posts exist: rally just behind the front
+    const front = w.front[nearestNode(w.front, anchor)];
+    const rally = moveToward([front.lng, front.lat], anchor, 6);
+    const far = idle.filter((u) => distKm(u.pos, rally) > 4);
+    if (far.length) sim.apply(p.id, { type: 'move', units: far.map((u) => u.id), to: rally });
   }
 }

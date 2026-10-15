@@ -732,10 +732,12 @@ export class Sim {
         const set = new Set(cmd.units);
         const all = w.units.filter((u) => set.has(u.id) && u.owner === p.id && !u.embarkedIn);
         const mine = all.filter((u) => u.parkedAt === undefined);
+        const hasGround = mine.some((u) => this.defs.u.get(u.def)!.kind !== 'air');
+        const targetPost = w.posts?.find((post) => post.team === p.team && distKm(post.pos, cmd.to) <= 1.8);
         if (this.peaceLeft() > 0 && this.side(cmd.to) !== p.team) return fail('ceasefire: nobody may cross the front yet');
+        if (r.frontPosts && hasGround && !targetPost && this.side(cmd.to) !== p.team) return fail('Ground troops cannot cross the front line: reinforce frontline garrisons to push the front');
         if (all.length && !mine.length) return fail('launch it from its launcher (or load it on a pickup)');
         if (mine.length && mine.every((u) => this.defs.u.get(u.def)!.railOnly)) return fail('trains only run delivery routes between railway stations');
-        const targetPost = w.posts?.find((post) => post.team === p.team && distKm(post.pos, cmd.to) <= 1.8);
         for (const u of mine) {
           (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false);
           if (targetPost) {
@@ -1173,7 +1175,15 @@ export class Sim {
   private planLeg(team: Team, from: LngLat, to: LngLat, speed: number, cross: { pos: LngLat; r: number; line?: [LngLat, LngLat] }[], direct: boolean): { wps: Waypoint[]; sec: number } | null {
     const off = speed * 0.85; // rough cross-country average, terrain is applied for real while moving
     const isFriendlyDest = this.side(to) === team;
-    const clear = (a: LngLat, b: LngLat) => this.lineClear(a, b, cross) && (!isFriendlyDest || this.side(b) === team || distKm(b, to) <= 1.0);
+    const clear = (a: LngLat, b: LngLat) => {
+      if (!this.lineClear(a, b, cross)) return false;
+      if (isFriendlyDest) {
+        if (this.side(b) !== team && distKm(b, to) > 1.2) return false;
+        const mid: LngLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
+        if (this.side(mid) !== team && distKm(mid, to) > 1.2 && distKm(mid, from) > 1.2) return false;
+      }
+      return true;
+    };
     const open = clear(from, to);
     const straight = open ? distKm(from, to) / off : Infinity;
     if (open && (direct || straight < 60)) return { wps: [{ p: to, road: false }], sec: straight }; // short hops are not worth mounting up for
@@ -1263,9 +1273,11 @@ export class Sim {
       }
       if (!this.isPlayableGround(to, this.roads?.isNear(to, 2) ?? false)) return; // into the sea or a neutral country
       if (this.peaceLeft() > 0 && this.side(to) !== u.team) return; // ceasefire: the front is closed
+      if (this.ruleset.rules.frontPosts && u.frontPost === undefined && u.targetPost === undefined && this.side(to) !== u.team) return;
       // artillery never drives up to (or over) the front line
       if (d.minRange && distToFrontKm(this.world.front, to) * (u.team === 0 ? 1 : -1) < 0.5) return;
       let dest: LngLat = formationSpot(formation, slot.get(u) ?? i, ground.length, centre, to, facing);
+      if (this.ruleset.rules.frontPosts && u.frontPost === undefined && u.targetPost === undefined && this.side(dest) !== u.team) dest = to;
       let leg: Waypoint[] | null;
       {
         // never park a unit in the river because of its place in the formation
@@ -2441,8 +2453,14 @@ export class Sim {
           });
           u.chase = chase ?? undefined;
         }
-        if (chase && this.isPlayableGround(chase)) this.stepOffRoad(u, d, chase, d.speed * dt * ((u.fuel ?? 1) > 0 ? 1 : 0.2));
-        else if (!chase && u.stance === 'defend' && distKm(u.pos, post) > 0.3) this.stepOffRoad(u, d, post, d.speed * dt);
+        if (chase && this.isPlayableGround(chase)) {
+          if (r.frontPosts && u.frontPost === undefined && this.side(chase) !== u.team) {
+            chase = null;
+            u.chase = undefined;
+          } else {
+            this.stepOffRoad(u, d, chase, d.speed * dt * ((u.fuel ?? 1) > 0 ? 1 : 0.2));
+          }
+        } else if (!chase && u.stance === 'defend' && distKm(u.pos, post) > 0.3) this.stepOffRoad(u, d, post, d.speed * dt);
       }
       if (d.kind !== 'air') u.still = u.pos[0] === was0 && u.pos[1] === was1 ? (u.still ?? 0) + dt : 0;
       if (!u.path.length && !tu && !tb && u.retreatAt && !u.retreating && d.kind !== 'air' && w.tick % r.tickRate === u.id % r.tickRate && u.hp < this.maxHp(u) * u.retreatAt) this.fallBack(u);
@@ -2835,8 +2853,9 @@ export class Sim {
         if (distKm(u.pos, wp.p) < 0.02 || (before[0] === u.pos[0] && before[1] === u.pos[1])) u.path.shift();
       }
     }
-    if (this.peaceLeft() > 0 && this.side(u.pos) !== u.team && this.side(start) === u.team) {
-      // ceasefire: the line is closed, halt on our side of it
+    const headingToNearPost = u.targetPost !== undefined && this.world.posts?.some((p) => p.id === u.targetPost && distKm(u.pos, p.pos) <= 2.5);
+    if ((this.peaceLeft() > 0 || (this.ruleset.rules.frontPosts && u.frontPost === undefined && !headingToNearPost)) && this.side(u.pos) !== u.team && this.side(start) === u.team) {
+      // cannot cross the front line: halt on our side of it
       (u.pos = start), (u.path = []);
     }
     const moved = distKm(start, u.pos);
@@ -2851,7 +2870,7 @@ export class Sim {
       (u.target = null), (u.cap = 0), (u.transport = false), (u.attackMove = false), (u.post = [u.pos[0], u.pos[1]]);
       if (u.targetPost !== undefined) {
         const post = this.world.posts?.find((p) => p.id === u.targetPost);
-        if (post && distKm(u.pos, post.pos) <= 1.0) {
+        if (post && distKm(u.pos, post.pos) <= 2.0) {
           if (!post.garrison.includes(u.id) && post.garrison.length < post.cap) {
             post.garrison.push(u.id);
             u.frontPost = post.id;
@@ -2859,7 +2878,11 @@ export class Sim {
             u.stance = 'defend';
             u.post = [post.pos[0], post.pos[1]];
             u.owner = '__front_' + u.team;
+          } else {
+            u.targetPost = undefined;
           }
+        } else {
+          u.targetPost = undefined;
         }
       }
     } else u.target = u.path[u.path.length - 1].p;
