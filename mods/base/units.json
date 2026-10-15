@@ -2,22 +2,85 @@
   {
     "id": "infantry",
     "name": "Пехота",
-    "description": "Отделение пехоты (20 бойцов). Перемещается по своей территории, не может пересекать линию фронта и границы других государств.",
+    "description": "Отделение пехоты (5 бойцов). Перемещается по своей территории, не может пересекать линию фронта и границы других государств.",
     "kind": "ground",
     "cost": {
-      "money": 250
+      "money": 100
     },
-    "trainTime": 10,
-    "hp": 1000,
+    "trainTime": 8,
+    "hp": 250,
     "speed": 0.02778,
     "roadSpeedMult": 1.25,
     "cannotCrossFront": true,
-    "squadSize": 20,
+    "squadSize": 5,
     "range": 1.5,
     "damage": 50,
     "vision": 8,
     "mobility": "foot",
     "symbol": "infantry"
+  },
+  {
+    "id": "humvee",
+    "name": "Хамви",
+    "description": "Бронированный внедорожник. Вмещает 5 человек и 500 боеприпасов (БК).",
+    "kind": "ground",
+    "cost": {
+      "money": 150
+    },
+    "trainTime": 10,
+    "hp": 800,
+    "speed": 0.03333,
+    "roadSpeedMult": 1.25,
+    "cannotCrossFront": true,
+    "passengerCap": 5,
+    "cargoCap": 500,
+    "maxAmmo": 500,
+    "range": 0,
+    "damage": 0,
+    "vision": 9,
+    "mobility": "wheeled",
+    "symbol": "motorized"
+  },
+  {
+    "id": "humvee_mg",
+    "name": "Хамви с пулемётом",
+    "description": "Боевой внедорожник с крупнокалиберным пулемётом. Боезапас: 1000 БК.",
+    "kind": "ground",
+    "cost": {
+      "money": 200
+    },
+    "trainTime": 12,
+    "hp": 900,
+    "speed": 0.03055,
+    "roadSpeedMult": 1.25,
+    "cannotCrossFront": true,
+    "maxAmmo": 1000,
+    "ammoPerShot": 1,
+    "range": 2.0,
+    "damage": 40,
+    "vision": 9,
+    "mobility": "wheeled",
+    "symbol": "motorized"
+  },
+  {
+    "id": "truck",
+    "name": "Грузовик",
+    "description": "Транспортный грузовик. Вмещает до 3 000 любого ресурса (включая БК). Спавнится пустым.",
+    "kind": "ground",
+    "cost": {
+      "money": 125
+    },
+    "trainTime": 10,
+    "hp": 600,
+    "speed": 0.025,
+    "roadSpeedMult": 1.25,
+    "cannotCrossFront": true,
+    "cargoCap": 3000,
+    "range": 0,
+    "damage": 0,
+    "vision": 8,
+    "mobility": "wheeled",
+    "symbol": "supply"
   },
   {
     "id": "frontline_infantry",

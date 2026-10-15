@@ -1046,7 +1046,26 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   function selectAt(point: { x: number; y: number }, shift: boolean) {
     const layers = ['units-loose', 'units-grouped', 'drones', 'formations'].filter((l) => map.getLayer(l));
     const features = map.queryRenderedFeatures([[point.x - 6, point.y - 6], [point.x + 6, point.y + 6]], { layers });
-    const hit = features.find((f) => f.properties?.own) ?? features[0];
+    const myTeam = init?.team;
+    // Disallow clicking or selecting enemy units/garrisons: only friendly units are selectable
+    const friendlyFeatures = features.filter((f) => {
+      if (f.properties?.own) return true;
+      const id = Number(f.properties?.id);
+      if (id) {
+        const u = snap?.units.find((x) => x.id === id);
+        return u && u.team === myTeam;
+      }
+      if (f.properties?.ids) {
+        try {
+          const ids = JSON.parse(f.properties.ids) as number[];
+          return ids.some((uid) => snap?.units.find((x) => x.id === uid)?.team === myTeam);
+        } catch {
+          return false;
+        }
+      }
+      return false;
+    });
+    const hit = friendlyFeatures[0];
     const trenchHit = !hit && map.getLayer('trench-line') ? map.queryRenderedFeatures([[point.x - 8, point.y - 8], [point.x + 8, point.y + 8]], { layers: ['trench-line', 'trench-case'] })[0] : null;
     if (trenchHit?.properties?.id) {
       selBuilding = Number(trenchHit.properties.id);
@@ -1057,9 +1076,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     selBuilding = null;
     const many = hit?.properties?.gid ? [...(groups.get(Number(hit.properties.gid))?.ids ?? [])] : hit?.properties?.ids ? (JSON.parse(hit.properties.ids) as number[]) : null;
     if (many) {
-      if (!shift) selUnits = new Set(many);
-      else if (many.every((id) => selUnits.has(id))) many.forEach((id) => selUnits.delete(id));
-      else many.forEach((id) => selUnits.add(id));
+      const friendlyMany = many.filter((uid) => snap?.units.find((x) => x.id === uid)?.team === myTeam);
+      if (!shift) selUnits = new Set(friendlyMany);
+      else if (friendlyMany.every((id) => selUnits.has(id))) friendlyMany.forEach((id) => selUnits.delete(id));
+      else friendlyMany.forEach((id) => selUnits.add(id));
     } else if (hit) {
       const id = Number(hit.properties!.id);
       if (shift) selUnits.has(id) ? selUnits.delete(id) : selUnits.add(id);
@@ -2030,7 +2050,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
     } else if (selUnits.size) {
       let effects: { id: string; v: number; n: number }[] = [];
-      const mine = snap.units.filter((u) => selUnits.has(u.id));
+      const mine = snap.units.filter((u) => selUnits.has(u.id) && u.team === init!.team);
+      if (!mine.length) {
+        clear(side);
+        return;
+      }
       const rk = ranks();
       const group = [...groups.values()].find((g) => g.ids.size === mine.length && mine.every((u) => g.ids.has(u.id)));
       side.append(h('h3', {}, group ? `Группа ${group.id} · ${mine.length} отряд.` : `${mine.length} ${mine.length === 1 ? 'отряд выбран' : 'отрядов выбрано'}`));
@@ -2040,7 +2064,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const d = defU.get(u.def)!;
         const isOwn = u.owner === me;
         const isFrontGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
-        const squadCount = u.squadSize ?? d.squadSize ?? (isFrontGarrison ? 100 : 20);
+        const squadCount = u.squadSize ?? d.squadSize ?? (isFrontGarrison ? 100 : 5);
 
         if (isFrontGarrison) {
           side.append(

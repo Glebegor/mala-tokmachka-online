@@ -26,7 +26,10 @@
     "vision": 15,
     "sameKindKm": 20,
     "trains": [
-      "infantry"
+      "infantry",
+      "humvee",
+      "humvee_mg",
+      "truck"
     ]
   },
   {

@@ -318,7 +318,7 @@ export class Sim {
       stamina: d.kind === 'ground' && (d.mobility ?? 'foot') === 'foot' && !d.maxFuel ? 100 : undefined,
       fuel: d.maxFuel,
       maxFuel: d.maxFuel,
-      ammo: d.maxAmmo || (d.kind === 'ground' ? 100 : undefined),
+      ammo: (def === 'truck' || (!d.damage && !d.maxAmmo && d.cargoCap)) ? undefined : (d.maxAmmo || (d.kind === 'ground' ? 100 : undefined)),
       cargo: d.cargoCap ? { res: {}, cap: d.cargoCap, passengers: [], drones: d.droneCap ? [] : undefined } : undefined,
       // recon drones circle where they are until told otherwise
       loiterCenter: recon ? [pos[0], pos[1]] : undefined,
@@ -2713,17 +2713,76 @@ export class Sim {
         if (!tgt) {
           u.reinforceTarget = undefined;
         } else if (distKm(u.pos, tgt.pos) <= 0.8) {
-          tgt.strength = (tgt.strength ?? 1) + (u.strength ?? 1);
-          const addedSquad = u.squadSize ?? (this.defs.u.get(u.def)?.squadSize ?? 20);
-          tgt.squadSize = (tgt.squadSize ?? (this.defs.u.get(tgt.def)?.squadSize ?? 100)) + addedSquad;
-          const maxTargetHp = (this.defs.u.get(tgt.def)?.hp ?? 5000) * (tgt.strength ?? 1);
-          tgt.hp = Math.min(maxTargetHp, tgt.hp + u.hp);
-          tgt.morale = Math.min(100, (tgt.morale ?? 100) + 20);
-          tgt.ammo = Math.min(100, (tgt.ammo ?? 100) + 30);
-          u.hp = 0;
-          u.reinforceTarget = undefined;
-          this.hooks.emit('unitMerged', { sourceId: u.id, targetId: tgt.id, strength: tgt.strength, squadSize: tgt.squadSize });
+          const ud = this.defs.u.get(u.def)!;
+          const isFootInfantry = (ud.mobility ?? 'foot') === 'foot' && !ud.cargoCap;
+          if (isFootInfantry) {
+            tgt.strength = (tgt.strength ?? 1) + (u.strength ?? 1);
+            const addedSquad = u.squadSize ?? (ud.squadSize ?? 5);
+            tgt.squadSize = (tgt.squadSize ?? (this.defs.u.get(tgt.def)?.squadSize ?? 100)) + addedSquad;
+            const maxTargetHp = (this.defs.u.get(tgt.def)?.hp ?? 5000) * (tgt.strength ?? 1);
+            tgt.hp = Math.min(maxTargetHp, tgt.hp + u.hp);
+            tgt.morale = Math.min(100, (tgt.morale ?? 100) + 20);
+            tgt.ammo = Math.min(100, (tgt.ammo ?? 100) + 30);
+            u.hp = 0;
+            u.reinforceTarget = undefined;
+            this.hooks.emit('unitMerged', { sourceId: u.id, targetId: tgt.id, strength: tgt.strength, squadSize: tgt.squadSize });
+          } else {
+            // Vehicle delivery (Humvee or Truck bringing ammo/passengers):
+            if ((tgt.ammo ?? 0) < 100) {
+              const needed = 100 - (tgt.ammo ?? 0);
+              if (u.cargo?.res?.ammo && u.cargo.res.ammo > 0) {
+                const transfer = Math.min(needed, u.cargo.res.ammo);
+                u.cargo.res.ammo -= transfer;
+                tgt.ammo = (tgt.ammo ?? 0) + transfer;
+              } else if (u.ammo && u.ammo > 0 && u.def === 'humvee') {
+                const transfer = Math.min(needed, u.ammo);
+                u.ammo -= transfer;
+                tgt.ammo = (tgt.ammo ?? 0) + transfer;
+              }
+            }
+            if (u.cargo?.passengers?.length) {
+              for (const pid of u.cargo.passengers) {
+                const pUnit = w.units.find((x) => x.id === pid && x.hp > 0);
+                if (pUnit) {
+                  tgt.strength = (tgt.strength ?? 1) + (pUnit.strength ?? 1);
+                  const addedSquad = pUnit.squadSize ?? (this.defs.u.get(pUnit.def)?.squadSize ?? 5);
+                  tgt.squadSize = (tgt.squadSize ?? (this.defs.u.get(tgt.def)?.squadSize ?? 100)) + addedSquad;
+                  const maxTargetHp = (this.defs.u.get(tgt.def)?.hp ?? 5000) * (tgt.strength ?? 1);
+                  tgt.hp = Math.min(maxTargetHp, tgt.hp + pUnit.hp);
+                  tgt.morale = Math.min(100, (tgt.morale ?? 100) + 20);
+                  tgt.ammo = Math.min(100, (tgt.ammo ?? 100) + 30);
+                  pUnit.hp = 0;
+                  pUnit.embarkedIn = undefined;
+                }
+              }
+              u.cargo.passengers = [];
+            }
+            u.reinforceTarget = undefined;
+            u.stance = 'defend';
+            u.post = [tgt.pos[0], tgt.pos[1]];
+            u.target = null;
+            u.path = [];
+          }
         }
+      }
+
+      // Vehicles near friendly frontline garrisons resupply ammo automatically
+      if (u.hp > 0 && !u.embarkedIn && ((u.cargo?.res?.ammo ?? 0) > 0 || (u.def === 'humvee' && (u.ammo ?? 0) > 0))) {
+        this.near(this.unitGrid, u.pos, 0.8, (g) => {
+          if (g.team === u.team && g.hp > 0 && (g.def === 'frontline_infantry' || g.owner.startsWith('__front_')) && (g.ammo ?? 0) < 100) {
+            const needed = 100 - (g.ammo ?? 0);
+            if (u.cargo?.res?.ammo && u.cargo.res.ammo > 0) {
+              const transfer = Math.min(needed, u.cargo.res.ammo);
+              u.cargo.res.ammo -= transfer;
+              g.ammo = (g.ammo ?? 0) + transfer;
+            } else if (u.def === 'humvee' && (u.ammo ?? 0) > 0) {
+              const uAmmo = u.ammo ?? 0;
+              const transfer = Math.min(needed, uAmmo);
+              u.ammo = uAmmo - transfer;
+              g.ammo = (g.ammo ?? 0) + transfer;
+            }
+          }
+        });
       }
 
       // Random periodic skirmish fire between opposing frontline garrisons across the line
@@ -2735,30 +2794,31 @@ export class Sim {
           u.skirmishTimer -= dt;
           if (u.skirmishTimer <= 0) {
             u.skirmishTimer = 3 + Math.random() * 9;
-            let enemyGarrison: Unit | null = null;
-            let bestDist = 2.8;
-            this.near(this.unitGrid, u.pos, 2.8, (e) => {
-              if (e.team !== u.team && e.hp > 0 && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))) {
-                const dist = distKm(u.pos, e.pos);
-                if (dist < bestDist) {
-                  bestDist = dist;
-                  enemyGarrison = e;
+            if ((u.ammo ?? 0) > 0) {
+              let enemyGarrison: Unit | null = null;
+              let bestDist = 2.8;
+              this.near(this.unitGrid, u.pos, 2.8, (e) => {
+                if (e.team !== u.team && e.hp > 0 && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))) {
+                  const dist = distKm(u.pos, e.pos);
+                  if (dist < bestDist) {
+                    bestDist = dist;
+                    enemyGarrison = e;
+                  }
                 }
+              });
+              if (enemyGarrison) {
+                const eg: Unit = enemyGarrison;
+                this.shots.push({ def: u.def, team: u.team, from: u.pos, to: eg.pos });
+                const dmg = 5 + Math.floor(Math.random() * 15);
+                eg.hp = Math.max(100, eg.hp - dmg);
+                eg.lastHit = this.world.time;
+                u.ammo = Math.max(0, (u.ammo ?? 0) - 1);
               }
-            });
-            if (enemyGarrison) {
-              const eg: Unit = enemyGarrison;
-              this.shots.push({ def: u.def, team: u.team, from: u.pos, to: eg.pos });
-              const dmg = 5 + Math.floor(Math.random() * 15);
-              eg.hp = Math.max(100, eg.hp - dmg);
-              eg.lastHit = this.world.time;
-              if (u.ammo !== undefined && u.ammo > 10) u.ammo -= 1;
             }
           }
         }
         if (w.tick % (r.tickRate * 10) === u.id % (r.tickRate * 10)) {
-          if ((u.ammo ?? 100) < 100) u.ammo = Math.min(100, (u.ammo ?? 0) + 3);
-          if ((u.morale ?? 100) < 100) u.morale = Math.min(100, (u.morale ?? 0) + 2);
+          if ((u.morale ?? 100) < 100 && (u.morale ?? 0) > 0) u.morale = Math.min(100, (u.morale ?? 0) + 1);
         }
       }
 
@@ -3370,12 +3430,28 @@ export class Sim {
       const pos: LngLat = [node.lng, node.lat];
       const push: [number, number] = [base[0], base[1]];
       const holdDef: [number, number] = [0, 0];
+      let men0 = 0;
+      let men1 = 0;
+      let ammo0 = 0;
+      let ammo1 = 0;
+      let hasUnits0 = false;
+      let hasUnits1 = false;
       this.near(this.unitGrid, pos, R, (u) => {
         const d = distKm(u.pos, pos);
         if (d > R || u.embarkedIn || u.hp <= 0) return;
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') return; // only ground troops hold or take ground
         const pwr = ud.damage * this.ranks[u.rank].damage * (u.encircled ? r.encircledDamageMult : 1) * (u.hp / this.maxHp(u)) * (1 - d / R) * this.crowdDealt(u);
+        const men = u.squadSize ?? (ud.squadSize ?? 1);
+        if (u.team === 0) {
+          men0 += men;
+          hasUnits0 = true;
+          ammo0 += (u.ammo ?? 0);
+        } else {
+          men1 += men;
+          hasUnits1 = true;
+          ammo1 += (u.ammo ?? 0);
+        }
         if (u.frontPost !== undefined) {
           const post = w.posts?.find((p) => p.id === u.frontPost);
           if (post?.advancing) push[u.team] += pwr * 3.0;
@@ -3400,7 +3476,26 @@ export class Sim {
       const effPush: [number, number] = [Math.max(0, push[0] - holdDef[1]), Math.max(0, push[1] - holdDef[0])];
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
-      return clamp((effPush[0] * hold[0] - effPush[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
+
+      // Dynamic front line movement (out-of-ammo pressure and manpower disparity)
+      let dynamicPush = 0;
+      if (hasUnits0 && hasUnits1) {
+        if (ammo0 > 0 && ammo1 <= 0) {
+          dynamicPush += 0.0006;
+        } else if (ammo1 > 0 && ammo0 <= 0) {
+          dynamicPush -= 0.0006;
+        }
+        const menDiff = men0 - men1;
+        if (Math.abs(menDiff) >= 5) {
+          dynamicPush += clamp(menDiff / 100, -1, 1) * 0.0004;
+        }
+      } else if (hasUnits0 && !hasUnits1) {
+        dynamicPush += 0.0008;
+      } else if (hasUnits1 && !hasUnits0) {
+        dynamicPush -= 0.0008;
+      }
+
+      return clamp(dynamicPush + (effPush[0] * hold[0] - effPush[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
     };
 
     // neighbours share speed so the line bends instead of spiking
@@ -3417,8 +3512,10 @@ export class Sim {
         n[i].v = v;
         if (v === 0) continue;
         const [nx, ny] = normalOf(n[pi], n[i], n[ni]);
-        const lng = n[i].lng + (nx * v * dt) / kmPerDegLng(n[i].lat);
-        const lat = n[i].lat + (ny * v * dt) / 111.32;
+        const dlng = (nx * v * dt) / kmPerDegLng(n[i].lat);
+        const dlat = (ny * v * dt) / 111.32;
+        const lng = n[i].lng + dlng;
+        const lat = n[i].lat + dlat;
         // the line does not advance across open sea or a big river
         if (this.terrain?.isBarrier([lng, lat]) && !this.terrain.isBarrier([n[i].lng, n[i].lat])) {
           n[i].v = 0;
@@ -3426,6 +3523,24 @@ export class Sim {
         }
         n[i].lng = lng;
         n[i].lat = lat;
+
+        // Displace frontline garrisons on BOTH sides of this front node by [dlng, dlat]
+        // so that the front line, the pushing garrison, and the retreating garrison all move together!
+        if (!closed && Math.abs(v) > 0) {
+          const nodePos: LngLat = [n[i].lng, n[i].lat];
+          for (const u of w.units) {
+            if (u.hp <= 0) continue;
+            if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
+              if (distKm(u.pos, nodePos) <= 3.5 && nearestNode(n, u.pos) === i) {
+                const nextPos: LngLat = [u.pos[0] + dlng, u.pos[1] + dlat];
+                if (!this.terrain?.isBarrier(nextPos)) {
+                  u.pos = nextPos;
+                  if (u.post) u.post = [u.post[0] + dlng, u.post[1] + dlat];
+                }
+              }
+            }
+          }
+        }
       }
       if (!closed) n[0].v = n[len - 1].v = 0; // both ends of the main line stay anchored
     };

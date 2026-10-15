@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses } from '../src';
+import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses, nearestNode } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -522,12 +522,12 @@ console.log('✓ Bot AI: Housing districts built in friendly cities verified');
 // 16. Infantry Unit Definition, Training at Military Base, and Movement Restrictions
 const infDef = rs.units.find((u) => u.id === 'infantry')!;
 assert.ok(infDef, 'Infantry unit is defined in units.json');
-assert.equal(infDef.cost.money, 250, 'Infantry costs 250');
+assert.equal(infDef.cost.money, 100, 'Infantry costs 100');
 assert.equal(infDef.speed, 0.02778, 'Infantry moves at 100 km/h (0.02778 km/s)');
 assert.equal(infDef.roadSpeedMult, 1.25, 'Infantry receives +25% road speed multiplier');
 assert.equal(infDef.cannotCrossFront, true, 'Infantry has cannotCrossFront = true');
-assert.equal(infDef.squadSize, 20, 'Infantry has 20 soldiers per squad');
-assert.equal(infDef.hp, 1000, 'Infantry has 1000 HP (50 per soldier)');
+assert.equal(infDef.squadSize, 5, 'Infantry has 5 soldiers per squad');
+assert.equal(infDef.hp, 250, 'Infantry has 250 HP (50 per soldier)');
 assert.ok(!infDef.description?.includes('км/ч'), 'Infantry description does not mention speed');
 assert.ok(!infDef.description?.includes('Бонус скорости'), 'Infantry description does not mention road bonus');
 assert.ok(mbDef.trains?.includes('infantry'), 'Military base trains infantry');
@@ -584,7 +584,7 @@ assert.equal(flSquad.stance, 'hold', 'Frontline garrison squad stands in place (
 const playerOrderToFrontline = sim.apply('player1', { type: 'move', units: [flSquad.id], to: friendlyPos });
 assert.ok(!playerOrderToFrontline.ok, 'Player cannot command frontline squads');
 
-console.log('✓ Infantry: 250 cost, 100 km/h, 20 fighters, clean description, front/foreign boundary movement restrictions verified');
+console.log('✓ Infantry: 100 cost, 100 km/h, 5 fighters, clean description, front/foreign boundary movement restrictions verified');
 console.log('✓ Frontline Garrisons: 100 fighters (5000 HP), autonomous, uncommandable by players, stand in place verified');
 
 // 17. Housing Scale (+30% larger) and Dispersion (>= 85m spacing)
@@ -605,7 +605,7 @@ assert.ok(friendlyGarrison, 'Friendly frontline garrison exists');
 assert.equal(friendlyGarrison.strength ?? 1, 1, 'Initial garrison strength is 1');
 assert.equal(friendlyGarrison.squadSize ?? 100, 100, 'Initial garrison headcount is 100');
 
-// Spawn reinforcing player infantry near the garrison (1.2 km away)
+// Spawn reinforcing player infantry near the garrison (1.0 km away)
 const reinforcePos = offsetKm(friendlyGarrison.pos, -1.0, 0);
 const reinforcingUnit = sim.spawnUnit('infantry', sim.player('player1')!, reinforcePos);
 assert.ok(reinforcingUnit, 'Reinforcing player infantry spawned');
@@ -621,8 +621,8 @@ for (let step = 0; step < 50; step++) {
 }
 assert.ok(!sim.world.units.some((u) => u.id === reinforcingUnit.id), 'Reinforcing squad merged into garrison');
 assert.equal(friendlyGarrison.strength, 2, 'Garrison strength increased to 2');
-assert.equal(friendlyGarrison.squadSize, 120, 'Garrison squad size increased by 20 (to 120)');
-console.log('✓ Reinforce & Merge: player infantry walks to frontline squad, merges, increases strength to 2 and headcount to 120 verified');
+assert.equal(friendlyGarrison.squadSize, 105, 'Garrison squad size increased by 5 (to 105)');
+console.log('✓ Reinforce & Merge: player infantry walks to frontline squad, merges, increases strength to 2 and headcount to 105 verified');
 
 // 19. Random frontline skirmish crossfire simulation
 // Fast-forward sim and verify that frontline garrisons exchange random skirmish bursts
@@ -633,6 +633,90 @@ for (let step = 0; step < 30; step++) {
 const frontlineShots = sim.shots.filter((s) => s.def === 'frontline_infantry');
 assert.ok(frontlineShots.length > 0, `Frontline garrisons engage in random skirmish firefights (actual=${frontlineShots.length} shots)`);
 console.log(`✓ Frontline Firefights: opposing garrisons simulate random skirmishes (${frontlineShots.length} shots recorded) verified`);
+
+// 20. New Military Base Vehicles: Humvee, Humvee MG, Truck
+const humveeDef = rs.units.find((u) => u.id === 'humvee')!;
+assert.ok(humveeDef, 'Humvee defined in units.json');
+assert.equal(humveeDef.cost.money, 150, 'Humvee cost is 150');
+assert.equal(humveeDef.passengerCap, 5, 'Humvee carries 5 passengers');
+assert.equal(humveeDef.cargoCap, 500, 'Humvee has 500 cargo capacity');
+assert.equal(humveeDef.maxAmmo, 500, 'Humvee carries 500 ammo');
+
+const humveeMgDef = rs.units.find((u) => u.id === 'humvee_mg')!;
+assert.ok(humveeMgDef, 'Humvee MG defined in units.json');
+assert.equal(humveeMgDef.cost.money, 200, 'Humvee MG cost is 200');
+assert.equal(humveeMgDef.maxAmmo, 1000, 'Humvee MG carries 1000 ammo');
+assert.equal(humveeMgDef.damage, 40, 'Humvee MG deals 40 damage');
+assert.equal(humveeMgDef.range, 2.0, 'Humvee MG has 2.0 km range');
+
+const truckDef = rs.units.find((u) => u.id === 'truck')!;
+assert.ok(truckDef, 'Truck defined in units.json');
+assert.equal(truckDef.cost.money, 125, 'Truck cost is 125');
+assert.equal(truckDef.cargoCap, 3000, 'Truck carries up to 3000 resources');
+
+// Test vehicle spawning
+const spawnedHumvee = sim.spawnUnit('humvee', sim.player('player1')!, friendlyPos);
+assert.equal(spawnedHumvee.ammo, 500, 'Humvee spawns with 500 ammo');
+
+const spawnedTruck = sim.spawnUnit('truck', sim.player('player1')!, friendlyPos);
+assert.equal(spawnedTruck.ammo ?? 0, 0, 'Truck spawns empty without ammo');
+assert.equal(Object.keys(spawnedTruck.cargo?.res ?? {}).length, 0, 'Truck spawns with empty cargo');
+console.log('✓ Vehicles: Humvee (150c, 5 pass, 500 ammo), Humvee MG (200c, 1000 ammo), Truck (125c, 3000 cap, spawns empty) verified');
+
+// 21. Bot AI Frontline Reinforcement near Military Base
+const botUABase = sim.world.buildings.find((b) => b.owner === 'botUA' && b.def === 'military_base')!;
+assert.ok(botUABase, 'Bot UA military base exists');
+const botUAInfantry = sim.world.units.filter((u) => u.owner === 'botUA' && u.def === 'infantry');
+assert.ok(botUAInfantry.length >= 1, 'Bot UA has infantry');
+
+// Give bot think step to reinforce
+bUA.think(sim);
+const reinforcingBotUnits = sim.world.units.filter((u) => u.owner === 'botUA' && u.reinforceTarget !== undefined);
+assert.ok(reinforcingBotUnits.length >= 1, 'Bot UA ordered infantry to reinforce frontline');
+for (const ru of reinforcingBotUnits) {
+  const tgt = sim.world.units.find((x) => x.id === ru.reinforceTarget)!;
+  assert.ok(tgt, 'Reinforce target exists');
+  const d = distKm(tgt.pos, botUABase.pos);
+  assert.ok(d <= 140, `Bot reinforces frontline garrison near military base (actual=${d.toFixed(1)} km)`);
+}
+console.log('✓ Bot AI: Reinforces frontline garrisons evenly near its military base without marching to far edges verified');
+
+// 22. Dynamic Frontline Movement & Garrison Displacement (Out of Ammo / Manpower Advantage)
+// Find two opposing frontline garrisons across the line
+const testUaGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0)!;
+const testRuGarrison = sim.world.units.find((u) => u.owner === '__front_1' && u.hp > 0 && distKm(u.pos, testUaGarrison.pos) <= 3.0)!;
+assert.ok(testUaGarrison && testRuGarrison, 'Found opposing frontline garrisons');
+
+const origFrontPos = [...sim.world.front.map((n) => ({ lng: n.lng, lat: n.lat }))];
+const origUaGarrisonPos = [testUaGarrison.pos[0], testUaGarrison.pos[1]];
+const origRuGarrisonPos = [testRuGarrison.pos[0], testRuGarrison.pos[1]];
+
+// Deplete RU garrison ammo to 0 while UA has ammo and manpower
+testRuGarrison.ammo = 0;
+testUaGarrison.ammo = 100;
+testUaGarrison.squadSize = 150; // manpower advantage
+
+// Run sim steps for front movement
+for (let step = 0; step < 40; step++) {
+  sim.step(1.0);
+}
+
+// Verify that the nearest front node and both garrisons moved together into RU territory
+const nearestNodeIdx = nearestNode(sim.world.front, testUaGarrison.pos);
+const frontNodeMoved = distKm([sim.world.front[nearestNodeIdx].lng, sim.world.front[nearestNodeIdx].lat], [origFrontPos[nearestNodeIdx].lng, origFrontPos[nearestNodeIdx].lat]);
+assert.ok(frontNodeMoved > 0.005, `Front line advanced into enemy territory (moved=${(frontNodeMoved * 1000).toFixed(1)}m)`);
+
+const uaGarrisonMoved = distKm(testUaGarrison.pos, origUaGarrisonPos as [number, number]);
+const ruGarrisonMoved = distKm(testRuGarrison.pos, origRuGarrisonPos as [number, number]);
+assert.ok(uaGarrisonMoved > 0.005, `UA garrison pushed forward with front line (moved=${(uaGarrisonMoved * 1000).toFixed(1)}m)`);
+assert.ok(ruGarrisonMoved > 0.005, `RU garrison pushed back into its territory with front line (moved=${(ruGarrisonMoved * 1000).toFixed(1)}m)`);
+
+// Supply vehicle refilling garrison ammo: Humvee approaches RU garrison
+const supplyHumvee = sim.spawnUnit('humvee', sim.player('botRU')!, offsetKm(testRuGarrison.pos, -0.4, 0));
+assert.equal(testRuGarrison.ammo, 0, 'RU garrison has 0 ammo before resupply');
+sim.step(1.0);
+assert.ok((testRuGarrison.ammo ?? 0) > 0, `RU garrison resupplied with ammo by nearby Humvee (actual=${testRuGarrison.ammo})`);
+console.log('✓ Dynamic Front Movement & Resupply: front creeps into territory of side without ammo/manpower, drags garrisons along, and vehicles resupply ammo verified');
 
 console.log('All reboot tests passed successfully!');
 

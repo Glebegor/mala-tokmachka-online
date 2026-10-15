@@ -351,8 +351,17 @@ export class Bot {
       if (b.team !== p.team || b.progress < 1 || !sim.usable(b, p.id) || (b.owner !== p.id && b.def !== 'machine_factory' && b.def !== 'drone_factory' && b.def !== 'missile_factory')) continue;
       const d = sim.defs.b.get(b.def)!;
       if (b.def === 'military_base') {
-        if ((p.res.money ?? 0) >= 250 && count('infantry') < 8 && !w.queue.some((q) => q.building === b.id)) {
-          sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+        const money = p.res.money ?? 0;
+        if (!w.queue.some((q) => q.building === b.id)) {
+          if (count('infantry') < 12 && money >= 100) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+          } else if (count('humvee_mg') < 3 && money >= 200) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee_mg' });
+          } else if (count('humvee') < 2 && money >= 150) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
+          } else if (count('truck') < 3 && money >= 125) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+          }
         }
         continue;
       }
@@ -424,7 +433,7 @@ export class Bot {
   private command(sim: Sim, p: Player) {
     const w = sim.world;
     this.logistics(sim, p);
-    const army = w.units.filter((u) => u.owner === p.id && u.frontPost === undefined && sim.defs.u.get(u.def)!.kind !== 'air' && !sim.defs.u.get(u.def)!.cargoCap && !sim.defs.u.get(u.def)!.repairs);
+    const army = w.units.filter((u) => u.owner === p.id && u.frontPost === undefined && sim.defs.u.get(u.def)!.kind !== 'air' && u.def !== 'truck' && !sim.defs.u.get(u.def)!.repairs);
     const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchor: LngLat = hq?.pos ?? sim.map.center;
@@ -457,13 +466,45 @@ export class Bot {
       }
     }
 
-    const idle = army.filter((u) => !u.target && u.targetPost === undefined);
+    const idle = army.filter((u) => !u.target && u.targetPost === undefined && !u.reinforceTarget);
     if (!idle.length) return;
-    // route planning is the costly part: re-order the army at most every 8 s
-    if (w.time - this.lastArmyOrder < 8) return;
+    // route planning is the costly part: re-order the army at most every 5 s
+    if (w.time - this.lastArmyOrder < 5) return;
     this.lastArmyOrder = w.time;
 
-    // Bot ground army: reinforce frontline garrisons. If all posts are at capacity, hold in reserve behind the front.
+    // Bot ground army: reinforce frontline garrisons evenly near the military base (not running to far edges)
+    const friendlyGarrisons = w.units.filter((u) => u.team === p.team && u.hp > 0 && (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')));
+    if (friendlyGarrisons.length) {
+      const myMilitaryBases = w.buildings.filter((b) => b.owner === p.id && b.def === 'military_base' && b.progress >= 1);
+      const anchorBase = myMilitaryBases[0]?.pos ?? hq?.pos ?? sim.map.center;
+
+      // Find frontline garrisons near military base (within ~120 km), or closest 6 if none within 120 km
+      let nearby = friendlyGarrisons.filter((g) => distKm(g.pos, anchorBase) <= 120);
+      if (!nearby.length) {
+        nearby = [...friendlyGarrisons].sort((a, b) => distKm(a.pos, anchorBase) - distKm(b.pos, anchorBase)).slice(0, 6);
+      }
+      if (nearby.length) {
+        const incoming = new Map<number, number>();
+        for (const u of w.units) {
+          if (u.reinforceTarget) incoming.set(u.reinforceTarget, (incoming.get(u.reinforceTarget) ?? 0) + 1);
+        }
+        for (const u of idle) {
+          // Distribute reinforcements evenly: sort by (strength + incoming), then by distance to unit
+          nearby.sort((a, b) => {
+            const loadA = (a.strength ?? 1) + (incoming.get(a.id) ?? 0);
+            const loadB = (b.strength ?? 1) + (incoming.get(b.id) ?? 0);
+            return loadA - loadB || distKm(u.pos, a.pos) - distKm(u.pos, b.pos);
+          });
+          const target = nearby[0];
+          if (target) {
+            incoming.set(target.id, (incoming.get(target.id) ?? 0) + 1);
+            sim.apply(p.id, { type: 'reinforce', units: [u.id], targetUnit: target.id });
+          }
+        }
+        return;
+      }
+    }
+
     if (w.posts?.length) {
       const myPosts = w.posts.filter((post) => post.team === p.team);
       const availablePosts = myPosts.filter((post) => {
