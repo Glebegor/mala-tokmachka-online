@@ -556,7 +556,7 @@ export class Sim {
     const pocket = this.world.pockets.length ? pocketAt(this.world.pockets, p) : null;
     if (pocket) return pocket.team;
     // the same occupied area the map paints; holes in it (the Sea of Azov) fall back to the nearest stretch of front
-    if (this.map.occupiedHoles?.some((h) => inPolygon(p, h))) return sideOf(this.world.front, p);
+    if (this.inHole(p)) return sideOf(this.world.front, p);
     if (!this.map.occupiedClosure.length) return sideOf(this.world.front, p);
     // rebuilt once per tick (the front moves every tick)
     if (this.occ.tick < 0 || this.occ.tick !== this.world.tick || this.occ.front !== this.world.front) {
@@ -565,6 +565,17 @@ export class Sim {
     return this.occ.index!.contains(p) ? 1 : 0;
   }
   private occ: { tick: number; front: FrontNode[] | null; index: OccupiedIndex | null } = { tick: -1, front: null, index: null };
+  private holeBoxes: [number, number, number, number][] | null = null;
+  /** Inside one of the map's holes in the occupied area (the Sea of Azov)? A bounding box first: the rings are big. */
+  private inHole(p: LngLat): boolean {
+    const holes = this.map.occupiedHoles;
+    if (!holes?.length) return false;
+    this.holeBoxes ??= holes.map((h) => [Math.min(...h.map((q) => q[0])), Math.min(...h.map((q) => q[1])), Math.max(...h.map((q) => q[0])), Math.max(...h.map((q) => q[1]))]);
+    return holes.some((h, i) => {
+      const b = this.holeBoxes![i];
+      return p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3] && inPolygon(p, h);
+    });
+  }
 
   player(id: string) {
     return this.world.players.find((p) => p.id === id);
@@ -1270,7 +1281,10 @@ export class Sim {
         u.infil = 0;
         continue;
       }
-      const opposed = w.units.some((e) => e.team !== u.team && distKm(e.pos, u.pos) <= r.greyZoneSoloKm);
+      let opposed = false;
+      this.near(this.unitGrid, u.pos, r.greyZoneSoloKm, (e) => {
+        if (!opposed && e.team !== u.team && distKm(e.pos, u.pos) <= r.greyZoneSoloKm) opposed = true;
+      });
       u.infil = opposed ? 0 : u.infil + 1;
       if (u.infil < r.greyZoneSeconds) continue;
       const near = w.grey.find((z) => z.team === u.team && distKm(z.pos, u.pos) <= r.greyZoneRadiusKm * 0.5);
@@ -1490,6 +1504,7 @@ export class Sim {
     }
   }
 
+  private multCache = new Map<number, number>();
   private auras: { tick: number; list: Building[] } = { tick: -1, list: [] };
   private outputMult(b: Building): number {
     const r = this.ruleset.rules;
@@ -1517,8 +1532,13 @@ export class Sim {
     const r = this.ruleset.rules;
     const caps = new Map(this.ruleset.resources.map((x) => [x.id, x.cap]));
     const done = w.buildings.filter((b) => b.progress >= 1);
-    const mults = new Map<number, number>();
-    for (const b of done) mults.set(b.id, this.outputMult(b));
+    // output bonuses (roads, hubs, grid, zones) change slowly: worked out once a second
+    if (w.tick % 10 === 0 || this.multCache.size !== done.length) {
+      this.multCache.clear();
+      for (const b of done) this.multCache.set(b.id, this.outputMult(b));
+    }
+    const mults = this.multCache;
+    for (const b of done) if (!mults.has(b.id)) mults.set(b.id, this.outputMult(b));
 
     const teamNet: [number, number] = [0, 0];
     for (const b of done) {
@@ -1666,19 +1686,32 @@ export class Sim {
     if (this.forts.tick !== this.world.tick) {
       this.forts = { tick: this.world.tick, list: this.world.buildings.filter((b) => b.progress >= 1 && this.defs.b.get(b.def)!.defense) };
     }
-    let best: Map<string, number> | null = null;
-    for (const b of this.forts.list) {
-      if (b.team !== team || Math.abs(b.pos[1] - pos[1]) > (b.line ? 0.2 : 0.1)) continue;
+    let best = null as Map<string, number> | null;
+    // forts within reach, from a per-tick grid of fortifications (the longest reach is a 10 km line plus its cover)
+    if (this.fortGrid.tick !== this.world.tick) {
+      const g = new Map<number, Building[]>();
+      const C = Sim.CELL;
+      for (const b of this.forts.list) {
+        const k = Sim.key(Math.floor(b.pos[0] / C), Math.floor(b.pos[1] / C));
+        const l = g.get(k);
+        l ? l.push(b) : g.set(k, [b]);
+      }
+      this.fortGrid = { tick: this.world.tick, grid: g };
+    }
+    this.near(this.fortGrid.grid, pos, 13, (b) => {
+      if (b.team !== team) return;
       const d = this.defs.b.get(b.def)!.defense;
-      if (!d || this.reachKm(b, pos) > d.radiusKm) continue;
+      if (!d || this.reachKm(b, pos) > d.radiusKm) return;
       const m = this.defenseOf(b);
       best ??= new Map();
       if (m > (best.get(b.def) ?? 0)) best.set(b.def, m);
-    }
+    });
     let total = 1;
     if (best) for (const m of best.values()) total += m;
     return total;
   }
+
+  private fortGrid: { tick: number; grid: Map<number, Building[]> } = { tick: -1, grid: new Map() };
 
   // ---------- spatial index (rebuilt every tick) ----------
   private static readonly CELL = 0.2; // degrees
@@ -1687,8 +1720,12 @@ export class Sim {
   private static key(x: number, y: number) {
     return x * 4096 + y;
   }
+  /** Units by id (rebuilt every tick with the grid). */
+  private unitById = new Map<number, Unit>();
   private indexWorld() {
     const C = Sim.CELL;
+    this.unitById.clear();
+    for (const u of this.world.units) this.unitById.set(u.id, u);
     this.unitGrid.clear();
     this.buildingGrid.clear();
     for (const u of this.world.units) {
@@ -1713,7 +1750,18 @@ export class Sim {
   }
 
   /** Can this team see the spot (for indirect fire, which needs a spotter)? */
+  private spotCache: { tick: number; map: Map<number, boolean> } = { tick: -1, map: new Map() };
   private spotted(team: Team, pos: LngLat): boolean {
+    // the same answer for everything in a ~1 km cell this tick
+    if (this.spotCache.tick !== this.world.tick) this.spotCache = { tick: this.world.tick, map: new Map() };
+    const key = (Math.floor(pos[0] / 0.012) * 100000 + Math.floor(pos[1] / 0.009)) * 2 + team;
+    const hit = this.spotCache.map.get(key);
+    if (hit !== undefined) return hit;
+    const r = this.spottedNow(team, pos);
+    this.spotCache.map.set(key, r);
+    return r;
+  }
+  private spottedNow(team: Team, pos: LngLat): boolean {
     let seen = false;
     this.near(this.unitGrid, pos, 30, (o) => {
       if (!seen && o.team === team && !o.embarkedIn && distKm(o.pos, pos) <= this.defs.u.get(o.def)!.vision) seen = true;
@@ -1797,29 +1845,31 @@ export class Sim {
     if (u.fuel === undefined || u.maxFuel === undefined || u.fuel >= u.maxFuel || isStrikeDrone(d) || u.encircled) return; // cut off: no supply
     const need = u.maxFuel - u.fuel;
     const fromStore = (kinds: string[], km: number, rate: number) => {
-      for (const b of this.world.buildings) {
-        if (!kinds.includes(b.def) || b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner) || distKm(u.pos, b.pos) > km) continue;
+      let done = false;
+      this.near(this.buildingGrid, u.pos, km, (b) => {
+        if (done || !kinds.includes(b.def) || b.team !== u.team || b.progress < 1 || !this.usable(b, u.owner) || distKm(u.pos, b.pos) > km) return;
         const have = b.storage?.fuel ?? 0;
-        if (have <= 0) continue;
+        if (have <= 0) return;
         const take = Math.min(rate * dt, need, have);
         b.storage!.fuel = have - take;
         u.fuel! += take;
-        return true;
-      }
-      return false;
+        done = true;
+      });
+      return done;
     };
     if (isReconDrone(d)) return void fromStore(['airfield'], 12, 30);
     if (fromStore(d.railOnly ? ['rail_station'] : ['gas_station'], 8, 30)) return;
-    for (const t of this.world.units) {
-      if (t === u || t.team !== u.team || !this.defs.u.get(t.def)!.fuelOnly || distKm(u.pos, t.pos) > 5) continue;
+    let fed = false;
+    this.near(this.unitGrid, u.pos, 5, (t) => {
+      if (fed || t === u || t.team !== u.team || !this.defs.u.get(t.def)!.fuelOnly || distKm(u.pos, t.pos) > 5) return;
       const have = t.cargo?.res.fuel ?? 0;
-      if (have <= 0) continue;
+      if (have <= 0) return;
       const take = Math.min(25 * dt, need, have);
       t.cargo!.res.fuel = have - take;
-      u.fuel += take;
-      return;
-    }
-    fromStore(['hq'], 8, 15);
+      u.fuel! += take;
+      fed = true;
+    });
+    if (!fed) fromStore(['hq'], 8, 15);
   }
 
   /**
@@ -2076,7 +2126,7 @@ export class Sim {
       }
       if (u.embarkedIn) {
         // riding along: go wherever the vehicle goes
-        const t = w.units.find((x) => x.id === u.embarkedIn);
+        const t = this.unitById.get(u.embarkedIn);
         if (t) u.pos = [t.pos[0], t.pos[1]];
         else u.embarkedIn = undefined;
         continue;
@@ -2132,7 +2182,9 @@ export class Sim {
       // acquire the nearest enemy in range: units first, then buildings
       let tu: Unit | null = null;
       let tb: Building | null = null;
-      if (canFire && !barrage) {
+      // reloading: look for targets only now and then (the last answer stands meanwhile)
+      const lookNow = u.cooldown <= dt * 1.5 || (u.id + w.tick) % (d.minRange ? 10 : 4) === 0;
+      if (canFire && !barrage && lookNow) {
         const airDamage = d.airDamage ?? r.airDamageDefault;
         const dLat = range / 111;
         if (!d.minRange) {
@@ -2174,7 +2226,8 @@ export class Sim {
         }
       }
       // a column that runs into the enemy halts and deploys; it drives on once the way is clear
-      const engaged = !!(tu || tb) || barrage;
+      const engaged = lookNow ? !!(tu || tb) || barrage : !!u.engaged;
+      u.engaged = engaged;
       if (!engaged) u.aimKey = undefined; // a gun that loses its target lays again on the next one
       u.transport = !engaged && u.path.length > 0 && u.path[0].road && d.kind !== 'air';
       // guns lay on a new target before the first round
@@ -2210,17 +2263,21 @@ export class Sim {
         // stance: aggressive units go after what they see; defenders only within 3 km of their post, then walk back
         const post = u.post ?? u.pos;
         const leash = u.stance === 'defend' ? 3 : Infinity;
-        let chase: LngLat | null = null;
-        let near = d.vision * 0.7;
-        const airDamage = d.airDamage ?? r.airDamageDefault;
-        this.near(this.unitGrid, u.pos, near, (e) => {
-          if (e.team === u.team || e.embarkedIn) return;
-          // only close with what it can actually hit
-          if (this.defs.u.get(e.def)!.kind === 'air' ? airDamage <= 0 : d.targets === 'air') return;
-          if (distKm(e.pos, post) > leash) return;
-          const dist = distKm(u.pos, e.pos);
-          if (dist < near) (near = dist), (chase = e.pos);
-        });
+        let chase: LngLat | null = u.chase ?? null;
+        if ((u.id + w.tick) % 4 === 0) {
+          chase = null;
+          let near = d.vision * 0.7;
+          const airDamage = d.airDamage ?? r.airDamageDefault;
+          this.near(this.unitGrid, u.pos, near, (e) => {
+            if (e.team === u.team || e.embarkedIn) return;
+            // only close with what it can actually hit
+            if (this.defs.u.get(e.def)!.kind === 'air' ? airDamage <= 0 : d.targets === 'air') return;
+            if (distKm(e.pos, post) > leash) return;
+            const dist = distKm(u.pos, e.pos);
+            if (dist < near) (near = dist), (chase = e.pos);
+          });
+          u.chase = chase ?? undefined;
+        }
         if (chase && this.isPlayableGround(chase)) this.stepOffRoad(u, d, chase, d.speed * dt * ((u.fuel ?? 1) > 0 ? 1 : 0.2));
         else if (!chase && u.stance === 'defend' && distKm(u.pos, post) > 0.3) this.stepOffRoad(u, d, post, d.speed * dt);
       }
@@ -2265,13 +2322,13 @@ export class Sim {
       if (b.cooldown > 0) continue;
       let tgt: Unit | null = null;
       let best = a.range;
-      for (const e of w.units) {
-        if (e.team === b.team || e.hp <= 0 || e.embarkedIn || e.parkedAt !== undefined) continue;
+      this.near(this.unitGrid, b.pos, a.range, (e) => {
+        if (e.team === b.team || e.hp <= 0 || e.embarkedIn || e.parkedAt !== undefined) return;
         const air = this.defs.u.get(e.def)!.kind === 'air';
-        if ((a.targets === 'air' && !air) || (a.targets === 'ground' && air)) continue;
+        if ((a.targets === 'air' && !air) || (a.targets === 'ground' && air)) return;
         const dist = distKm(b.pos, e.pos);
         if (dist <= best) (best = dist), (tgt = e);
-      }
+      });
       if (!tgt) continue;
       const target: Unit = tgt;
       b.cooldown = 1;
@@ -2622,13 +2679,15 @@ export class Sim {
 
     // neighbours share speed so the line bends instead of spiking
     const s = clamp(r.frontSmoothing, 0, 1);
+    // the forces on the line are worked out every third tick; in between the nodes keep their speed
+    const fresh = w.tick % 3 === 0;
     const move = (n: FrontNode[], closed: boolean, base: [number, number]) => {
       const len = n.length;
-      const raw = n.map((node) => speedAt(node, base));
+      const raw = fresh ? n.map((node) => speedAt(node, base)) : null;
       for (let i = closed ? 0 : 1; i < (closed ? len : len - 1); i++) {
         const pi = (i - 1 + len) % len;
         const ni = (i + 1) % len;
-        const v = raw[i] * (1 - s) + ((raw[pi] + raw[ni]) / 2) * s;
+        const v = raw ? raw[i] * (1 - s) + ((raw[pi] + raw[ni]) / 2) * s : n[i].v;
         n[i].v = v;
         if (v === 0) continue;
         const [nx, ny] = normalOf(n[pi], n[i], n[ni]);

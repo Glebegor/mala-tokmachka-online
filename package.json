@@ -17,7 +17,8 @@
     "check:maps": "tsx tools/check-maps.mts",
     "docker-prod:run": "node tools/prod-run.mjs",
     "docker-prod:stop": "docker compose -p state-war -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.prod down",
-    "docker-prod:logs": "docker compose -p state-war -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.prod logs -f --tail 100"
+    "docker-prod:logs": "docker compose -p state-war -f docker-compose.yml -f docker-compose.prod.yml --env-file .env.prod logs -f --tail 100",
+    "bench": "tsx packages/core/test/stress.bench.ts"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
