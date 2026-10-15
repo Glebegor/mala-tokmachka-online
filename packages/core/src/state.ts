@@ -109,6 +109,8 @@ export interface Unit {
   suppressedUntil?: number;
   /** What an aggressive or defending unit was last closing with (server side). */
   chase?: LngLat;
+  /** Friendly ground units within 1.5 km (itself included): above 6 the crowd is penalised. */
+  crowd?: number;
   /** Had a target last time it looked (server side). */
   engaged?: boolean;
   /** Seconds it has stood still (digging in: the longer, the better protected). */
@@ -175,7 +177,7 @@ export interface Unit {
 export type UnitStatus = [id: string, value: number];
 
 /** Which status ids are debuffs. */
-export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo', 'lowmorale', 'broken', 'suppressed']);
+export const DEBUFFS = new Set(['exposed', 'lowsight', 'slowed', 'transport', 'encircled', 'lowfuel', 'nofuel', 'lowammo', 'noammo', 'lowmorale', 'broken', 'suppressed', 'crowded']);
 
 export interface Waypoint {
   p: LngLat;

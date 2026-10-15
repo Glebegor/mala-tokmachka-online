@@ -839,3 +839,21 @@ function acrossTheLine(sim: Sim): [LngLat, LngLat] {
   assert.ok(sq.status.some(([id]) => id === 'suppressed'), 'shaken for a few seconds');
   console.log('bunkers ok');
 }
+
+// --- crowding: stacking battalions in one spot is penalised ---
+{
+  const sim = fresh();
+  const a = sim.player('a')!;
+  const hq = hqOf(sim, 'a');
+  const at = offsetKm(hq.pos, 25, 0);
+  const few = Array.from({ length: 5 }, (_, i) => sim.spawnUnit('infantry', a, offsetKm(at, i * 0.1, 0)));
+  run(sim, 1);
+  assert.equal(sim.crowdOver(few[0]), 0, 'five together: fine');
+  const mass = Array.from({ length: 20 }, (_, i) => sim.spawnUnit('infantry', a, offsetKm(at, (i % 5) * 0.1, 0.2 + Math.floor(i / 5) * 0.1)));
+  run(sim, 1);
+  const u = mass[0];
+  assert.ok(sim.crowdOver(u) >= 15, `a crowd of ${u.crowd}`);
+  assert.ok(sim.crowdDealt(u) <= 0.25 + 0.5 && sim.crowdTaken(u) >= 1.9, 'deals much less, takes much more');
+  assert.ok(u.status.some(([id]) => id === 'crowded'), 'shown as crowded');
+  console.log(`crowding ok: ${u.crowd} together → ×${sim.crowdDealt(u).toFixed(2)} dealt, ×${sim.crowdTaken(u).toFixed(2)} taken`);
+}

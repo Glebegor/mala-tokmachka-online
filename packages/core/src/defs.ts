@@ -240,7 +240,8 @@ export interface RulesConfig {
   cityHousingLimit: number;
   storageCap: number; // per resource, per building (default)
   fieldWorkSpacing: number; // km: the ground any building takes (military sites need no more)
-  civilSpacing: number; // km between two civil sites (power plants, refineries, stations…)
+  civilSpacing: number; // km between two civil sites
+  crowdLimit: number; // friendly ground units within 1.5 km before crowding penalties start (power plants, refineries, stations…)
   startStorage: number; // goods a new building starts with
   greyZoneSeconds: number; // unopposed time behind the front before ground turns grey
   greyZoneSoloKm: number; // "unopposed" = no enemy unit this close
@@ -312,6 +313,7 @@ export const DEFAULT_RULES: RulesConfig = {
   storageCap: 30000,
   fieldWorkSpacing: 1.2,
   civilSpacing: 5,
+  crowdLimit: 6,
   startStorage: 500,
   greyZoneSeconds: 10,
   greyZoneSoloKm: 6,
