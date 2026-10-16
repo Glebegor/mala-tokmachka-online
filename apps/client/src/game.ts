@@ -2204,17 +2204,25 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         const d = defU.get(u.def)!;
         const isOwn = u.owner === me;
         const isFrontGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
-        const squadCount = u.squadSize ?? d.squadSize ?? (isFrontGarrison ? 100 : 5);
+        const squadCount = u.squadSize ?? d.squadSize ?? (isFrontGarrison ? 500 : 5);
 
         if (isFrontGarrison) {
           const statusText = u.frontStatus === 'advancing'
             ? '⚔️ Гарнизон фронта (медленно наступает)'
             : u.frontStatus === 'retreating'
             ? '⚠️ Гарнизон фронта (медленно отступает)'
+            : u.frontStatus === 'marching'
+            ? '🏃 Гарнизон фронта (выдвигается на рубеж)'
             : (u.advancePath && u.advancePath.length > 0
               ? '🛡️ Гарнизон фронта (удерживает рубеж: силы равны)'
               : '🛡️ Гарнизон фронта (удерживает рубеж)');
-          const statusColor = u.frontStatus === 'advancing' ? '#4ade80' : u.frontStatus === 'retreating' ? '#f87171' : '#8ec5fc';
+          const statusColor = u.frontStatus === 'advancing'
+            ? '#4ade80'
+            : u.frontStatus === 'retreating'
+            ? '#f87171'
+            : u.frontStatus === 'marching'
+            ? '#fbbf24'
+            : '#8ec5fc';
 
           const isAdvActive = garrisonPlan?.unitId === u.id && garrisonPlan.mode === 'advance';
           const isRetActive = garrisonPlan?.unitId === u.id && garrisonPlan.mode === 'retreat';

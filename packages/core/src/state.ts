@@ -200,8 +200,12 @@ export interface Unit {
   skirmishCount?: number;
   /** Target frontline garrison unit to reinforce and merge into upon arrival. */
   reinforceTarget?: number;
-  /** Frontline status: holding, advancing, or retreating. */
-  frontStatus?: 'holding' | 'advancing' | 'retreating';
+  /** Frontline status: holding, advancing, retreating, or marching to cover a gap. */
+  frontStatus?: 'holding' | 'advancing' | 'retreating' | 'marching';
+  /** Target position when garrison is marching to cover an empty front segment. */
+  marchTarget?: LngLat;
+  /** ID of donor garrison from which this squad was detached. */
+  donorId?: number;
   /** Custom advance route drawn by player for this frontline garrison. */
   advancePath?: LngLat[];
   /** Custom retreat route drawn by player for this frontline garrison. */

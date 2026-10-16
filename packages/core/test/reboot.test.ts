@@ -18,11 +18,11 @@ assert.equal(sim.world.buildings.length, 0, 'map starts with 0 buildings');
 assert.equal(sim.world.posts.length, 0, 'map starts with 0 frontline garrison posts');
 assert.ok(sim.world.units.length > 100, `frontline infantry deployed along the front line (actual=${sim.world.units.length})`);
 assert.ok(sim.world.units.every((u) => u.owner.startsWith('__front_')), 'all initial units are autonomous frontline garrisons');
-assert.ok(sim.world.units.every((u) => u.hp === 5000), 'all frontline squads have 100 soldiers (5000 HP)');
+assert.ok(sim.world.units.every((u) => u.hp === 25000), 'all frontline squads have 500 soldiers (25000 HP)');
 assert.ok(sim.world.units.every((u) => u.stance === 'hold'), 'all frontline squads have stance: hold (stand in place)');
 assert.ok(sim.world.units.every((u) => !(u.pos[0] < 35.35 && u.pos[1] < 47.7)), 'no frontline units deployed along Dnipro river / reservoir');
-assert.ok(sim.world.units.every((u) => (u.strength ?? 1) === 1 && (u.morale ?? 100) === 100 && (u.ammo ?? 100) === 100), 'all frontline squads have strength=1, morale=100, ammo=100');
-console.log(`✓ Frontline garrisons: ${sim.world.units.length} squads deployed along overland front line (Dnipro excluded, strength/morale/ammo verified)`);
+assert.ok(sim.world.units.every((u) => (u.strength ?? 1) === 5 && (u.morale ?? 100) === 100 && (u.ammo ?? 100) === 500), 'all frontline squads have strength=5, morale=100, ammo=500');
+console.log(`✓ Frontline garrisons: ${sim.world.units.length} squads deployed along overland front line (Dnipro excluded, strength 5, 500 soldiers, ammo verified)`);
 
 // 2. Resources: Money (15k start), Ore (cap 5000), Steel (cap 5000), Ammo (cap 50000)
 assert.equal(rs.resources.length, 4, '4 resources defined: money, ore, steel, ammo');
@@ -592,16 +592,16 @@ const moveForeign = sim.apply('player1', { type: 'move', units: [playerInfantry.
 assert.ok(!moveForeign.ok, 'Infantry move into foreign territory must be rejected');
 assert.ok(moveForeign.reason.includes('foreign'), `Error mentions foreign territory: ${moveForeign.reason}`);
 
-// Frontline infantry squads: 100 soldiers, cannot be ordered by player, stand in place
-const flSquad = sim.world.units.find((u) => u.owner === '__front_0' && (u.strength ?? 1) === 1)!;
+// Frontline infantry squads: 500 soldiers (strength 5), cannot be ordered by player, stand in place
+const flSquad = sim.world.units.find((u) => u.owner === '__front_0' && (u.strength ?? 1) === 5)!;
 assert.ok(flSquad, 'Frontline garrison squad exists');
-assert.ok(flSquad.hp > 4000 && flSquad.hp <= 5500, `Frontline garrison squad has ~5000 HP (actual=${flSquad.hp})`);
+assert.ok(flSquad.hp > 20000 && flSquad.hp <= 26000, `Frontline garrison squad has ~25000 HP (actual=${flSquad.hp})`);
 assert.equal(flSquad.stance, 'hold', 'Frontline garrison squad stands in place (stance: hold)');
 const playerOrderToFrontline = sim.apply('player1', { type: 'move', units: [flSquad.id], to: friendlyPos });
 assert.ok(!playerOrderToFrontline.ok, 'Player cannot command frontline squads');
 
 console.log('✓ Infantry: 100 cost, 100 km/h, 5 fighters, clean description, front/foreign boundary movement restrictions verified');
-console.log('✓ Frontline Garrisons: 100 fighters (5000 HP), autonomous, uncommandable by players, stand in place verified');
+console.log('✓ Frontline Garrisons: 500 fighters (25000 HP, strength 5), autonomous, uncommandable by players, stand in place verified');
 
 // 17. Housing Scale (+30% larger) and Dispersion (>= 85m spacing)
 const testHouses = generateCityHouses([30.5, 50.4], 9999);
@@ -618,8 +618,8 @@ console.log('✓ Housing: 1.95x scaled dimensions and >=85m spacing dispersion v
 // 18. Reinforcing frontline positions: player infantry merges into frontline squad, increasing strength and squad size
 const friendlyGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0)!;
 assert.ok(friendlyGarrison, 'Friendly frontline garrison exists');
-assert.equal(friendlyGarrison.strength ?? 1, 1, 'Initial garrison strength is 1');
-assert.equal(friendlyGarrison.squadSize ?? 100, 100, 'Initial garrison headcount is 100');
+assert.equal(friendlyGarrison.strength ?? 1, 5, 'Initial garrison strength is 5');
+assert.equal(friendlyGarrison.squadSize ?? 500, 500, 'Initial garrison headcount is 500');
 
 // Spawn reinforcing player infantry near the garrison (0.4 km away)
 const reinforcePos = offsetKm(friendlyGarrison.pos, -0.4, 0);
@@ -636,9 +636,9 @@ for (let step = 0; step < 90; step++) {
   if (!sim.world.units.some((u) => u.id === reinforcingUnit.id)) break;
 }
 assert.ok(!sim.world.units.some((u) => u.id === reinforcingUnit.id), 'Reinforcing squad merged into garrison');
-assert.equal(friendlyGarrison.strength, 2, 'Garrison strength increased to 2');
-assert.equal(friendlyGarrison.squadSize, 105, 'Garrison squad size increased by 5 (to 105)');
-console.log('✓ Reinforce & Merge: player infantry walks to frontline squad, merges, increases strength to 2 and headcount to 105 verified');
+assert.equal(friendlyGarrison.strength, 6, 'Garrison strength increased to 6');
+assert.equal(friendlyGarrison.squadSize, 505, 'Garrison squad size increased by 5 (to 505)');
+console.log('✓ Reinforce & Merge: player infantry walks to frontline squad, merges, increases strength to 6 and headcount to 505 verified');
 
 // 19. Random frontline skirmish crossfire simulation
 // Fast-forward sim and verify that frontline garrisons exchange random skirmish bursts
@@ -892,14 +892,16 @@ console.log('✓ Motorized Bot Transport: bot boards infantry into vehicles to r
 
 // 31. Threat-Based Frontline Garrison Stabilization (Prioritizing High-Disparity Sectors)
 // Create an opposing high-strength threat sector on UA side
-const threatUaGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && distKm(u.pos, botRuBase.pos) <= 150)!;
+const threatUaGarrison = sim.world.units
+  .filter((u) => u.owner === '__front_0' && u.hp > 0)
+  .sort((a, b) => distKm(a.pos, botRuBase.pos) - distKm(b.pos, botRuBase.pos))[0]!;
 assert.ok(threatUaGarrison, 'Found sector garrison near RU base');
-threatUaGarrison.strength = 4; // UA pushed 4 squads here!
+threatUaGarrison.strength = 8; // UA pushed 8 squads here!
 const opposingRuGarrison = sim.world.units
   .filter((u) => u.owner === '__front_1' && u.hp > 0 && distKm(u.pos, threatUaGarrison.pos) <= 8.0)
   .sort((a, b) => distKm(a.pos, threatUaGarrison.pos) - distKm(b.pos, threatUaGarrison.pos))[0]!;
 assert.ok(opposingRuGarrison, 'Found opposing RU garrison');
-opposingRuGarrison.strength = 1; // RU is outnumbered (deficit = 3)
+opposingRuGarrison.strength = 1; // RU is outnumbered (deficit = 7)
 
 // Spawn extra idle bot RU unit to reinforce
 sim.step(5.0);
@@ -988,7 +990,7 @@ console.log('✓ Garrison Ammo & Strength: max ammo = strength * 100 (300) and 5
 // When front depth is under 10 km, garrison holds together and does not split
 const advanceSalientGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && u.id !== scaledGarrison.id)!;
 advanceSalientGarrison.strength = 3;
-advanceSalientGarrison.squadSize = 140;
+advanceSalientGarrison.squadSize = 300;
 advanceSalientGarrison.hp = 15000;
 advanceSalientGarrison.ammo = 300;
 advanceSalientGarrison.pos = offsetKm(advanceSalientGarrison.pos, 0, 4.0); // 4 km deep (under 10 km)
@@ -1020,8 +1022,14 @@ const activeGarrisons = sim.world.units.filter((u) => {
   return ni > 30 && ni < sim.world.front.length - 30;
 });
 const gRoute = activeGarrisons[0]!;
-gRoute.strength = 4;
-gRoute.ammo = 400;
+const oppRoute = sim.world.units.find((u) => u.team === 1 && distKm(u.pos, gRoute.pos) <= 6.0);
+if (oppRoute) {
+  oppRoute.strength = 1;
+  oppRoute.squadSize = 100;
+}
+gRoute.strength = 8;
+gRoute.squadSize = 800;
+gRoute.ammo = 800;
 const wp1 = offsetKm(gRoute.pos, 2.0, 1.0);
 const wp2 = offsetKm(gRoute.pos, 4.0, 2.0);
 gRoute.advancePath = [wp1, wp2];
@@ -1100,19 +1108,23 @@ for (let s = 0; s < 10; s++) sim.step(1.0);
 const dniproNodePosAfter = [sim.world.front[dniproNodeIdx].lng, sim.world.front[dniproNodeIdx].lat];
 assert.equal(distKm(dniproNodePosBefore as [number, number], dniproNodePosAfter as [number, number]), 0, 'Dnipro water front line stays strictly static and does not push');
 
-// Test that equal forces garrisons with ammo hold their ground (neither retreats)
 const uaEqualGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0)!;
 const ruEqualGarrison = sim.world.units.find((u) => u.owner === '__front_1' && u.hp > 0 && distKm(u.pos, uaEqualGarrison.pos) <= 5.0)!;
 uaEqualGarrison.ammo = 100;
-ruEqualGarrison.ammo = 100;
 uaEqualGarrison.strength = 2;
-ruEqualGarrison.strength = 2;
+uaEqualGarrison.squadSize = 200;
 uaEqualGarrison.advancePath = undefined;
-ruEqualGarrison.advancePath = undefined;
 uaEqualGarrison.pushedDir = undefined;
-ruEqualGarrison.pushedDir = undefined;
 uaEqualGarrison.frontStatus = 'holding';
-ruEqualGarrison.frontStatus = 'holding';
+
+for (const ru of sim.world.units.filter((u) => u.team === 1 && distKm(u.pos, uaEqualGarrison.pos) <= 6.0)) {
+  ru.ammo = 100;
+  ru.strength = 2;
+  ru.squadSize = 200;
+  ru.advancePath = undefined;
+  ru.pushedDir = undefined;
+  ru.frontStatus = 'holding';
+}
 const uaEqualPosBefore = [uaEqualGarrison.pos[0], uaEqualGarrison.pos[1]];
 const ruEqualPosBefore = [ruEqualGarrison.pos[0], ruEqualGarrison.pos[1]];
 for (let s = 0; s < 10; s++) sim.step(1.0);
@@ -1176,6 +1188,7 @@ assert.equal(distKm(uaEqualGarrison.pos, uaPosBeforeAdvance as [number, number])
 
 // Advance route with superior forces (>1.25x): unit ADVANCES and pushes enemy
 uaEqualGarrison.strength = 3; // 3 > 1 * 1.25
+uaEqualGarrison.squadSize = 300;
 sim.step(1.0);
 assert.equal(uaEqualGarrison.frontStatus, 'advancing', 'Superior garrison with advancePath advances');
 assert.equal(ruEqualGarrison.frontStatus, 'retreating', 'Opposing weaker garrison is pushed and retreats');
@@ -1199,7 +1212,9 @@ console.log('✓ Retreat Territory Restrictions & Advance Equality: invalid retr
 // 48.1 Anti-Overtake & 2x Retreat Boost:
 // Position attacker and defender along front line:
 uaEqualGarrison.strength = 5; // superior
+uaEqualGarrison.squadSize = 500;
 ruEqualGarrison.strength = 1;
+ruEqualGarrison.squadSize = 100;
 ruEqualGarrison.ammo = 50;
 uaEqualGarrison.ammo = 50;
 ruEqualGarrison.pos = [35.5, 47.5];
@@ -1270,7 +1285,61 @@ if (sim.forbidden.length > 0 && sim.forbidden[0].length > 0) {
   }
 }
 
-console.log('✓ Garrison Anti-Overtake, 2x Retreat Speed Boost, and Foreign Border Separation Buffer verified');
+// 48. Hearts of Iron IV Frontline Gap Coverage & Marching Mechanics
+// 1. Initial garrisons have strength 5, 500 soldiers, 25000 HP
+const hoi4Garrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && (u.strength ?? 1) >= 4)!;
+assert.ok(hoi4Garrison, 'Found strong UA garrison');
+assert.ok((hoi4Garrison.strength ?? 1) >= 4, 'Garrison has strong initial strength (>= 4)');
+
+// 2. Clear a section of front line to simulate an empty segment (stretched line without friendly garrison within 4.0 km)
+const targetNodeIdx = nearestNode(sim.world.front, hoi4Garrison.pos);
+const gapNode = sim.world.front[targetNodeIdx];
+const gapNodePos: LngLat = [gapNode.lng, gapNode.lat];
+
+// Remove any friendly garrisons within 6.0 km of gapNode
+for (const u of sim.world.units) {
+  if (u.team === 0 && distKm(u.pos, gapNodePos) <= 6.0) {
+    u.hp = 0; // Clear area to create empty segment
+  }
+}
+
+// 3. Find candidate donor before split
+(sim as any).indexWorld();
+const donorBefore = sim.world.units
+  .filter((u) => u.team === 0 && u.hp > 0 && (u.strength ?? 1) > 1 && distKm(u.pos, gapNodePos) <= 30.0)
+  .sort((a, b) => distKm(a.pos, gapNodePos) - distKm(b.pos, gapNodePos))[0]!;
+assert.ok(donorBefore, 'Found eligible donor near gap');
+const donorInitialStrength = donorBefore.strength!;
+const donorInitialSize = donorBefore.squadSize!;
+
+// 4. Run gap detection and splitting
+(sim as any).salientGarrisonSplitting();
+
+// Donor lost 1 strength and 100 soldiers
+assert.equal(donorBefore.strength, donorInitialStrength - 1, 'Donor lost exactly 1 strength');
+assert.equal(donorBefore.squadSize, donorInitialSize - 100, 'Donor lost exactly 100 soldiers');
+
+// New garrison spawned and marching to cover the gap
+const marchingSquad = sim.world.units.find((u) => u.donorId === donorBefore.id);
+assert.ok(marchingSquad, 'New garrison created by donor to cover empty segment');
+assert.equal(marchingSquad.strength, 1, 'New garrison has strength 1');
+assert.equal(marchingSquad.squadSize, 100, 'New garrison has 100 soldiers');
+assert.equal(marchingSquad.hp, 5000, 'New garrison has 5000 HP');
+assert.equal(marchingSquad.frontStatus, 'marching', 'New garrison is marching to empty segment');
+assert.ok(marchingSquad.marchTarget, 'New garrison has marchTarget set to empty segment');
+
+// 5. Marching unit travels along route and reaches destination
+const initialDistToTarget = distKm(marchingSquad.pos, marchingSquad.marchTarget!);
+for (let s = 0; s < 20; s++) sim.step(10.0);
+assert.ok(distKm(marchingSquad.pos, marchingSquad.marchTarget ?? marchingSquad.pos) < initialDistToTarget, 'Garrison advances towards marchTarget');
+
+// When within arrival distance, unit transitions to holding
+marchingSquad.pos = [marchingSquad.marchTarget![0], marchingSquad.marchTarget![1]];
+(sim as any).stepMarchingGarrisons(1.0);
+assert.equal(marchingSquad.frontStatus, 'holding', 'Arrived garrison transitions to holding and covers segment');
+assert.equal(marchingSquad.marchTarget, undefined, 'marchTarget cleared upon arrival');
+
+console.log('✓ HoI4 Frontline Mechanics: Strength 5 start, 500 soldiers, empty segment detection, donor -1 str/-100 soldiers, and marching deployment verified');
 
 console.log('All reboot tests passed successfully!');
 

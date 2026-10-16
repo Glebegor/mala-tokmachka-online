@@ -258,11 +258,11 @@ export class Sim {
       owner: '__front_' + team,
       team,
       pos,
-      hp: d.hp, // 5000 HP (100 soldiers)
-      strength: 1,
-      squadSize: d.squadSize ?? 100,
+      hp: d.hp, // 25000 HP (500 soldiers, 5 strength)
+      strength: 5,
+      squadSize: d.squadSize ?? 500,
       morale: 100,
-      ammo: 100,
+      ammo: 500,
       skirmishTimer: 1 + Math.random() * 8,
       target: null,
       cooldown: 0,
@@ -279,6 +279,7 @@ export class Sim {
       stance: 'hold',
       post: [pos[0], pos[1]],
       stamina: undefined,
+      frontStatus: 'holding',
     };
     w.units.push(u);
     this.unitById?.set(u.id, u);
@@ -732,7 +733,11 @@ export class Sim {
   }
 
   maxHp(u: Unit): number {
-    return this.defs.u.get(u.def)!.hp * this.ranks[u.rank].hp;
+    const base = this.defs.u.get(u.def)!.hp;
+    if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
+      return (u.strength ?? 5) * 5000 * this.ranks[u.rank].hp;
+    }
+    return base * this.ranks[u.rank].hp;
   }
 
   terrainAt(p: LngLat): TerrainDef {
@@ -1693,6 +1698,7 @@ export class Sim {
     if (w.tick % r.tickRate === 0) this.healing();
     if (w.tick % r.tickRate === 3) this.morale();
     if (w.tick % r.tickRate === 7) this.repeats();
+    this.stepMarchingGarrisons(dt);
     if (w.tick % r.tickRate === 0) this.frontlineGarrisons(1.0);
     if (!peace && w.tick % (r.tickRate * 2) === 0) this.salientGarrisonSplitting();
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
@@ -3850,18 +3856,46 @@ export class Sim {
     return Math.hypot(px - projX, py - projY);
   }
 
+  /** Marching frontline garrisons moving to occupy gaps along the front line */
+  private stepMarchingGarrisons(dt: number) {
+    const w = this.world;
+    const marchSpeedKmS = 30.0 / 3600; // 30 km/h marching speed
+    const stepKm = marchSpeedKmS * dt;
+
+    for (const u of w.units) {
+      if (u.hp <= 0 || u.frontStatus !== 'marching' || !u.marchTarget) continue;
+      const d = distKm(u.pos, u.marchTarget);
+      if (d <= stepKm || d < 0.05) {
+        u.pos = [u.marchTarget[0], u.marchTarget[1]];
+        u.post = [u.pos[0], u.pos[1]];
+        u.frontStatus = 'holding';
+        u.marchTarget = undefined;
+      } else {
+        const k = stepKm / d;
+        const nextPos: LngLat = [
+          u.pos[0] + (u.marchTarget[0] - u.pos[0]) * k,
+          u.pos[1] + (u.marchTarget[1] - u.pos[1]) * k,
+        ];
+        if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
+          u.pos = nextPos;
+          if (u.post) u.post = [u.pos[0], u.pos[1]];
+        }
+      }
+    }
+  }
+
   /**
-   * Salient Expansion & Garrison Splitting (Requirement 2):
-   * When a front line penetrates or bulges deeply (> 10 km depth) either during attack (advancing salient)
-   * or defense (holding stretched breakthrough gaps), reinforced garrisons (strength > 1) redistribute
-   * surplus squads to automatically occupy newly opened empty slots along the lengthened front line.
+   * Salient Expansion & Garrison Splitting (Hearts of Iron IV frontline mechanics):
+   * When a front line penetrates deeply (> 10 km depth) or stretches to form empty segments
+   * (> 4.0 km away from any garrison), capable friendly garrisons (strength > 1) dispatch
+   * a squad (1 strength, 100 soldiers), which marches to the gap and begins holding it upon arrival.
    */
   private salientGarrisonSplitting() {
     const w = this.world;
     if (!w.front || w.front.length < 2) return;
     const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
 
-    // Find all reinforced frontline garrisons with ammo that are in sectors with front depth > 10 km
+    // 1. Salient-based splitting (flank coverage when front depth > 10 km)
     const reinforced = w.units.filter((u) => {
       if (u.hp <= 0 || u.embarkedIn || (u.strength ?? 1) <= 1 || (u.ammo ?? 0) <= 0) return false;
       const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
@@ -3944,21 +3978,30 @@ export class Sim {
         // Split 1 strength / squad from reinforced garrison
         const prevStr = u.strength ?? 1;
         u.strength = prevStr - 1;
-        const dropHeadcount = (u.squadSize ?? 100) > 100 ? 20 : 5;
-        u.squadSize = Math.max(5, (u.squadSize ?? 100) - dropHeadcount);
-        const hpDrop = Math.round(u.hp / prevStr);
+        const dropHeadcount = 100;
+        u.squadSize = Math.max(100, (u.squadSize ?? 500) - dropHeadcount);
+        const hpDrop = 5000;
         u.hp = Math.min(u.strength * 5000, Math.max(500, u.hp - hpDrop));
         const maxAmmo = u.strength * 100;
         if ((u.ammo ?? 0) > maxAmmo) u.ammo = maxAmmo;
 
-        const newGarrison = this.spawnFrontlineUnit(w, u.team, spawnPos);
+        const newGarrison = this.spawnFrontlineUnit(w, u.team, [...u.pos]);
         newGarrison.owner = u.owner;
         newGarrison.strength = 1;
         newGarrison.squadSize = 100;
         newGarrison.hp = 5000;
         newGarrison.ammo = 100;
-        newGarrison.frontStatus = 'holding';
         newGarrison.post = [spawnPos[0], spawnPos[1]];
+        newGarrison.donorId = u.id;
+
+        if (distKm(u.pos, spawnPos) > 0.3) {
+          newGarrison.frontStatus = 'marching';
+          newGarrison.marchTarget = spawnPos;
+        } else {
+          newGarrison.frontStatus = 'holding';
+          newGarrison.marchTarget = undefined;
+          newGarrison.pos = [spawnPos[0], spawnPos[1]];
+        }
 
         if (assignedPost) {
           assignedPost.garrison.push(newGarrison.id);
@@ -3974,6 +4017,80 @@ export class Sim {
           };
           w.posts.push(newPost);
           newGarrison.frontPost = newPost.id;
+        }
+      }
+    }
+
+    // 2. General HoI4 empty segment check: any stretch of front line without coverage (> 4.0 km from any friendly garrison)
+    for (const team of [0, 1] as const) {
+      const activeGarrisons = w.units.filter(
+        (u) => u.team === team && u.hp > 0 && (u.def === 'frontline_infantry' || u.owner.startsWith('__front_'))
+      );
+
+      for (let i = 0; i < w.front.length; i += 2) {
+        const nodePt: LngLat = [w.front[i].lng, w.front[i].lat];
+        if ((nodePt[0] < 35.35 && nodePt[1] < 47.7) || this.terrain?.isBarrier(nodePt) || this.terrainAt(nodePt).id === 'water' || this.foreign(nodePt)) {
+          continue;
+        }
+
+        let covered = false;
+        for (const g of activeGarrisons) {
+          const checkPos = g.frontStatus === 'marching' && g.marchTarget ? g.marchTarget : g.pos;
+          if (distKm(nodePt, checkPos) <= 4.0) {
+            covered = true;
+            break;
+          }
+        }
+        if (covered) continue;
+
+        // Gap found! Calculate target position in friendly ground
+        const [nx, ny] = normalAt(w.front, i);
+        const offsetDir = team === 0 ? -1 : 1;
+        const candPos: LngLat = offsetKm(nodePt, nx * offsetDir * 0.8, ny * offsetDir * 0.8);
+        if (!isDry(candPos) || this.side(candPos) !== team) continue;
+
+        // Find nearest capable donor garrison (strength > 1)
+        let bestDonor: Unit | null = null;
+        let bestScore = Infinity;
+
+        for (const g of activeGarrisons) {
+          if ((g.strength ?? 1) <= 1 || g.frontStatus === 'marching' || (g.ammo ?? 0) <= 0) continue;
+          const dist = distKm(g.pos, candPos);
+          if (dist > 40.0) continue;
+          const score = dist - 2.0 * ((g.strength ?? 1) - 2);
+          if (score < bestScore) {
+            bestScore = score;
+            bestDonor = g;
+          }
+        }
+
+        if (bestDonor) {
+          const prevStr = bestDonor.strength ?? 1;
+          bestDonor.strength = prevStr - 1;
+          bestDonor.squadSize = Math.max(100, (bestDonor.squadSize ?? 500) - 100);
+          bestDonor.hp = Math.min(bestDonor.strength * 5000, Math.max(500, bestDonor.hp - 5000));
+          const maxAmmo = bestDonor.strength * 100;
+          if ((bestDonor.ammo ?? 0) > maxAmmo) bestDonor.ammo = maxAmmo;
+
+          const newGarrison = this.spawnFrontlineUnit(w, team, [...bestDonor.pos]);
+          newGarrison.owner = bestDonor.owner;
+          newGarrison.strength = 1;
+          newGarrison.squadSize = 100;
+          newGarrison.hp = 5000;
+          newGarrison.ammo = 100;
+          newGarrison.post = [candPos[0], candPos[1]];
+          newGarrison.donorId = bestDonor.id;
+
+          if (distKm(bestDonor.pos, candPos) > 0.3) {
+            newGarrison.frontStatus = 'marching';
+            newGarrison.marchTarget = candPos;
+          } else {
+            newGarrison.frontStatus = 'holding';
+            newGarrison.marchTarget = undefined;
+            newGarrison.pos = [candPos[0], candPos[1]];
+          }
+
+          activeGarrisons.push(newGarrison);
         }
       }
     }
@@ -4056,7 +4173,7 @@ export class Sim {
 
       this.near(this.unitGrid, pos, 4.0, (u) => {
         const d = distKm(u.pos, pos);
-        if (d > 4.0 || u.embarkedIn || u.hp <= 0) return;
+        if (d > 4.0 || u.embarkedIn || u.hp <= 0 || u.frontStatus === 'marching') return;
         const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
         if (!isFront) return;
         if (u.team === 0 && d < dist0) {
@@ -4076,8 +4193,8 @@ export class Sim {
       if (local0 && local1) {
         const uAmmo0 = (local0 as Unit).ammo ?? 0;
         const uAmmo1 = (local1 as Unit).ammo ?? 0;
-        const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? 100) - 100) / 20);
-        const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
+        const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? ((local0 as Unit).strength ?? 1) * 100) - ((local0 as Unit).strength ?? 1) * 100) / 20);
+        const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? ((local1 as Unit).strength ?? 1) * 100) - ((local1 as Unit).strength ?? 1) * 100) / 20);
 
         if (uAmmo0 > 0 && uAmmo1 <= 0) {
           dynamicPush += 0.0120;
@@ -4131,23 +4248,23 @@ export class Sim {
 
       // If local opposing garrisons are standing with ammo and equal forces (and not holding assault catch-up), trenches hold firm against abstract push
       if (!holdAssault0 && !holdAssault1 && local0 && local1 && ((local0 as Unit).ammo ?? 0) > 0 && ((local1 as Unit).ammo ?? 0) > 0) {
-        const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? 100) - 100) / 20);
-        const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
+        const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? ((local0 as Unit).strength ?? 1) * 100) - ((local0 as Unit).strength ?? 1) * 100) / 20);
+        const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? ((local1 as Unit).strength ?? 1) * 100) - ((local1 as Unit).strength ?? 1) * 100) / 20);
         if (Math.abs(str0 - str1) <= Math.max(str0, str1) * 0.25) {
-          (local0 as Unit).frontStatus = 'holding';
-          (local1 as Unit).frontStatus = 'holding';
+          if ((local0 as Unit).frontStatus !== 'marching') (local0 as Unit).frontStatus = 'holding';
+          if ((local1 as Unit).frontStatus !== 'marching') (local1 as Unit).frontStatus = 'holding';
           return 0; // stalemate, line holds
         }
       }
 
-      if (local0) {
+      if (local0 && !(local0 as Unit).advancePath?.length && (local0 as Unit).frontStatus !== 'marching') {
         (local0 as Unit).frontStatus = ((local0 as Unit).ammo ?? 0) <= 0
           ? 'retreating'
           : holdAssault0
           ? 'holding'
           : dynamicPush > 0.0005 ? 'advancing' : dynamicPush < -0.0005 ? 'retreating' : 'holding';
       }
-      if (local1) {
+      if (local1 && !(local1 as Unit).advancePath?.length && (local1 as Unit).frontStatus !== 'marching') {
         (local1 as Unit).frontStatus = ((local1 as Unit).ammo ?? 0) <= 0
           ? 'retreating'
           : holdAssault1
@@ -4199,6 +4316,7 @@ export class Sim {
         for (const u of w.units) {
           if (u.hp <= 0 || u.embarkedIn || u.encircled || w.pockets.some((k) => pointInRing(k.nodes, u.pos))) continue;
           if (u.def !== 'frontline_infantry' && !u.owner.startsWith('__front_') && u.frontPost === undefined) continue;
+          if (u.frontStatus === 'marching') continue;
           const i = nearestNode(n, u.pos);
           if (i <= 0 || i >= len - 1) continue;
           const nodePos: LngLat = [n[i].lng, n[i].lat];
@@ -4218,7 +4336,7 @@ export class Sim {
           let oppDist = 12.0;
 
           const considerOpp = (e: Unit) => {
-            if (e.team !== u.team && e.hp > 0 && !e.embarkedIn) {
+            if (e.team !== u.team && e.hp > 0 && !e.embarkedIn && e.frontStatus !== 'marching') {
               const isGarrison =
                 e.def === 'frontline_infantry' ||
                 e.owner.startsWith('__front_') ||
@@ -4247,8 +4365,8 @@ export class Sim {
             }
           }
 
-          const myStr = (u.strength ?? 1) + Math.max(0, ((u.squadSize ?? 100) - 100) / 20);
-          const oppStr = oppGarrison ? ((oppGarrison as Unit).strength ?? 1) + Math.max(0, (((oppGarrison as Unit).squadSize ?? 100) - 100) / 20) : 0;
+          const myStr = (u.strength ?? 1) + Math.max(0, ((u.squadSize ?? ((u.strength ?? 1) * 100)) - (u.strength ?? 1) * 100) / 20);
+          const oppStr = oppGarrison ? ((oppGarrison as Unit).strength ?? 1) + Math.max(0, (((oppGarrison as Unit).squadSize ?? (((oppGarrison as Unit).strength ?? 1) * 100)) - ((oppGarrison as Unit).strength ?? 1) * 100) / 20) : 0;
           const oppAmmo = oppGarrison ? ((oppGarrison as Unit).ammo ?? 0) : 0;
           const myAmmo = u.ammo ?? 0;
 
@@ -4263,7 +4381,7 @@ export class Sim {
           const opp: any = oppGarrison;
           if (isAdvancing) {
             u.frontStatus = 'advancing';
-            if (opp) {
+            if (opp && opp.frontStatus !== 'marching') {
               opp.frontStatus = 'retreating';
             }
             // Waypoint following for advance:
@@ -4284,6 +4402,7 @@ export class Sim {
               dir = u.team === 0 ? [nx, ny] : [-nx, -ny];
             }
 
+            u.frontStatus = 'advancing';
             let stepKm = Math.max(0.012, Math.abs(v)) * dt;
 
             if (opp) {
@@ -4292,29 +4411,32 @@ export class Sim {
               const distToOpp = Math.hypot(toOppX, toOppY);
               const projAlong = toOppX * dir[0] + toOppY * dir[1];
 
-              // Push direction mirrors the advancing garrison's current trajectory
-              opp.pushedDir = [dir[0], dir[1]];
+              // Only engage anti-overtake and push if defender is in front or slightly abreast (projAlong >= -0.5)
+              if (projAlong >= -0.5) {
+                // Push direction mirrors the advancing garrison's current trajectory
+                opp.pushedDir = [dir[0], dir[1]];
 
-              // Defender retreat boost control:
-              // If pressed (< 1.4 km) or defender is misaligned (projection along advance < 1.1 km):
-              if (distToOpp < 1.4 || (distToOpp < 2.0 && projAlong < 1.1)) {
-                opp.retreatBoost = true;
-              } else if (distToOpp >= 1.6 && projAlong >= 1.4) {
-                opp.retreatBoost = false;
-              }
+                // Defender retreat boost control:
+                // If pressed (< 1.4 km) or defender is misaligned (projection along advance < 1.1 km):
+                if (distToOpp < 1.4 || (distToOpp < 2.0 && projAlong < 1.1)) {
+                  opp.retreatBoost = true;
+                } else if (distToOpp >= 1.6 && projAlong >= 1.4) {
+                  opp.retreatBoost = false;
+                }
 
-              // Anti-overtake: Attacker can NEVER get closer than 0.95 km or overtake defending garrison
-              const minBufferKm = 0.95;
-              const nextTentative: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
-              const nextDist = distKm(nextTentative, opp.pos);
-              if (distToOpp < 1.4 && projAlong < 0) {
-                // Attacker ended up past/behind the defender: halt until defender repositions in front
-                stepKm = 0;
-              } else if (nextDist < minBufferKm) {
-                if (distToOpp > minBufferKm) {
-                  stepKm = Math.min(stepKm, Math.max(0, distToOpp - minBufferKm));
-                } else {
-                  stepKm = 0; // Hold until defender pulls back
+                // Anti-overtake: Attacker can NEVER get closer than 0.95 km or overtake defending garrison
+                const minBufferKm = 0.95;
+                const nextTentative: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+                const nextDist = distKm(nextTentative, opp.pos);
+                if (distToOpp < 1.4 && projAlong < 0) {
+                  // Attacker ended up past/behind the defender: halt until defender repositions in front
+                  stepKm = 0;
+                } else if (nextDist < minBufferKm) {
+                  if (distToOpp > minBufferKm) {
+                    stepKm = Math.min(stepKm, Math.max(0, distToOpp - minBufferKm));
+                  } else {
+                    stepKm = 0; // Hold until defender pulls back
+                  }
                 }
               }
             }
@@ -4396,7 +4518,18 @@ export class Sim {
             // 2. Garrison advances along dir BEHIND the leading front line, strictly in friendly territory
             if (stepKm > 0) {
               const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
-              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos) && this.side(nextPos) === u.team) {
+              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos) && (this.side(nextPos) === u.team || projAlongDir >= 0.2)) {
+                u.pos = nextPos;
+                if (u.post) u.post = [nextPos[0], nextPos[1]];
+              }
+            }
+
+            // Keep advancing garrison within 1.0 km of the leading front line
+            const curDist = distKm(u.pos, [n[i].lng, n[i].lat]);
+            if (curDist > 1.0) {
+              const catchUp = curDist - 0.95;
+              const nextPos: LngLat = [u.pos[0] + (dir[0] * catchUp) / ukx, u.pos[1] + (dir[1] * catchUp) / 111.32];
+              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos) && (this.side(nextPos) === u.team || projAlongDir >= 0.2)) {
                 u.pos = nextPos;
                 if (u.post) u.post = [nextPos[0], nextPos[1]];
               }
