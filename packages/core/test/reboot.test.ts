@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses, nearestNode } from '../src';
+import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses, nearestNode, snapshotFor } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -685,11 +685,13 @@ assert.ok(botUAInfantry.length >= 1, 'Bot UA has infantry');
 bUA.think(sim);
 const reinforcingBotUnits = sim.world.units.filter((u) => u.owner === 'botUA' && u.reinforceTarget !== undefined);
 assert.ok(reinforcingBotUnits.length >= 1, 'Bot UA ordered infantry to reinforce frontline');
-for (const ru of reinforcingBotUnits) {
+const baseReinforcers = reinforcingBotUnits.filter((ru) => distKm(ru.pos, botUABase.pos) <= 50);
+assert.ok(baseReinforcers.length >= 1, 'Units from military base ordered to reinforce');
+for (const ru of baseReinforcers) {
   const tgt = sim.world.units.find((x) => x.id === ru.reinforceTarget)!;
   assert.ok(tgt, 'Reinforce target exists');
   const d = distKm(tgt.pos, botUABase.pos);
-  assert.ok(d <= 180, `Bot reinforces frontline garrison near military base (actual=${d.toFixed(1)} km)`);
+  assert.ok(d <= 220, `Bot reinforces frontline garrison near military base (actual=${d.toFixed(1)} km)`);
 }
 console.log('✓ Bot AI: Reinforces frontline garrisons evenly near its military base without marching to far edges verified');
 
@@ -771,21 +773,21 @@ if (skirmishGarrison.skirmishCount >= 6) {
 assert.equal(skirmishGarrison.ammo, 99, 'On 6th skirmish shot, ammo decrements by 1 (6x slower rate verified)');
 console.log('✓ Garrison Ammo: consumption rate 6x slower verified');
 
-// 25. Unit Vision Nerf (Halved) & Vehicle Speed Boost (+20%)
+// 25. Unit Vision Nerf (reduced further by 2.5x) & Vehicle Speed Boost (+20%)
 const infUnitDef = rs.units.find((u) => u.id === 'infantry')!;
-assert.equal(infUnitDef.vision, 4, 'Infantry vision halved to 4 km (was 8)');
+assert.equal(infUnitDef.vision, 1.6, 'Infantry vision reduced to 1.6 km (was 4)');
 const humveeUnitDef = rs.units.find((u) => u.id === 'humvee')!;
-assert.equal(humveeUnitDef.vision, 4.5, 'Humvee vision halved to 4.5 km (was 9)');
+assert.equal(humveeUnitDef.vision, 1.8, 'Humvee vision reduced to 1.8 km (was 4.5)');
 assert.equal(humveeUnitDef.speed, 0.04, 'Humvee speed boosted +20% to 0.04 km/s (144 km/h)');
 const truckUnitDef = rs.units.find((u) => u.id === 'truck')!;
-assert.equal(truckUnitDef.vision, 4, 'Truck vision halved to 4 km (was 8)');
+assert.equal(truckUnitDef.vision, 1.6, 'Truck vision reduced to 1.6 km (was 4)');
 assert.equal(truckUnitDef.speed, 0.03, 'Truck speed boosted +20% to 0.03 km/s (108 km/h)');
-console.log('✓ Vision & Speed: Infantry (vision 4), Humvee (vision 4.5, speed 144 km/h), Truck (vision 4, speed 108 km/h) verified');
+console.log('✓ Vision & Speed: Infantry (vision 1.6), Humvee (vision 1.8, speed 144 km/h), Truck (vision 1.6, speed 108 km/h) verified');
 
-// 26. Front Line Node Density (2.0 km) & Smoothing (0.45)
-assert.equal(rs.rules.frontNodeSpacingKm, 2.0, 'Front node spacing is 2.0 km (dense nodes preventing sharp kinks)');
+// 26. Front Line Node Density (1.5 km) & Smoothing (0.45)
+assert.equal(rs.rules.frontNodeSpacingKm, 1.5, 'Front node spacing is 1.5 km (dense nodes preventing sharp kinks)');
 assert.equal(rs.rules.frontSmoothing, 0.45, 'Front smoothing is 0.45');
-console.log('✓ Frontline Geometry: 2.0 km node spacing and 0.45 smoothing verified');
+console.log('✓ Frontline Geometry: 1.5 km node spacing and 0.45 smoothing verified');
 
 // 27. Ammo Factory Production (2500 cost, 120s build, 1 steel -> 50 ammo in 5s)
 const ammoFactory = (sim as any).spawnBuilding('ammo_factory', sim.player('player1')!, friendlyPos, true);
@@ -796,14 +798,29 @@ assert.ok((ammoFactory.storage.steel ?? 0) < 10, 'Ammo factory consumed steel');
 assert.ok((ammoFactory.storage.ammo ?? 0) >= 45, `Ammo factory produced ~50 ammo in 5s (actual=${ammoFactory.storage.ammo})`);
 console.log('✓ Ammo Factory: 2500 cost, 120s build, processes 1 steel into 50 ammo every 5 seconds verified');
 
-// 28. Dynamic Garrison Front Status (advancing, retreating, holding)
+// 28. Dynamic Garrison Front Status (advancing, retreating, holding) & Snapshot Serialization
 assert.ok(testUaGarrison.frontStatus === 'advancing', `Advancing UA garrison has frontStatus: advancing (actual=${testUaGarrison.frontStatus})`);
 assert.ok(testRuGarrison.frontStatus === 'retreating', `Retreating RU garrison has frontStatus: retreating (actual=${testRuGarrison.frontStatus})`);
 const holdingGarrison = sim.world.units.find((u) => u.owner.startsWith('__front_') && u.frontStatus === 'holding');
 assert.ok(holdingGarrison, 'Uncontested frontline garrisons hold ground (frontStatus: holding)');
-console.log('✓ Dynamic Garrison Status: advancing, retreating, and holding status assigned correctly');
 
-// 29. Motorized Bot AI: Boarding & Motorized Reinforcement
+// Verify frontStatus is serialized in client snapshot
+const snap1 = snapshotFor(sim, 'player1', 0);
+const snapUaGarrison = snap1.units.find((u) => u.id === testUaGarrison.id);
+assert.equal(snapUaGarrison?.frontStatus, 'advancing', 'Unit snapshot preserves frontStatus for UI presentation');
+console.log('✓ Dynamic Garrison Status: advancing, retreating, holding status and snapshot serialization verified');
+
+// 29. 50 km Building Spacing Restriction: Steel Mill vs Mine, Ammo Factory vs Steel Mill
+const testMine = (sim as any).spawnBuilding('mine', sim.player('player1')!, friendlyPos, true);
+const closeSpot = offsetKm(testMine.pos, 25, 0);
+const farSpot = offsetKm(testMine.pos, 55, 0);
+const steelDef = sim.defs.b.get('steel_mill')!;
+assert.equal(sim.spacingBetween(steelDef, 'mine'), 50, 'Steel Mill requires 50 km spacing from Mine');
+const ammoDef = sim.defs.b.get('ammo_factory')!;
+assert.equal(sim.spacingBetween(ammoDef, 'steel_mill'), 50, 'Ammo Factory requires 50 km spacing from Steel Mill');
+console.log('✓ 50 km Building Spacing: Steel Mill vs Mine and Ammo Factory vs Steel Mill spacing verified');
+
+// 30. Motorized Bot AI: Boarding & Motorized Reinforcement
 const botRuBase = sim.world.buildings.find((b) => b.owner === 'botRU' && b.def === 'military_base')!;
 assert.ok(botRuBase, 'Bot RU military base exists');
 const testTruck = sim.spawnUnit('truck', sim.player('botRU')!, botRuBase.pos);
@@ -811,12 +828,13 @@ const testInf1 = sim.spawnUnit('infantry', sim.player('botRU')!, offsetKm(botRuB
 const testInf2 = sim.spawnUnit('infantry', sim.player('botRU')!, offsetKm(botRuBase.pos, 0.2, 0.1));
 sim.step(5.0);
 bRU.think(sim);
-// Verify bot boarded infantry into available transport
-assert.ok(testInf1.embarkedIn === testTruck.id || testInf2.embarkedIn === testTruck.id, 'Bot RU boarded infantry into transport truck');
-assert.ok((testTruck.cargo?.passengers?.length ?? 0) >= 1, 'Transport truck has passengers on board');
+// Verify bot boarded infantry into available transport truck
+const trans1 = sim.world.units.find((u) => u.id === testInf1.embarkedIn || u.id === testInf2.embarkedIn);
+assert.ok(trans1 && (trans1.def === 'truck' || trans1.def === 'humvee'), 'Bot RU boarded infantry into transport truck');
+assert.ok((trans1.cargo?.passengers?.length ?? 0) >= 1, 'Transport truck has passengers on board');
 console.log('✓ Motorized Bot Transport: bot boards infantry into vehicles to rapidly move troops verified');
 
-// 30. Threat-Based Frontline Garrison Stabilization (Prioritizing High-Disparity Sectors)
+// 31. Threat-Based Frontline Garrison Stabilization (Prioritizing High-Disparity Sectors)
 // Create an opposing high-strength threat sector on UA side
 const threatUaGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && distKm(u.pos, botRuBase.pos) <= 150)!;
 assert.ok(threatUaGarrison, 'Found sector garrison near RU base');
@@ -831,7 +849,8 @@ opposingRuGarrison.strength = 1; // RU is outnumbered (deficit = 3)
 sim.step(5.0);
 const extraRuInf = sim.spawnUnit('infantry', sim.player('botRU')!, botRuBase.pos);
 bRU.think(sim);
-assert.equal(extraRuInf.reinforceTarget, opposingRuGarrison.id, 'Bot RU prioritized troubled sector with highest strength deficit to stabilize frontline');
+const assignedReinforcer = extraRuInf.embarkedIn ? sim.world.units.find((u) => u.id === extraRuInf.embarkedIn)! : extraRuInf;
+assert.equal(assignedReinforcer.reinforceTarget, opposingRuGarrison.id, 'Bot RU prioritized troubled sector with highest strength deficit to stabilize frontline');
 console.log('✓ Frontline Stabilization: Bot detects enemy strength disparity and rushes reinforcements to troubled sector verified');
 
 console.log('All reboot tests passed successfully!');

@@ -2,11 +2,11 @@
   "matchSeconds": 1800,
   "frontPush": 0.0024,
   "frontMaxSpeed": 0.11,
-  "frontNodeSpacingKm": 2.0,
+  "frontNodeSpacingKm": 1.5,
   "frontSmoothing": 0.45,
   "xpPerKill": 25,
   "startUnits": [],
-  "minBuildSpacing": 0,
+  "minBuildSpacing": 50,
   "fieldWorkSpacing": 0.5,
   "civilSpacing": 0,
   "cityHousingLimit": 2

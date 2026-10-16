@@ -498,7 +498,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const spacingBetween = (d: BuildingDef, other: string, inZone: boolean) => {
     const r = init!.ruleset.rules;
     const o = defB.get(other);
-    if (o && chained(d, o) && !inZone) return r.minBuildSpacing;
+    if (o && !inZone) {
+      if ((d.id === 'steel_mill' && o.id === 'mine') || (d.id === 'mine' && o.id === 'steel_mill')) return 50;
+      if ((d.id === 'ammo_factory' && o.id === 'steel_mill') || (d.id === 'steel_mill' && o.id === 'ammo_factory')) return 50;
+    }
+    if (o && chained(d, o) && !inZone) return r.minBuildSpacing || 50;
     if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
     if (o && !inZone && d.category === 'civil' && o.category === 'civil' && !d.line && !o.line && d.id !== 'housing' && o.id !== 'housing') return r.civilSpacing;
     return r.fieldWorkSpacing;

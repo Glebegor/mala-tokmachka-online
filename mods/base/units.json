@@ -16,7 +16,7 @@
     "range": 1.5,
     "damage": 50,
     "mobility": "foot",
-    "vision": 4,
+    "vision": 1.6,
     "symbol": "infantry"
   },
   {
@@ -37,7 +37,7 @@
     "maxAmmo": 500,
     "range": 0,
     "damage": 0,
-    "vision": 4.5,
+    "vision": 1.8,
     "mobility": "wheeled",
     "symbol": "motorized"
   },
@@ -58,7 +58,7 @@
     "ammoPerShot": 1,
     "range": 2.0,
     "damage": 40,
-    "vision": 9,
+    "vision": 1.8,
     "mobility": "wheeled",
     "symbol": "motorized"
   },
@@ -79,7 +79,7 @@
     "cargoCap": 3000,
     "range": 0,
     "damage": 0,
-    "vision": 4,
+    "vision": 1.6,
     "mobility": "wheeled",
     "symbol": "supply"
   },

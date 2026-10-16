@@ -204,10 +204,10 @@ function findBotDepositPos(sim: Sim, team: Team, type: 'iron' | 'oil'): LngLat |
   for (const dep of shuffled) {
     const spots: LngLat[] = [];
     if (inDeposit(type, dep.center, team, sim.deposits)) spots.push(dep.center);
-    for (const rFrac of [0.15, 0.3, 0.5, 0.7]) {
+    for (const rFrac of [0.05, 0.15, 0.25, 0.35, 0.5, 0.65, 0.8]) {
       const r = dep.radiusKm * rFrac;
-      for (let i = 0; i < 12; i++) {
-        const ang = (i * Math.PI * 2) / 12;
+      for (let i = 0; i < 16; i++) {
+        const ang = (i * Math.PI * 2) / 16;
         spots.push(offsetKm(dep.center, Math.cos(ang) * r, Math.sin(ang) * r));
       }
     }
@@ -216,6 +216,8 @@ function findBotDepositPos(sim: Sim, team: Team, type: 'iron' | 'oil'): LngLat |
       if (!inDeposit(type, spot, team, sim.deposits)) continue;
       if (!sim.isPlayableGround(spot) || sim.terrainAt(spot).id === 'water') continue;
       if (sim.side(spot) !== team) continue;
+      const distFromFront = Math.abs(distToFrontKm(sim.world.front, spot));
+      if (distFromFront < sim.ruleset.rules.minBuildDistanceFromFront * (bDef.category === 'civil' ? 2 : 1)) continue;
       const clash = sim.world.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, spot) < sim.spacingBetween(bDef, x.def, false));
       if (!clash) return spot;
     }
@@ -343,31 +345,49 @@ export class Bot {
       }
     }
 
-    // Build steel mill (up to 1 per bot)
+    // Build steel mill (up to 1 per bot, >= 50km from any mine)
     const steelDef = sim.defs.b.get('steel_mill');
     if (steelDef && sim.canPay(p, steelDef.cost)) {
       const mySteelMills = mine.filter((b) => b.def === 'steel_mill');
       if (mySteelMills.length < 1) {
         const anchor = mine.find((b) => b.def === 'military_base') ?? hq;
         if (anchor) {
-          const spot = offsetKm(anchor.pos, 5 + Math.random() * 5, 5 + Math.random() * 5);
-          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
-            sim.apply(p.id, { type: 'build', def: 'steel_mill', pos: spot });
+          const allMines = w.buildings.filter((b) => b.def === 'mine');
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const angle = (attempt / 20) * 2 * Math.PI;
+            const dist = 52 + (attempt % 4) * 8;
+            const spot = offsetKm(anchor.pos, Math.cos(angle) * dist, Math.sin(angle) * dist);
+            if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+              const tooClose = allMines.some((m) => distKm(m.pos, spot) < 50);
+              if (!tooClose) {
+                const res = sim.apply(p.id, { type: 'build', def: 'steel_mill', pos: spot });
+                if (res.ok) break;
+              }
+            }
           }
         }
       }
     }
 
-    // Build ammo factory (up to 1 per bot)
+    // Build ammo factory (up to 1 per bot, >= 50km from any steel mill)
     const ammoDef = sim.defs.b.get('ammo_factory');
     if (ammoDef && sim.canPay(p, ammoDef.cost)) {
       const myAmmo = mine.filter((b) => b.def === 'ammo_factory');
       if (myAmmo.length < 1) {
-        const anchor = mine.find((b) => b.def === 'steel_mill') ?? mine.find((b) => b.def === 'military_base') ?? hq;
+        const allSteelMills = w.buildings.filter((b) => b.def === 'steel_mill');
+        const anchor = mine.find((b) => b.def === 'military_base') ?? hq;
         if (anchor) {
-          const spot = offsetKm(anchor.pos, 4 + Math.random() * 4, 4 + Math.random() * 4);
-          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
-            sim.apply(p.id, { type: 'build', def: 'ammo_factory', pos: spot });
+          for (let attempt = 0; attempt < 20; attempt++) {
+            const angle = (attempt / 20) * 2 * Math.PI + 0.3;
+            const dist = 52 + (attempt % 4) * 8;
+            const spot = offsetKm(anchor.pos, Math.cos(angle) * dist, Math.sin(angle) * dist);
+            if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+              const tooClose = allSteelMills.some((s) => distKm(s.pos, spot) < 50);
+              if (!tooClose) {
+                const res = sim.apply(p.id, { type: 'build', def: 'ammo_factory', pos: spot });
+                if (res.ok) break;
+              }
+            }
           }
         }
       }
@@ -456,8 +476,12 @@ export class Bot {
     const nearest = (from: Building, list: Building[]) => list.sort((a, b) => distKm(a.pos, from.pos) - distKm(b.pos, from.pos))[0];
     const route = (u: Unit, from?: Building, to?: Building, res?: string) => from && to && sim.apply(p.id, { type: 'setRoute', unit: u.id, fromBuilding: from.id, toBuilding: to.id, resType: res, minLoad: 1 });
     // Only use trucks that are not occupied as troop transports or reinforcing
-    const unembarkedNearBase = (t: Unit) => w.units.some((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && !u.target && !u.reinforceTarget && distKm(u.pos, t.pos) <= 10);
-    const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul && !u.reinforceTarget && !(u.cargo?.passengers?.length) && !unembarkedNearBase(u));
+    const myMilitaryBases = w.buildings.filter((b) => b.owner === p.id && b.def === 'military_base');
+    const fallbackBase = w.buildings.filter((b) => b.team === p.team && b.def === 'military_base')[0];
+    const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
+    const anchorBase = myMilitaryBases[0]?.pos ?? fallbackBase?.pos ?? hq?.pos ?? sim.map.center;
+    const isTroopTransport = (t: Unit) => (t.cargo?.passengers?.length ?? 0) > 0 || t.reinforceTarget !== undefined || distKm(t.pos, anchorBase) <= 30;
+    const trucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul && !isTroopTransport(u));
     const mines = own('mine'), works = own('metalworks'), steelMills = own('steel_mill'), bases = own('hq'), refineries = own('oil_refinery');
     const ammo = own('ammo_factory'), depots = own('ammo_depot');
     trucks.forEach((u, i) => {
@@ -517,7 +541,7 @@ export class Bot {
       const slots = cap - currentPassengers;
       if (slots <= 0) continue;
 
-      const nearbyInf = unembarkedInfantry.filter((inf) => !inf.embarkedIn && distKm(inf.pos, trans.pos) <= 10).slice(0, slots);
+      const nearbyInf = unembarkedInfantry.filter((inf) => !inf.embarkedIn && distKm(inf.pos, trans.pos) <= 25).slice(0, slots);
       for (const inf of nearbyInf) {
         sim.apply(p.id, { type: 'board', unit: inf.id, transport: trans.id });
       }
@@ -533,7 +557,7 @@ export class Bot {
       !u.reinforceTarget &&
       !u.target &&
       !(u.cargo?.passengers?.length) &&
-      distKm(u.pos, anchorBase) > 25
+      distKm(u.pos, anchorBase) > 15
     );
     for (const v of emptyVehiclesAtFront) {
       sim.apply(p.id, { type: 'move', units: [v.id], to: anchorBase });
@@ -556,9 +580,15 @@ export class Bot {
       if (cp) send(u, offsetKm(cp.pos, (Math.random() - 0.5) * 20, (Math.random() - 0.5) * 20));
     }
 
-    // Ground army: include non-logistics trucks as troop transports, exclude embarked infantry
+    // Ground army: include vehicles and infantry.
+    // For trucks: ONLY trucks with passengers are included in army/reinforce!
     const isHaulTruck = (u: Unit) => u.def === 'truck' && u.haul !== undefined;
-    const army = w.units.filter((u) => u.owner === p.id && u.frontPost === undefined && sim.defs.u.get(u.def)!.kind !== 'air' && !isHaulTruck(u) && !sim.defs.u.get(u.def)!.repairs && !u.embarkedIn);
+    const isLoadedCarrier = (u: Unit) => u.def === 'truck' && (u.cargo?.passengers?.length ?? 0) > 0;
+    const army = w.units.filter((u) => {
+      if (u.owner !== p.id || u.frontPost !== undefined || sim.defs.u.get(u.def)!.kind === 'air' || isHaulTruck(u) || sim.defs.u.get(u.def)!.repairs || u.embarkedIn) return false;
+      if (u.def === 'truck' && !isLoadedCarrier(u)) return false;
+      return true;
+    });
 
     // schooling: with spare money, send a squad that is not on a mission through the training centre
     for (const b of w.buildings) {

@@ -676,7 +676,11 @@ export class Sim {
   spacingBetween(d: BuildingDef, other: string, inZone = false): number {
     const r = this.ruleset.rules;
     const o = this.defs.b.get(other);
-    if (o && this.chained(d, o) && !inZone) return r.minBuildSpacing;
+    if (o && !inZone) {
+      if ((d.id === 'steel_mill' && o.id === 'mine') || (d.id === 'mine' && o.id === 'steel_mill')) return 50;
+      if ((d.id === 'ammo_factory' && o.id === 'steel_mill') || (d.id === 'steel_mill' && o.id === 'ammo_factory')) return 50;
+    }
+    if (o && this.chained(d, o) && !inZone) return r.minBuildSpacing || 50;
     if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
     // two civil sites keep a building gap; military sites and lines only need their own ground
     if (o && !inZone && d.category === 'civil' && o.category === 'civil' && !d.line && !o.line && d.id !== 'housing' && o.id !== 'housing') return r.civilSpacing;
@@ -1373,27 +1377,51 @@ export class Sim {
     const clear = (a: LngLat, b: LngLat) => {
       if (!this.lineClear(a, b, cross)) return false;
       if (isFriendlyDest) {
-        if (this.side(b) !== team && distKm(b, to) > 1.2) return false;
-        const mid: LngLat = [(a[0] + b[0]) / 2, (a[1] + b[1]) / 2];
-        if (this.side(mid) !== team && distKm(mid, to) > 1.2 && distKm(mid, from) > 1.2) return false;
+        const d = distKm(a, b);
+        const steps = Math.max(1, Math.ceil(d / 2.0));
+        for (let s = 1; s <= steps; s++) {
+          const t = s / steps;
+          const pt: LngLat = [a[0] + (b[0] - a[0]) * t, a[1] + (b[1] - a[1]) * t];
+          if (distKm(pt, to) > 1.2 && distKm(pt, from) > 1.2 && this.side(pt) !== team) {
+            return false;
+          }
+        }
       }
       return true;
     };
     const open = clear(from, to);
     const straight = open ? distKm(from, to) / off : Infinity;
-    if (open && (direct || straight < 60)) return { wps: [{ p: to, road: false }], sec: straight }; // short hops are not worth mounting up for
     const road = this.roads?.routeTimed(from, to, {
       roadSpeed: speed * this.ruleset.rules.roadSpeedMult,
       offSpeed: off,
       clear,
       usable: (n) => !this.terrain?.isBarrier(n) && (!isFriendlyDest || this.side(n) === team || distKm(n, to) <= 1.0),
     }) ?? null;
-    if (road && road.seconds < straight) {
+    if (road && (road.seconds < straight || !open)) {
       const wps: Waypoint[] = road.points.map((p, k) => ({ p, road: k > 0 }));
       wps.push({ p: to, road: false });
       return { wps, sec: road.seconds };
     }
-    return open ? { wps: [{ p: to, road: false }], sec: straight } : null;
+    if (open) return { wps: [{ p: to, road: false }], sec: straight };
+
+    // Fallback: If direct line crosses front and no continuous road exists,
+    // synthesize safe intermediate waypoint(s) offset deep into friendly rear
+    if (isFriendlyDest && this.world.front.length > 2) {
+      const mid: LngLat = [(from[0] + to[0]) / 2, (from[1] + to[1]) / 2];
+      const ni = nearestNode(this.world.front, mid);
+      if (ni >= 0 && ni < this.world.front.length) {
+        const [nx, ny] = normalAt(this.world.front, ni);
+        const dir = team === 0 ? -1 : 1; // offset away from front into friendly rear
+        for (const dist of [15, 25, 35, 50]) {
+          const safeMid = offsetKm(mid, nx * dir * dist, ny * dir * dist);
+          if (this.side(safeMid) === team && clear(from, safeMid) && clear(safeMid, to)) {
+            const sec = (distKm(from, safeMid) + distKm(safeMid, to)) / off;
+            return { wps: [{ p: safeMid, road: false }, { p: to, road: false }], sec };
+          }
+        }
+      }
+    }
+    return null;
   }
 
   /** Quickest way for a ground unit: direct, by road (bridges), or via a friendly boat crossing. */
@@ -3347,7 +3375,7 @@ export class Sim {
         const ni = nearestNode(w.front, p.pos);
         const [nx, ny] = normalAt(w.front, ni);
         const dir: [number, number] = p.team === 0 ? [nx, ny] : [-nx, -ny];
-        const step = 0.05 * dt;
+        const step = 0.10 * dt;
         const nextPos = offsetKm(p.pos, dir[0] * step, dir[1] * step);
         const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
         if (isDry(nextPos)) {
@@ -3358,11 +3386,19 @@ export class Sim {
             if (u && !u.target && u.path.length === 0) {
               u.pos = offsetKm(u.pos, dir[0] * step, dir[1] * step);
               u.post = [p.pos[0], p.pos[1]];
+              u.frontStatus = 'advancing';
+            }
+          }
+          if (oppPost) {
+            for (const id of oppPost.garrison) {
+              const u = this.unitById.get(id);
+              if (u) u.frontStatus = 'retreating';
             }
           }
           const kx = kmPerDegLng(w.front[ni].lat);
-          const dLng = (dir[0] * step) / kx;
-          const dLat = (dir[1] * step) / 111.32;
+          const frontStep = step * 0.45;
+          const dLng = (dir[0] * frontStep) / kx;
+          const dLat = (dir[1] * frontStep) / 111.32;
           const newFrontLng = w.front[ni].lng + dLng;
           const newFrontLat = w.front[ni].lat + dLat;
           if (!this.terrain?.isBarrier([newFrontLng, newFrontLat])) {
@@ -3384,6 +3420,10 @@ export class Sim {
         }
       } else {
         p.advancing = false;
+        for (const id of p.garrison) {
+          const u = this.unitById.get(id);
+          if (u && u.frontStatus === 'advancing') u.frontStatus = 'holding';
+        }
       }
     }
 
@@ -3511,21 +3551,21 @@ export class Sim {
         const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
 
         if (uAmmo0 > 0 && uAmmo1 <= 0) {
-          dynamicPush += 0.0035;
+          dynamicPush += 0.0070;
         } else if (uAmmo1 > 0 && uAmmo0 <= 0) {
-          dynamicPush -= 0.0035;
+          dynamicPush -= 0.0070;
         } else {
           // If both have ammo (or both have no ammo), strength disparity pushes line
           if (str0 > str1 && uAmmo0 > 0) {
-            dynamicPush += clamp((str0 - str1) * 0.0018, 0, 0.004);
+            dynamicPush += clamp((str0 - str1) * 0.0036, 0, 0.008);
           } else if (str1 > str0 && uAmmo1 > 0) {
-            dynamicPush -= clamp((str1 - str0) * 0.0018, 0, 0.004);
+            dynamicPush -= clamp((str1 - str0) * 0.0036, 0, 0.008);
           }
         }
       } else if (local0 && !local1) {
-        if (((local0 as Unit).ammo ?? 0) > 0) dynamicPush += 0.0035;
+        if (((local0 as Unit).ammo ?? 0) > 0) dynamicPush += 0.0070;
       } else if (local1 && !local0) {
-        if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0035;
+        if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0070;
       }
 
       if (local0) {
@@ -3562,8 +3602,8 @@ export class Sim {
           for (const u of w.units) {
             if (u.hp <= 0) continue;
             if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
-              if (nearestNode(n, u.pos) === i && distKm(u.pos, nodePos) <= 5.5) {
-                const pushMult = 1.2;
+              if (nearestNode(n, u.pos) === i && distKm(u.pos, nodePos) <= 6.5) {
+                const pushMult = 1.6;
                 const nextPos: LngLat = [u.pos[0] + dlng * pushMult, u.pos[1] + dlat * pushMult];
                 if (!this.terrain?.isBarrier(nextPos)) {
                   u.pos = nextPos;
@@ -3574,9 +3614,9 @@ export class Sim {
           }
         }
 
-        // The front line follows behind the advancing vanguard at ~0.7x speed, ensuring the solid line
-        // stays behind the grey penetration tiles created in enemy territory
-        const frontMoveMult = closed ? 1 : 0.7;
+        // The front line follows behind the advancing vanguard at ~0.4x speed, ensuring the solid line
+        // stays safely behind the advancing vanguard and the grey penetration tiles created in enemy territory
+        const frontMoveMult = closed ? 1 : 0.4;
         const lng = n[i].lng + dlng * frontMoveMult;
         const lat = n[i].lat + dlat * frontMoveMult;
         // the line does not advance across open sea or a big river
@@ -3591,6 +3631,35 @@ export class Sim {
     };
 
     move(w.front, false, perNode);
+
+    // Position Laplacian relaxation on w.front nodes:
+    // Smooths out sharp acute angles and zigzag kinks along the front line
+    const smoothK = 0.15;
+    for (let i = 1; i < w.front.length - 1; i++) {
+      const p = w.front[i - 1];
+      const cur = w.front[i];
+      const n = w.front[i + 1];
+      const midLng = (p.lng + n.lng) / 2;
+      const midLat = (p.lat + n.lat) / 2;
+      const kx = kmPerDegLng(cur.lat);
+      const v1x = (cur.lng - p.lng) * kx;
+      const v1y = (cur.lat - p.lat) * 111.32;
+      const v2x = (n.lng - cur.lng) * kx;
+      const v2y = (n.lat - cur.lat) * 111.32;
+      const len1 = Math.hypot(v1x, v1y);
+      const len2 = Math.hypot(v2x, v2y);
+      if (len1 > 0 && len2 > 0) {
+        const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
+        const k = dot < 0.5 ? 0.35 : smoothK;
+        const newLng = (1 - k) * cur.lng + k * midLng;
+        const newLat = (1 - k) * cur.lat + k * midLat;
+        if (!this.terrain?.isBarrier([newLng, newLat])) {
+          cur.lng = newLng;
+          cur.lat = newLat;
+        }
+      }
+    }
+
     for (const pocket of w.pockets) {
       // a cauldron gets nothing from its side's economy; the besiegers squeeze with extra weight
       const base: [number, number] = pocket.team === 0 ? [0, perNode[1] * 1.5] : [perNode[0] * 1.5, 0];
@@ -3621,6 +3690,7 @@ export class Sim {
     const moved = new Set<number>();
     for (const u of w.units) {
       if (u.embarkedIn || this.defs.u.get(u.def)!.kind === 'air' || u.hp <= 0) continue;
+      if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined) continue;
       if (w.pockets.some((p) => pointInRing(p.nodes, u.pos))) continue; // cauldrons have their own line
       const signed = distToFrontKm(f, u.pos) * (u.team === 0 ? 1 : -1); // < 0: beyond its line
       if (signed >= 0 || signed < -4) continue;

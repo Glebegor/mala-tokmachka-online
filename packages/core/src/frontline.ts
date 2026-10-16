@@ -8,7 +8,7 @@ const KM = 111.32;
 export function buildFront(line: LngLat[], spacingKm: number): FrontNode[] {
   let total = 0;
   for (let i = 1; i < line.length; i++) total += distKm(line[i - 1], line[i]);
-  const count = Math.max(8, Math.min(600, Math.round(total / spacingKm) + 1));
+  const count = Math.max(8, Math.min(1200, Math.round(total / spacingKm) + 1));
   return resample(line.map((p) => ({ lng: p[0], lat: p[1], v: 0 })), count);
 }
 

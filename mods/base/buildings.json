@@ -122,7 +122,8 @@
     },
     "produces": {
       "steel": 0.2
-    }
+    },
+    "spacedFrom": ["mine"]
   },
   {
     "id": "ammo_factory",
@@ -141,6 +142,7 @@
     },
     "produces": {
       "ammo": 10
-    }
+    },
+    "spacedFrom": ["steel_mill"]
   }
 ]
