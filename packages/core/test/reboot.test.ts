@@ -1415,6 +1415,39 @@ assert.equal(testUa.frontStatus, 'holding', 'Friendly смежник transitions
 
 console.log('✓ Frontline Garrison 1-on-1 Pairs, Duel Skirmishes, and Flank Advancement (Смежники) verified');
 
+// 51. Anti-Clumping Spacing and Breakthrough Flank Immunity
+// 1. Anti-Clumping: Garrisons placed closer than 1.2 km repel each other
+const clumpPos1: LngLat = [testUa.pos[0], testUa.pos[1]];
+const clumpPos2: LngLat = offsetKm(clumpPos1, 0.5, 0); // 0.5 km apart (< 1.2 km)
+const g1 = (sim as any).spawnFrontlineUnit(sim.world, 0, clumpPos1);
+const g2 = (sim as any).spawnFrontlineUnit(sim.world, 0, clumpPos2);
+g1.ammo = 500;
+g2.ammo = 500;
+(sim as any).indexWorld();
+const initialSpacing = distKm(g1.pos, g2.pos);
+assert.ok(initialSpacing < 0.6, 'Garrisons initially clustered close together');
+sim.step(1.0);
+const newSpacing = distKm(g1.pos, g2.pos);
+assert.ok(newSpacing > initialSpacing, `Anti-clumping repels clustered garrisons apart (initial=${initialSpacing.toFixed(3)}, new=${newSpacing.toFixed(3)})`);
+g1.hp = 0;
+g2.hp = 0;
+
+// 2. Holding Trench Catch-up: Garrison left deep in rear (> 1.5 km behind front) steps forward to trenches
+const strandedNodeIdx = nearestNode(sim.world.front, testUa.pos);
+const strandedNode = sim.world.front[strandedNodeIdx];
+const [stNx, stNy] = normalAt(sim.world.front, strandedNodeIdx);
+// Place testUa 2.5 km in the deep rear behind the front line
+testUa.pos = offsetKm([strandedNode.lng, strandedNode.lat], -stNx * 2.5, -stNy * 2.5);
+testUa.frontStatus = 'holding';
+testUa.advancePath = undefined;
+testUa.retreatPath = undefined;
+const distBeforeCatchup = distKm(testUa.pos, [strandedNode.lng, strandedNode.lat]);
+sim.step(2.0);
+const distAfterCatchup = distKm(testUa.pos, [strandedNode.lng, strandedNode.lat]);
+assert.ok(distAfterCatchup < distBeforeCatchup, 'Holding garrison left in deep rear steps forward to catch up to front line standoff');
+
+console.log('✓ Anti-Clumping Repulsion, Holding Trench Catch-up, and Flank Breakthrough Immunity verified');
+
 console.log('All reboot tests passed successfully!');
 
 

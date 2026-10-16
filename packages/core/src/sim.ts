@@ -2892,15 +2892,28 @@ export class Sim {
         const dLat = range / 111;
         if (!d.minRange) {
           let best = range;
-          this.near(this.unitGrid, u.pos, range, (e) => {
-            if (e.team === u.team || e.hp <= 0 || e.embarkedIn || Math.abs(e.pos[1] - u.pos[1]) > dLat) return;
-            if (r.frontPosts && e.targetPost !== undefined) return;
-            const air = this.defs.u.get(e.def)!.kind === 'air';
-            // only anti-aircraft weapons engage drones and missiles; anti-aircraft teams engage nothing else
-            if (air ? airDamage <= 0 : d.targets === 'air') return;
-            const dist = distKm(u.pos, e.pos);
-            if (dist <= best) (best = dist), (tu = e);
-          });
+          const isFrontline = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+          if (isFrontline && u.pairId) {
+            const p = this.unitById.get(u.pairId);
+            if (p && p.hp > 0 && p.team !== u.team && distKm(u.pos, p.pos) <= range) {
+              tu = p;
+            }
+          } else {
+            this.near(this.unitGrid, u.pos, range, (e) => {
+              if (e.team === u.team || e.hp <= 0 || e.embarkedIn || Math.abs(e.pos[1] - u.pos[1]) > dLat) return;
+              if (r.frontPosts && e.targetPost !== undefined) return;
+              const eIsFrontline = e.def === 'frontline_infantry' || e.owner.startsWith('__front_');
+              if (isFrontline && eIsFrontline && e.pairId && e.pairId !== u.id) {
+                const ep = this.unitById.get(e.pairId);
+                if (ep && ep.hp > 0) return; // e belongs to another pair: do not target
+              }
+              const air = this.defs.u.get(e.def)!.kind === 'air';
+              // only anti-aircraft weapons engage drones and missiles; anti-aircraft teams engage nothing else
+              if (air ? airDamage <= 0 : d.targets === 'air') return;
+              const dist = distKm(u.pos, e.pos);
+              if (dist <= best) (best = dist), (tu = e);
+            });
+          }
           if (!tu && d.targets !== 'air') {
             this.near(this.buildingGrid, u.pos, range, (e) => {
               if (e.team === u.team || e.hp <= 0 || Math.abs(e.pos[1] - u.pos[1]) > dLat) return;
@@ -3095,14 +3108,18 @@ export class Sim {
               let enemyGarrison: Unit | null = null;
               if (u.pairId) {
                 const p = this.unitById.get(u.pairId);
-                if (p && p.hp > 0 && p.team !== u.team && distKm(u.pos, p.pos) <= 3.5) {
+                if (p && p.hp > 0 && p.team !== u.team && distKm(u.pos, p.pos) <= 4.0) {
                   enemyGarrison = p;
                 }
               }
-              if (!enemyGarrison) {
+              if (!enemyGarrison && !u.pairId) {
                 let bestDist = 2.8;
                 this.near(this.unitGrid, u.pos, 2.8, (e) => {
                   if (e.team !== u.team && e.hp > 0 && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))) {
+                    if (e.pairId) {
+                      const ep = this.unitById.get(e.pairId);
+                      if (ep && ep.hp > 0 && ep.id !== u.id) return;
+                    }
                     const dist = distKm(u.pos, e.pos);
                     if (dist < bestDist) {
                       bestDist = dist;
@@ -3919,11 +3936,11 @@ export class Sim {
 
     const assigned1 = new Set<number>();
 
-    // 1. Keep existing valid pairings if still alive, opposing, and within reasonable range (<= 6.0 km)
+    // 1. Keep existing valid pairings if both units are alive and on opposing teams
     for (const u0 of garrisons0) {
       if (u0.pairId) {
         const p1 = this.unitById.get(u0.pairId);
-        if (p1 && p1.hp > 0 && p1.team === 1 && p1.frontStatus !== 'marching' && distKm(u0.pos, p1.pos) <= 6.0 && !assigned1.has(p1.id)) {
+        if (p1 && p1.hp > 0 && p1.team === 1 && !assigned1.has(p1.id)) {
           assigned1.add(p1.id);
           p1.pairId = u0.id;
         } else {
@@ -3935,7 +3952,10 @@ export class Sim {
     for (const u1 of garrisons1) {
       if (u1.pairId) {
         const p0 = this.unitById.get(u1.pairId);
-        if (!p0 || p0.hp <= 0 || p0.team !== 0 || p0.pairId !== u1.id) {
+        if (p0 && p0.hp > 0 && p0.team === 0 && (!p0.pairId || p0.pairId === u1.id)) {
+          p0.pairId = u1.id;
+          assigned1.add(u1.id);
+        } else if (!p0 || p0.hp <= 0 || p0.team !== 0) {
           u1.pairId = undefined;
         }
       }
@@ -3944,7 +3964,7 @@ export class Sim {
     // 2. Pair up unassigned garrisons with nearest unassigned opposing garrison
     const unassigned0 = garrisons0.filter((u) => !u.pairId);
     for (const u0 of unassigned0) {
-      let bestDist = 6.0;
+      let bestDist = 20.0;
       let best1: Unit | null = null;
       for (const u1 of garrisons1) {
         if (assigned1.has(u1.id)) continue;
@@ -3972,6 +3992,7 @@ export class Sim {
     const w = this.world;
     if (!w.front || w.front.length < 2) return;
     const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
+    const donatedThisCycle = new Set<number>();
 
     // 1. Salient-based splitting (flank coverage when front depth > 10 km)
     const reinforced = w.units.filter((u) => {
@@ -4001,7 +4022,7 @@ export class Sim {
     });
 
     for (const u of reinforced) {
-      if ((u.strength ?? 1) <= 1) continue;
+      if ((u.strength ?? 1) <= 1 || donatedThisCycle.has(u.id)) continue;
 
       // 1. Check if there are empty frontline posts nearby needing a garrison
       let assignedPost: FrontPost | null = null;
@@ -4053,6 +4074,7 @@ export class Sim {
       }
 
       if (spawnPos) {
+        donatedThisCycle.add(u.id);
         // Split 1 strength / squad from reinforced garrison
         const prevStr = u.strength ?? 1;
         u.strength = prevStr - 1;
@@ -4132,7 +4154,7 @@ export class Sim {
         let bestScore = Infinity;
 
         for (const g of activeGarrisons) {
-          if ((g.strength ?? 1) <= 1 || g.frontStatus === 'marching' || (g.ammo ?? 0) <= 0) continue;
+          if ((g.strength ?? 1) <= 1 || g.frontStatus === 'marching' || (g.ammo ?? 0) <= 0 || donatedThisCycle.has(g.id)) continue;
           const dist = distKm(g.pos, candPos);
           if (dist > 40.0) continue;
           const score = dist - 2.0 * ((g.strength ?? 1) - 2);
@@ -4143,6 +4165,7 @@ export class Sim {
         }
 
         if (bestDonor) {
+          donatedThisCycle.add(bestDonor.id);
           const prevStr = bestDonor.strength ?? 1;
           bestDonor.strength = prevStr - 1;
           bestDonor.squadSize = Math.max(100, (bestDonor.squadSize ?? 500) - 100);
@@ -4266,6 +4289,17 @@ export class Sim {
       // Sectors with no frontline garrisons holding them (e.g. Dnipro water front) stay completely static
       if (!local0 && !local1) return 0;
 
+      // If local0 and local1 belong to different pairs, align with the true pair of the garrison closest to this node
+      if (local0 && local1 && (local0 as Unit).pairId !== (local1 as Unit).id) {
+        if (dist0 < dist1 && (local0 as Unit).pairId) {
+          const p1 = this.unitById.get((local0 as Unit).pairId!);
+          if (p1 && p1.hp > 0 && p1.team === 1) local1 = p1;
+        } else if (dist1 <= dist0 && (local1 as Unit).pairId) {
+          const p0 = this.unitById.get((local1 as Unit).pairId!);
+          if (p0 && p0.hp > 0 && p0.team === 0) local0 = p0;
+        }
+      }
+
       // Dynamic front line movement (out-of-ammo pressure and manpower disparity)
       let dynamicPush = 0;
       if (local0 && local1) {
@@ -4329,25 +4363,8 @@ export class Sim {
         const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? ((local0 as Unit).strength ?? 1) * 100) - ((local0 as Unit).strength ?? 1) * 100) / 20);
         const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? ((local1 as Unit).strength ?? 1) * 100) - ((local1 as Unit).strength ?? 1) * 100) / 20);
         if (Math.abs(str0 - str1) <= Math.max(str0, str1) * 0.25) {
-          if ((local0 as Unit).frontStatus !== 'marching') (local0 as Unit).frontStatus = 'holding';
-          if ((local1 as Unit).frontStatus !== 'marching') (local1 as Unit).frontStatus = 'holding';
           return 0; // stalemate, line holds
         }
-      }
-
-      if (local0 && !(local0 as Unit).advancePath?.length && (local0 as Unit).frontStatus !== 'marching') {
-        (local0 as Unit).frontStatus = ((local0 as Unit).ammo ?? 0) <= 0
-          ? 'retreating'
-          : holdAssault0
-          ? 'holding'
-          : dynamicPush > 0.0005 ? 'advancing' : dynamicPush < -0.0005 ? 'retreating' : 'holding';
-      }
-      if (local1 && !(local1 as Unit).advancePath?.length && (local1 as Unit).frontStatus !== 'marching') {
-        (local1 as Unit).frontStatus = ((local1 as Unit).ammo ?? 0) <= 0
-          ? 'retreating'
-          : holdAssault1
-          ? 'holding'
-          : dynamicPush < -0.0005 ? 'advancing' : dynamicPush > 0.0005 ? 'retreating' : 'holding';
       }
 
       return clamp(dynamicPush + (effPush[0] * hold[0] - effPush[1] * hold[1]) * r.frontPush, -r.frontMaxSpeed, r.frontMaxSpeed) * (1 - resist);
@@ -4430,11 +4447,31 @@ export class Sim {
             }
           };
 
-          // 1. If unit has an explicit advancePath, prioritize the opposing garrison along that advance corridor
-          if (u.advancePath && u.advancePath.length > 0) {
+          // 1. Strictly prioritize dedicated 1-on-1 counterpart pair across the front line if alive
+          if (u.pairId) {
+            const p = this.unitById.get(u.pairId);
+            if (p && p.hp > 0 && p.team !== u.team && p.frontStatus !== 'marching') {
+              oppGarrison = p;
+              oppDist = distKm(u.pos, p.pos);
+            }
+          }
+
+          // 2. If unit has no alive pair and has an explicit advancePath, search along advance corridor
+          if (!oppGarrison && u.advancePath && u.advancePath.length > 0) {
             for (let wpIdx = 0; wpIdx < Math.min(4, u.advancePath.length); wpIdx++) {
               const wp = u.advancePath[wpIdx];
-              this.near(this.unitGrid, wp, 6.0, (e) => considerOpp(e));
+              this.near(this.unitGrid, wp, 6.0, (e) => {
+                if (e.team !== u.team && e.hp > 0 && !e.embarkedIn && e.frontStatus !== 'marching') {
+                  const isGarrison = e.def === 'frontline_infantry' || e.owner.startsWith('__front_') || e.frontPost !== undefined;
+                  if (isGarrison && (!e.pairId || (this.unitById.get(e.pairId)?.hp ?? 0) <= 0)) {
+                    const d = distKm(u.pos, e.pos);
+                    if (d < oppDist) {
+                      oppDist = d;
+                      oppGarrison = e;
+                    }
+                  }
+                }
+              });
             }
             const oppFound: any = oppGarrison;
             if (oppFound) {
@@ -4443,21 +4480,20 @@ export class Sim {
             }
           }
 
-          // 2. Otherwise strictly prioritize dedicated 1-on-1 counterpart pair across the front line
-          if (!oppGarrison && u.pairId) {
-            const p = this.unitById.get(u.pairId);
-            if (p && p.hp > 0 && p.team !== u.team && p.frontStatus !== 'marching') {
-              oppGarrison = p;
-              oppDist = distKm(u.pos, p.pos);
-            }
-          }
-
           if (!oppGarrison) {
-            // Search around u.pos (within 10 km)
-            this.near(this.unitGrid, u.pos, 10.0, (e) => considerOpp(e));
-
-            // Search around the front line node n[i] (within 8.0 km)
-            this.near(this.unitGrid, nodePos, 8.0, (e) => considerOpp(e));
+            // Search around u.pos (within 10 km) for unassigned enemy
+            this.near(this.unitGrid, u.pos, 10.0, (e) => {
+              if (e.team !== u.team && e.hp > 0 && !e.embarkedIn && e.frontStatus !== 'marching') {
+                const isGarrison = e.def === 'frontline_infantry' || e.owner.startsWith('__front_') || e.frontPost !== undefined;
+                if (isGarrison && (!e.pairId || (this.unitById.get(e.pairId)?.hp ?? 0) <= 0)) {
+                  const d = distKm(u.pos, e.pos);
+                  if (d < oppDist) {
+                    oppDist = d;
+                    oppGarrison = e;
+                  }
+                }
+              }
+            });
           }
 
           const myStr = (u.strength ?? 1) + Math.max(0, ((u.squadSize ?? ((u.strength ?? 1) * 100)) - (u.strength ?? 1) * 100) / 20);
@@ -4518,8 +4554,8 @@ export class Sim {
               const distToOpp = Math.hypot(toOppX, toOppY);
               const projAlong = toOppX * dir[0] + toOppY * dir[1];
 
-              // Only engage anti-overtake and push if defender is in front or slightly abreast (projAlong >= -0.5)
-              if (projAlong >= -0.5) {
+              // Only engage anti-overtake and push if defender is in front or slightly abreast (projAlong >= -0.5) and in contact (<= 2.5 km)
+              if (projAlong >= -0.5 && distToOpp <= 2.5) {
                 // Push direction mirrors the advancing garrison's current trajectory
                 opp.pushedDir = [dir[0], dir[1]];
 
@@ -4559,10 +4595,10 @@ export class Sim {
                 n[i].v = u.team === 0 ? 0.024 : -0.024;
                 this.occ.tick = -1; // front moved: invalidate occupied index
 
-                // Smooth cosine propagation across 8 neighbor nodes (12 km spread)
-                const spread = 8;
+                // Smooth cosine propagation across immediate neighbor nodes (spread = 2, ~3 km)
+                const spread = 2;
                 for (let j = 1; j <= spread; j++) {
-                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.75;
+                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.65;
                   if (i - j >= 0) {
                     const pLng = n[i - j].lng + shiftLng * w;
                     const pLat = n[i - j].lat + shiftLat * w;
@@ -4599,9 +4635,9 @@ export class Sim {
                 n[i].v = u.team === 0 ? 0.024 : -0.024;
                 this.occ.tick = -1;
 
-                const spread = 8;
+                const spread = 2;
                 for (let j = 1; j <= spread; j++) {
-                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.75;
+                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.65;
                   if (i - j >= 0) {
                     const pLng = n[i - j].lng + shiftLng * w;
                     const pLat = n[i - j].lat + shiftLat * w;
@@ -4667,6 +4703,12 @@ export class Sim {
               dir = [dxKm / dLen, dyKm / dLen];
             } else if (u.pushedDir) {
               dir = [u.pushedDir[0], u.pushedDir[1]];
+            } else if (opp) {
+              // Direct retreat away from opposing counterpart
+              const dxKm = (u.pos[0] - opp.pos[0]) * ukx;
+              const dyKm = (u.pos[1] - opp.pos[1]) * 111.32;
+              const dLen = Math.hypot(dxKm, dyKm) || 1;
+              dir = [dxKm / dLen, dyKm / dLen];
             } else {
               dir = u.team === 0 ? [-nx, -ny] : [nx, ny];
             }
@@ -4674,8 +4716,8 @@ export class Sim {
             const distToNode = distKm(u.pos, nodePos);
             const distToEnemy = opp ? distKm(u.pos, opp.pos) : distToNode;
 
-            // Defender must not retreat farther than visibility (~2.2 km) with this boost unless having a manual retreat route
-            if (!u.retreatPath && distToEnemy > 2.2 && (u.ammo ?? 0) > 0) {
+            // Defender stops retreating when out of engagement range (> 2.5 km)
+            if (!u.retreatPath && distToEnemy > 2.5 && (u.ammo ?? 0) > 0) {
               u.retreatBoost = false;
               u.pushedDir = undefined;
               u.frontStatus = 'holding';
@@ -4692,10 +4734,59 @@ export class Sim {
             u.frontStatus = 'holding';
             u.retreatBoost = false;
             u.pushedDir = undefined;
+
+            // Holding garrison trench catch-up: if front line moved forward leaving holding garrison behind (> 1.5 km),
+            // step forward along normal into friendly territory to maintain standard ~1.0 km standoff
+            const toNodeX = (n[i].lng - u.pos[0]) * ukx;
+            const toNodeY = (n[i].lat - u.pos[1]) * 111.32;
+            const projBehind = u.team === 0 ? (toNodeX * nx + toNodeY * ny) : -(toNodeX * nx + toNodeY * ny);
+            if (projBehind > 1.5) {
+              const catchUpKm = Math.min(0.015 * dt * 2.0, projBehind - 1.0);
+              if (catchUpKm > 0) {
+                const stepDir = u.team === 0 ? [nx, ny] : [-nx, -ny];
+                const nextPos: LngLat = [u.pos[0] + (stepDir[0] * catchUpKm) / ukx, u.pos[1] + (stepDir[1] * catchUpKm) / 111.32];
+                if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos) && this.side(nextPos) === u.team) {
+                  u.pos = nextPos;
+                  if (u.post) u.post = [nextPos[0], nextPos[1]];
+                }
+              }
+            }
           }
 
           const post = w.posts?.find((p) => p.garrison.includes(u.id));
           if (post) post.pos = [u.pos[0], u.pos[1]];
+        }
+
+        // Mutual anti-clumping repulsion between frontline garrisons of the same team (spacing >= 1.2 km)
+        const frontUnits = w.units.filter((unit) => unit.hp > 0 && !unit.embarkedIn && (unit.def === 'frontline_infantry' || unit.owner.startsWith('__front_')));
+        for (let a = 0; a < frontUnits.length; a++) {
+          const uA = frontUnits[a];
+          for (let b = a + 1; b < frontUnits.length; b++) {
+            const uB = frontUnits[b];
+            if (uA.team !== uB.team) continue;
+            const d = distKm(uA.pos, uB.pos);
+            const minSpacing = 1.2;
+            if (d < minSpacing && d > 0.001) {
+              const kx = kmPerDegLng((uA.pos[1] + uB.pos[1]) / 2);
+              const dxKm = (uB.pos[0] - uA.pos[0]) * kx;
+              const dyKm = (uB.pos[1] - uA.pos[1]) * 111.32;
+              const pushKm = (minSpacing - d) * 0.5;
+              const sepX = (dxKm / d) * pushKm;
+              const sepY = (dyKm / d) * pushKm;
+
+              const posA: LngLat = [uA.pos[0] - sepX / kx, uA.pos[1] - sepY / 111.32];
+              const posB: LngLat = [uB.pos[0] + sepX / kx, uB.pos[1] + sepY / 111.32];
+
+              if (!this.terrain?.isBarrier(posA) && !this.foreign(posA) && this.side(posA) === uA.team) {
+                uA.pos = posA;
+                if (uA.post) uA.post = [posA[0], posA[1]];
+              }
+              if (!this.terrain?.isBarrier(posB) && !this.foreign(posB) && this.side(posB) === uB.team) {
+                uB.pos = posB;
+                if (uB.post) uB.post = [posB[0], posB[1]];
+              }
+            }
+          }
         }
       }
     };
