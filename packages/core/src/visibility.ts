@@ -30,6 +30,12 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       watchers.push({ pos: u.pos, r: d.vision * terrVis });
       airWatchers.push({ pos: u.pos, r: (d.airVision ?? d.vision) * terrVis });
     }
+    sim.map.capturePoints.forEach((cp, i) => {
+      if (w.points[i]?.owner === team) {
+        watchers.push({ pos: cp.pos, r: 7.5 });
+        airWatchers.push({ pos: cp.pos, r: 7.5 });
+      }
+    });
   }
   // watchers bucketed by ~0.25° cells (each in every cell its sight touches): an object only checks the watchers of its cell
   const CELL = 0.25;

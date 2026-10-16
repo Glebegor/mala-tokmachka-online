@@ -3992,15 +3992,19 @@ export class Sim {
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
 
-      // Find local frontline garrisons for each team holding this sector (within 12.0 km of pos)
-      let local0: Unit | null = null;
-      let dist0 = 12.0;
-      let local1: Unit | null = null;
-      let dist1 = 12.0;
+      // The front line across the Dnipro river / reservoir is static: no troops are in the water
+      const isDniproWater = (pos[0] < 35.35 && pos[1] < 47.7) || (this.terrain?.isBarrier(pos) ?? false);
+      if (isDniproWater) return 0;
 
-      this.near(this.unitGrid, pos, 12.0, (u) => {
+      // Find local frontline garrisons for each team holding this sector (within 4.0 km of pos)
+      let local0: Unit | null = null;
+      let dist0 = 4.0;
+      let local1: Unit | null = null;
+      let dist1 = 4.0;
+
+      this.near(this.unitGrid, pos, 4.0, (u) => {
         const d = distKm(u.pos, pos);
-        if (d > 12.0 || u.embarkedIn || u.hp <= 0) return;
+        if (d > 4.0 || u.embarkedIn || u.hp <= 0) return;
         const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
         if (!isFront) return;
         if (u.team === 0 && d < dist0) {
@@ -4026,20 +4030,22 @@ export class Sim {
           dynamicPush -= 0.0120;
         } else if (uAmmo0 <= 0 && uAmmo1 <= 0) {
           // both out of ammo: line holds or stalls
+          dynamicPush = 0;
         } else {
-          // If both have ammo, strength disparity pushes line smoothly
-          if (str0 > str1) {
+          // If both have ammo, only push if one side has clear superiority (> 1.25 ratio)
+          if (str0 > str1 * 1.25) {
             dynamicPush += clamp((str0 - str1) * 0.0060, 0, 0.0120);
-          } else if (str1 > str0) {
+          } else if (str1 > str0 * 1.25) {
             dynamicPush -= clamp((str1 - str0) * 0.0060, 0, 0.0120);
+          } else {
+            // Forces are roughly equal: stalemate, line holds firm
+            dynamicPush = 0;
           }
         }
-      } else if (local0 && !local1) {
+      } else if (local0 && !local1 && dist0 <= 2.5) {
         if (((local0 as Unit).ammo ?? 0) > 0) dynamicPush += 0.0120;
-        else dynamicPush -= 0.0060;
-      } else if (local1 && !local0) {
+      } else if (local1 && !local0 && dist1 <= 2.5) {
         if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0120;
-        else dynamicPush += 0.0060;
       }
 
       // Smooth front catch-up if an assault garrison pushed deep into enemy ground (> 0.8 km) and is holding
@@ -4065,6 +4071,15 @@ export class Sim {
         holdAssault1 = (u1.frontStatus === 'holding' || u1.stance === 'hold') && normalProj > 0.8;
         if (holdAssault1 && (u1.ammo ?? 0) > 0) {
           dynamicPush -= 0.0240; // 4x front line catch-up push
+        }
+      }
+
+      // If local opposing garrisons are standing with ammo and equal forces (and not holding assault catch-up), trenches hold firm against abstract push
+      if (!holdAssault0 && !holdAssault1 && local0 && local1 && ((local0 as Unit).ammo ?? 0) > 0 && ((local1 as Unit).ammo ?? 0) > 0) {
+        const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? 100) - 100) / 20);
+        const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
+        if (Math.abs(str0 - str1) <= Math.max(str0, str1) * 0.25) {
+          return dynamicPush; // 0: stalemate, line holds
         }
       }
 
@@ -4138,12 +4153,36 @@ export class Sim {
             ? (u.pos[0] - n[i].lng) * ukx * nx + (u.pos[1] - n[i].lat) * 111.32 * ny
             : -((u.pos[0] - n[i].lng) * ukx * nx + (u.pos[1] - n[i].lat) * 111.32 * ny);
           const isHoldingAssault = (u.frontStatus === 'holding' || u.stance === 'hold') && toNodeProj > 0.8;
+          // Find opposing enemy garrison across the front line within 4.5 km
+          let oppGarrison: Unit | null = null;
+          let oppDist = 4.5;
+          this.near(this.unitGrid, u.pos, 4.5, (e) => {
+            if (e.team !== u.team && e.hp > 0 && !e.embarkedIn && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))) {
+              const d = distKm(u.pos, e.pos);
+              if (d < oppDist) {
+                oppDist = d;
+                oppGarrison = e;
+              }
+            }
+          });
+
+          const myStr = (u.strength ?? 1) + Math.max(0, ((u.squadSize ?? 100) - 100) / 20);
+          const oppStr = oppGarrison ? ((oppGarrison as Unit).strength ?? 1) + Math.max(0, (((oppGarrison as Unit).squadSize ?? 100) - 100) / 20) : 0;
+          const oppAmmo = oppGarrison ? ((oppGarrison as Unit).ammo ?? 0) : 0;
+          const myAmmo = u.ammo ?? 0;
+
+          const hasSuperiority = !oppGarrison || oppAmmo <= 0 || (myAmmo > 0 && myStr > oppStr * 1.25);
+          const oppSuperiority = oppGarrison && oppAmmo > 0 && oppStr > myStr * 1.25;
+
           const hasAdvancePath = !!(u.advancePath && u.advancePath.length > 0);
-          const isAdvancing = hasAdvancePath || (!isHoldingAssault && (u.team === 0 ? v > 0.0005 : v < -0.0005) && (u.ammo ?? 0) > 0);
-          const isRetreating = !hasAdvancePath && ((u.ammo ?? 0) <= 0 || (u.team === 0 ? v < -0.0005 : v > 0.0005));
+          const isAdvancing = hasAdvancePath ? (hasSuperiority && myAmmo > 0) : (!isHoldingAssault && (u.team === 0 ? v > 0.0005 : v < -0.0005) && hasSuperiority && myAmmo > 0);
+          const isRetreating = !hasAdvancePath && (myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)));
 
           if (isAdvancing) {
             u.frontStatus = 'advancing';
+            if (oppGarrison) {
+              (oppGarrison as Unit).frontStatus = 'retreating';
+            }
             // Waypoint following for advance:
             if (u.advancePath && u.advancePath.length > 0) {
               while (u.advancePath.length > 0 && distKm(u.pos, u.advancePath[0]) < 0.6) {
@@ -4159,6 +4198,10 @@ export class Sim {
               dir = [dxKm / dLen, dyKm / dLen];
             } else {
               dir = u.team === 0 ? [nx, ny] : [-nx, -ny];
+            }
+
+            if (oppGarrison) {
+              (oppGarrison as Unit).pushedDir = [dir[0], dir[1]];
             }
 
             const stepKm = Math.max(0.012, Math.abs(v)) * dt;
@@ -4206,7 +4249,10 @@ export class Sim {
               }
             }
             let dir: [number, number];
-            if (u.retreatPath && u.retreatPath.length > 0) {
+            if (u.pushedDir) {
+              dir = [u.pushedDir[0], u.pushedDir[1]];
+              u.pushedDir = undefined;
+            } else if (u.retreatPath && u.retreatPath.length > 0) {
               const targetPt = u.retreatPath[0];
               const dxKm = (targetPt[0] - u.pos[0]) * ukx;
               const dyKm = (targetPt[1] - u.pos[1]) * 111.32;

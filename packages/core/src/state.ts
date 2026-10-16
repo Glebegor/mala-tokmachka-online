@@ -208,6 +208,8 @@ export interface Unit {
   retreatPath?: LngLat[];
   /** Building id that this logistics truck services. */
   serviceBuilding?: number;
+  /** Direction vector pushed by advancing enemy. */
+  pushedDir?: [number, number];
 }
 
 /**

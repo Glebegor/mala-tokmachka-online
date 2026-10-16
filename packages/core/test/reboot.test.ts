@@ -780,16 +780,16 @@ assert.equal(steelRes.icon, 'ingot', 'Steel uses ingot icon');
 const steelMillDef = rs.buildings.find((b) => b.id === 'steel_mill')!;
 assert.ok(steelMillDef, 'Steel mill defined in buildings.json');
 assert.equal(steelMillDef.cost.money, 3000, 'Steel mill costs 3000');
-assert.equal(steelMillDef.consumes?.ore, 0.4, 'Steel mill consumes 0.4 ore/s (2 ore in 5s)');
-assert.equal(steelMillDef.produces?.steel, 0.2, 'Steel mill produces 0.2 steel/s (1 steel in 5s)');
+assert.equal(steelMillDef.consumes?.ore, 5.0, 'Steel mill consumes 5 ore/s (5 ore for 1 steel)');
+assert.equal(steelMillDef.produces?.steel, 1.0, 'Steel mill produces 1 steel/s (1 steel every second)');
 
 const steelMill = (sim as any).spawnBuilding('steel_mill', sim.player('player1')!, friendlyPos, true);
 steelMill.progress = 1.0;
 steelMill.storage = { ore: 10, steel: 0 };
-sim.step(5.0);
-assert.ok((steelMill.storage.ore ?? 0) < 10, 'Steel mill consumed ore');
-assert.ok((steelMill.storage.steel ?? 0) > 0, 'Steel mill produced steel');
-console.log('✓ Steel Mill: cost 3000, processes 2 ore into 1 steel every 5 seconds, stored in building stock verified');
+sim.step(1.0);
+assert.ok((steelMill.storage.ore ?? 0) <= 5, 'Steel mill consumed 5 ore in 1 second');
+assert.ok((steelMill.storage.steel ?? 0) >= 1, 'Steel mill produced 1 steel in 1 second');
+console.log('✓ Steel Mill: cost 3000, processes 5 ore into 1 steel every second, stored in building stock verified');
 
 // 24. Skirmish Ammo Consumption Rate (6x slower)
 const skirmishGarrison = sim.spawnUnit('frontline_infantry', sim.player('player1')!, friendlyPos);
@@ -1077,7 +1077,41 @@ assert.equal(sim.world.units.filter((u) => u.serviceBuilding === testLogMine.id)
 const setTargetsRes = sim.apply('player1', { type: 'setServiceTargets', building: testLogMine.id, targets: [testLogSteelMill.id] });
 assert.ok(setTargetsRes.ok, 'Setting service targets succeeded');
 assert.deepEqual(testLogMine.serviceTargets, [testLogSteelMill.id], 'Mine service targets updated');
-console.log('✓ Industrial Building Logistics: 500-resource auto trucks, buyLogisticsTruck, setServiceTargets verified');
+// 46. Stepnohirsk City Vision, Dnipro Water Stability, and Equal Forces Frontline Holding
+const stepnohirskCp = sim.map.capturePoints.find((cp) => cp.id === 'stepnohirsk')!;
+assert.ok(stepnohirskCp, 'Stepnohirsk capture point exists');
+const cpIdx = sim.map.capturePoints.indexOf(stepnohirskCp);
+sim.world.points[cpIdx].owner = 0; // Controlled by Ukraine
+
+// Spawn an enemy Russian unit in Stepnohirsk 3 km from city center
+const enemyInCity = sim.spawnUnit('infantry', sim.player('botRU')!, offsetKm(stepnohirskCp.pos, 1.5, 1.5));
+const snapshotUA = snapshotFor(sim, 'player1', 0);
+const enemySeenInCity = snapshotUA.units.some((u) => u.id === enemyInCity.id);
+assert.ok(enemySeenInCity, 'Enemy in Stepnohirsk is spotted by friendly city 7.5 km vision radius without fog of war');
+
+// Test that front nodes along the Dnipro water are frozen and do not move
+const dniproNodeIdx = sim.world.front.findIndex((n, idx) => idx > 0 && n.lng < 35.35 && n.lat < 47.7);
+assert.ok(dniproNodeIdx > 0, 'Dnipro water front node found');
+const dniproNodePosBefore = [sim.world.front[dniproNodeIdx].lng, sim.world.front[dniproNodeIdx].lat];
+for (let s = 0; s < 10; s++) sim.step(1.0);
+const dniproNodePosAfter = [sim.world.front[dniproNodeIdx].lng, sim.world.front[dniproNodeIdx].lat];
+assert.equal(distKm(dniproNodePosBefore as [number, number], dniproNodePosAfter as [number, number]), 0, 'Dnipro water front line stays strictly static and does not push');
+
+// Test that equal forces garrisons with ammo hold their ground (neither retreats)
+const uaEqualGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0)!;
+const ruEqualGarrison = sim.world.units.find((u) => u.owner === '__front_1' && u.hp > 0 && distKm(u.pos, uaEqualGarrison.pos) <= 5.0)!;
+uaEqualGarrison.ammo = 100;
+ruEqualGarrison.ammo = 100;
+uaEqualGarrison.strength = 2;
+ruEqualGarrison.strength = 2;
+uaEqualGarrison.advancePath = undefined;
+ruEqualGarrison.advancePath = undefined;
+const uaEqualPosBefore = [uaEqualGarrison.pos[0], uaEqualGarrison.pos[1]];
+const ruEqualPosBefore = [ruEqualGarrison.pos[0], ruEqualGarrison.pos[1]];
+for (let s = 0; s < 10; s++) sim.step(1.0);
+assert.equal(distKm(uaEqualGarrison.pos, uaEqualPosBefore as [number, number]), 0, 'Equal forces UA garrison holds ground and does not retreat');
+assert.equal(distKm(ruEqualGarrison.pos, ruEqualPosBefore as [number, number]), 0, 'Equal forces RU garrison holds ground and does not retreat');
+console.log('✓ City Vision, Dnipro Water Stability, and Equal Forces Hold: Stepnohirsk 7.5km vision, static Dnipro line, equal garrisons hold position verified');
 
 console.log('All reboot tests passed successfully!');
 
