@@ -923,6 +923,10 @@ export class Sim {
         if (mine.length && mine.every((u) => this.defs.u.get(u.def)!.railOnly)) return fail('trains only run delivery routes between railway stations');
         for (const u of mine) {
           (u.haul = undefined), (u.fuelTo = undefined), (u.attackMove = !!cmd.attack), (u.retreating = false);
+          if (u.stance === 'defend') {
+            u.stance = 'hold';
+            u.post = [cmd.to[0], cmd.to[1]];
+          }
           if (targetPost) {
             if (u.frontPost && u.frontPost !== targetPost.id) {
               const prev = w.posts.find((x) => x.id === u.frontPost);
@@ -2838,11 +2842,13 @@ export class Sim {
               u.cargo.passengers = [];
             }
             u.reinforceTarget = undefined;
-            u.stance = 'defend';
-            u.post = [tgt.pos[0], tgt.pos[1]];
+            u.stance = 'hold';
+            u.post = [u.pos[0], u.pos[1]];
             u.target = null;
             u.path = [];
           }
+        } else if (u.target && distKm(u.target, tgt.pos) > 0.4) {
+          this.orderMove([u], tgt.pos, false, false, false, 'spread');
         }
       }
 
@@ -3457,7 +3463,8 @@ export class Sim {
           dir = p.team === 0 ? [nx, ny] : [-nx, -ny];
         }
 
-        const step = 0.10 * dt;
+        // Requirement 3: 2x garrison advance speed
+        const step = 0.20 * dt;
         const nextPos = offsetKm(p.pos, dir[0] * step, dir[1] * step);
         const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
         if (isDry(nextPos)) {
@@ -3538,7 +3545,8 @@ export class Sim {
           dir = p.team === 0 ? [-nx, -ny] : [nx, ny];
         }
 
-        const step = 0.08 * dt;
+        // Requirement 3: 2x garrison retreat speed
+        const step = 0.16 * dt;
         const nextPos = offsetKm(p.pos, dir[0] * step, dir[1] * step);
         const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
         if (isDry(nextPos)) {
@@ -3735,7 +3743,7 @@ export class Sim {
         const dropHeadcount = (u.squadSize ?? 100) > 100 ? 20 : 5;
         u.squadSize = Math.max(5, (u.squadSize ?? 100) - dropHeadcount);
         const hpDrop = Math.round(u.hp / prevStr);
-        u.hp = Math.max(500, u.hp - hpDrop);
+        u.hp = Math.min(u.strength * 5000, Math.max(500, u.hp - hpDrop));
         const maxAmmo = u.strength * 100;
         if ((u.ammo ?? 0) > maxAmmo) u.ammo = maxAmmo;
 
@@ -3782,7 +3790,7 @@ export class Sim {
     // the abstract term is spread per 100 km of front so that map size does not change its weight
     const perNode: [number, number] = r.frontPosts ? [0, 0] : [(abstract[0] * r.frontNodeSpacingKm) / 500, (abstract[1] * r.frontNodeSpacingKm) / 500];
 
-    const speedAt = (node: FrontNode, base: [number, number]): number => {
+    const speedAt = (node: FrontNode, line: FrontNode[], nodeIdx: number, base: [number, number]): number => {
       const pos: LngLat = [node.lng, node.lat];
       const push: [number, number] = [base[0], base[1]];
       const holdDef: [number, number] = [0, 0];
@@ -3833,15 +3841,15 @@ export class Sim {
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
 
-      // Find local frontline garrisons for each team holding this sector (within 4.5 km of pos)
+      // Find local frontline garrisons for each team holding this sector (within 12.0 km of pos)
       let local0: Unit | null = null;
-      let dist0 = 4.5;
+      let dist0 = 12.0;
       let local1: Unit | null = null;
-      let dist1 = 4.5;
+      let dist1 = 12.0;
 
-      this.near(this.unitGrid, pos, 4.5, (u) => {
+      this.near(this.unitGrid, pos, 12.0, (u) => {
         const d = distKm(u.pos, pos);
-        if (d > 4.5 || u.embarkedIn || u.hp <= 0) return;
+        if (d > 12.0 || u.embarkedIn || u.hp <= 0) return;
         const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
         if (!isFront) return;
         if (u.team === 0 && d < dist0) {
@@ -3854,6 +3862,7 @@ export class Sim {
       });
 
       // Dynamic front line movement (out-of-ammo pressure and manpower disparity)
+      // Requirement 3: 2x speed increase
       let dynamicPush = 0;
       if (local0 && local1) {
         const uAmmo0 = (local0 as Unit).ammo ?? 0;
@@ -3862,25 +3871,57 @@ export class Sim {
         const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
 
         if (uAmmo0 > 0 && uAmmo1 <= 0) {
-          dynamicPush += 0.0070;
+          dynamicPush += 0.0140;
         } else if (uAmmo1 > 0 && uAmmo0 <= 0) {
-          dynamicPush -= 0.0070;
+          dynamicPush -= 0.0140;
         } else if (uAmmo0 <= 0 && uAmmo1 <= 0) {
           // both out of ammo: line holds or stalls
         } else {
           // If both have ammo, strength disparity pushes line
           if (str0 > str1) {
-            dynamicPush += clamp((str0 - str1) * 0.0036, 0, 0.008);
+            dynamicPush += clamp((str0 - str1) * 0.0072, 0, 0.016);
           } else if (str1 > str0) {
-            dynamicPush -= clamp((str1 - str0) * 0.0036, 0, 0.008);
+            dynamicPush -= clamp((str1 - str0) * 0.0072, 0, 0.016);
           }
         }
       } else if (local0 && !local1) {
-        if (((local0 as Unit).ammo ?? 0) > 0) dynamicPush += 0.0070;
-        else dynamicPush -= 0.0040;
+        if (((local0 as Unit).ammo ?? 0) > 0) dynamicPush += 0.0140;
+        else dynamicPush -= 0.0080;
       } else if (local1 && !local0) {
-        if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0070;
-        else dynamicPush += 0.0040;
+        if (((local1 as Unit).ammo ?? 0) > 0) dynamicPush -= 0.0140;
+        else dynamicPush += 0.0080;
+      }
+
+      // Requirement 1: If unit stormed/pushed forward and bogged down / settled into holding,
+      // the front line shifts forward ahead of the unit with 4x speed
+      const kx = kmPerDegLng(pos[1]);
+      const [nx, ny] = normalAt(line, nodeIdx);
+
+      if (local0) {
+        const u0 = local0 as Unit;
+        const toGuX = (u0.pos[0] - pos[0]) * kx;
+        const toGuY = (u0.pos[1] - pos[1]) * 111.32;
+        const normalProj = toGuX * nx + toGuY * ny;
+        const isHoldingAssault = (u0.frontStatus === 'holding' || u0.stance === 'hold') && normalProj > 0.1;
+        if (isHoldingAssault && (u0.ammo ?? 0) > 0) {
+          const targetDist = normalProj + 0.8;
+          if (targetDist > 0.05) {
+            dynamicPush += 0.048; // 4x speed catch-up push forward ahead of holding unit!
+          }
+        }
+      }
+      if (local1) {
+        const u1 = local1 as Unit;
+        const toGuX = (u1.pos[0] - pos[0]) * kx;
+        const toGuY = (u1.pos[1] - pos[1]) * 111.32;
+        const normalProj = -(toGuX * nx + toGuY * ny);
+        const isHoldingAssault = (u1.frontStatus === 'holding' || u1.stance === 'hold') && normalProj > 0.1;
+        if (isHoldingAssault && (u1.ammo ?? 0) > 0) {
+          const targetDist = normalProj + 0.8;
+          if (targetDist > 0.05) {
+            dynamicPush -= 0.048; // 4x speed catch-up push forward ahead of holding unit!
+          }
+        }
       }
 
       if (local0) {
@@ -3903,7 +3944,7 @@ export class Sim {
     const fresh = w.tick % 3 === 0;
     const move = (n: FrontNode[], closed: boolean, base: [number, number]) => {
       const len = n.length;
-      const raw = fresh ? n.map((node) => speedAt(node, base)) : null;
+      const raw = fresh ? n.map((node, i) => speedAt(node, n, i, base)) : null;
       for (let i = closed ? 0 : 1; i < (closed ? len : len - 1); i++) {
         const pi = (i - 1 + len) % len;
         const ni = (i + 1) % len;
@@ -3911,40 +3952,15 @@ export class Sim {
         n[i].v = v;
         if (v === 0) continue;
         const [nx, ny] = normalOf(n[pi], n[i], n[ni]);
-        const dlng = (nx * v * dt) / kmPerDegLng(n[i].lat);
+        const kx = kmPerDegLng(n[i].lat);
+        const dlng = (nx * v * dt) / kx;
         const dlat = (ny * v * dt) / 111.32;
 
-        // Displace frontline garrisons on BOTH sides of this front node
-        // Advancing troops push forward aggressively into enemy territory, creating grey zone cells ahead!
-        if (!closed && Math.abs(v) > 0) {
-          const nodePos: LngLat = [n[i].lng, n[i].lat];
-          for (const u of w.units) {
-            if (u.hp <= 0) continue;
-            if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')) {
-              if (nearestNode(n, u.pos) === i && distKm(u.pos, nodePos) <= 6.5) {
-                const pushMult = 1.6;
-                const nextPos: LngLat = [u.pos[0] + dlng * pushMult, u.pos[1] + dlat * pushMult];
-                if (!this.terrain?.isBarrier(nextPos)) {
-                  u.pos = nextPos;
-                  if (u.post) u.post = [u.post[0] + dlng * pushMult, u.post[1] + dlat * pushMult];
-                }
-                if ((u.ammo ?? 0) <= 0) {
-                  u.frontStatus = 'retreating';
-                } else if (u.team === 0) {
-                  u.frontStatus = v > 0.0005 ? 'advancing' : v < -0.0005 ? 'retreating' : 'holding';
-                } else {
-                  u.frontStatus = v < -0.0005 ? 'advancing' : v > 0.0005 ? 'retreating' : 'holding';
-                }
-              }
-            }
-          }
-        }
+        // Requirement 3: The front line moves at 2x baseline speed (0.8 instead of 0.4)
+        const frontMoveMult = closed ? 1 : 0.8;
+        let lng = n[i].lng + dlng * frontMoveMult;
+        let lat = n[i].lat + dlat * frontMoveMult;
 
-        // The front line follows behind the advancing vanguard at ~0.4x speed, ensuring the solid line
-        // stays safely behind the advancing vanguard and the grey penetration tiles created in enemy territory
-        const frontMoveMult = closed ? 1 : 0.4;
-        const lng = n[i].lng + dlng * frontMoveMult;
-        const lat = n[i].lat + dlat * frontMoveMult;
         // the line does not advance across open sea or a big river
         if (this.terrain?.isBarrier([lng, lat]) && !this.terrain.isBarrier([n[i].lng, n[i].lat])) {
           n[i].v = 0;
@@ -3954,6 +3970,97 @@ export class Sim {
         n[i].lat = lat;
       }
       if (!closed) n[0].v = n[len - 1].v = 0; // both ends of the main line stay anchored
+
+      // Displace frontline garrisons on BOTH sides of the front line
+      // Requirement 3: 2x speed (pushMult = 3.2)
+      // Requirement 2: Follow advancePath / retreatPath waypoint-by-waypoint, then continue straight
+      if (!closed) {
+        for (const u of w.units) {
+          if (u.hp <= 0 || u.embarkedIn) continue;
+          if (u.def !== 'frontline_infantry' && !u.owner.startsWith('__front_')) continue;
+          const i = nearestNode(n, u.pos);
+          if (i <= 0 || i >= len - 1) continue;
+          const nodePos: LngLat = [n[i].lng, n[i].lat];
+          if (distKm(u.pos, nodePos) > 15.0) continue;
+
+          const v = n[i].v;
+          const isAdvancing = (u.team === 0 ? v > 0.0005 : v < -0.0005) && (u.ammo ?? 0) > 0;
+          const isRetreating = (u.ammo ?? 0) <= 0 || (u.team === 0 ? v < -0.0005 : v > 0.0005);
+          const pushMult = 3.2;
+          const pi = (i - 1 + len) % len;
+          const ni = (i + 1) % len;
+          const [nx, ny] = normalOf(n[pi], n[i], n[ni]);
+
+          if (isAdvancing) {
+            u.frontStatus = 'advancing';
+            // Waypoint following for advance (Requirement 2):
+            if (u.advancePath && u.advancePath.length > 0) {
+              while (u.advancePath.length > 0 && distKm(u.pos, u.advancePath[0]) < 0.6) {
+                u.advancePath.shift();
+              }
+            }
+            let dir: [number, number];
+            if (u.advancePath && u.advancePath.length > 0) {
+              const targetPt = u.advancePath[0];
+              const ukx = kmPerDegLng(u.pos[1]);
+              const dxKm = (targetPt[0] - u.pos[0]) * ukx;
+              const dyKm = (targetPt[1] - u.pos[1]) * 111.32;
+              const dLen = Math.hypot(dxKm, dyKm) || 1;
+              dir = [dxKm / dLen, dyKm / dLen];
+            } else {
+              dir = u.team === 0 ? [nx, ny] : [-nx, -ny];
+            }
+
+            const stepKm = Math.abs(v) * dt * pushMult;
+            const ukx = kmPerDegLng(u.pos[1]);
+            const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+            if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
+              u.pos = nextPos;
+              if (u.post) u.post = [nextPos[0], nextPos[1]];
+            }
+
+            // Front line lag restriction: strictly <= 1.0 km behind an advancing garrison
+            const curDist = distKm(u.pos, [n[i].lng, n[i].lat]);
+            if (curDist > 1.0) {
+              const excess = curDist - 1.0;
+              const toPostX = (u.pos[0] - n[i].lng) * ukx;
+              const toPostY = (u.pos[1] - n[i].lat) * 111.32;
+              const dLen = Math.hypot(toPostX, toPostY) || 1;
+              n[i].lng += ((toPostX / dLen) * excess) / ukx;
+              n[i].lat += ((toPostY / dLen) * excess) / 111.32;
+            }
+          } else if (isRetreating) {
+            u.frontStatus = 'retreating';
+            // Waypoint following for retreat:
+            if (u.retreatPath && u.retreatPath.length > 0) {
+              while (u.retreatPath.length > 0 && distKm(u.pos, u.retreatPath[0]) < 0.6) {
+                u.retreatPath.shift();
+              }
+            }
+            let dir: [number, number];
+            if (u.retreatPath && u.retreatPath.length > 0) {
+              const targetPt = u.retreatPath[0];
+              const ukx = kmPerDegLng(u.pos[1]);
+              const dxKm = (targetPt[0] - u.pos[0]) * ukx;
+              const dyKm = (targetPt[1] - u.pos[1]) * 111.32;
+              const dLen = Math.hypot(dxKm, dyKm) || 1;
+              dir = [dxKm / dLen, dyKm / dLen];
+            } else {
+              dir = u.team === 0 ? [-nx, -ny] : [nx, ny];
+            }
+
+            const stepKm = Math.max(0.012, Math.abs(v)) * dt * pushMult;
+            const ukx = kmPerDegLng(u.pos[1]);
+            const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+            if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
+              u.pos = nextPos;
+              if (u.post) u.post = [nextPos[0], nextPos[1]];
+            }
+          } else {
+            u.frontStatus = 'holding';
+          }
+        }
+      }
     };
 
     move(w.front, false, perNode);

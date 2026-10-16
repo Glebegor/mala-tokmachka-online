@@ -75,13 +75,12 @@ function findBotMilitaryBasePos(sim: Sim, team: Team): LngLat | null {
   for (let i = 0; i < roads.length; i += step) {
     const pt = roads[i];
     if (!isDry(pt) || sim.side(pt) !== team || !farFromBases(pt)) continue;
-    const d = distToFrontKm(front, pt);
-    const dist = team === 0 ? d : -d;
+    const dist = Math.abs(distToFrontKm(front, pt));
     if (dist < 5) continue; // avoid active front edge
 
     allCandidates.push(pt);
-    // Priority zone: 20-80 km from the front line
-    if (dist >= 20 && dist <= 80) {
+    // Priority zone: 25-75 km from the front line (leaves margin for nudging and front movement)
+    if (dist >= 25 && dist <= 75) {
       priorityCandidates.push(pt);
     }
   }
@@ -115,8 +114,7 @@ function findBotWarehousePos(sim: Sim, team: Team): LngLat | null {
   for (let i = 0; i < roads.length; i += step) {
     const pt = roads[i];
     if (!isDry(pt) || sim.side(pt) !== team || !farFromWarehouses(pt)) continue;
-    const d = distToFrontKm(front, pt);
-    const dist = team === 0 ? d : -d;
+    const dist = Math.abs(distToFrontKm(front, pt));
     if (dist < 20) continue;
 
     // Target ~80 km from the front line (65-95 km ideal)
@@ -533,9 +531,18 @@ export class Bot {
       }
     }
 
-    // 1. Board infantry into available empty transports (truck or humvee) to move them rapidly
-    const transports = w.units.filter((u) => u.owner === p.id && (u.def === 'humvee' || (u.def === 'truck' && !u.haul)) && !u.reinforceTarget && !u.target);
-    const unembarkedInfantry = w.units.filter((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && !u.target && !u.reinforceTarget);
+    // 1. Board infantry into available transports (truck or humvee) to move them rapidly
+    const transports = w.units.filter((u) =>
+      u.owner === p.id &&
+      (u.def === 'humvee' || (u.def === 'truck' && !u.haul)) &&
+      !u.reinforceTarget &&
+      (!u.target || distKm(u.pos, anchorBase) <= 20)
+    );
+    const unembarkedInfantry = w.units.filter((u) =>
+      u.owner === p.id &&
+      u.def === 'infantry' &&
+      !u.embarkedIn
+    );
 
     for (const trans of transports) {
       const td = sim.defs.u.get(trans.def);
@@ -545,7 +552,7 @@ export class Bot {
       const slots = cap - currentPassengers;
       if (slots <= 0) continue;
 
-      const nearbyInf = unembarkedInfantry.filter((inf) => !inf.embarkedIn && distKm(inf.pos, trans.pos) <= 10).slice(0, slots);
+      const nearbyInf = unembarkedInfantry.filter((inf) => !inf.embarkedIn && distKm(inf.pos, trans.pos) <= 15).slice(0, slots);
       for (const inf of nearbyInf) {
         sim.apply(p.id, { type: 'board', unit: inf.id, transport: trans.id });
       }
@@ -564,6 +571,8 @@ export class Bot {
       distKm(u.pos, anchorBase) > 15
     );
     for (const v of emptyVehiclesAtFront) {
+      v.stance = 'hold';
+      v.post = [anchorBase[0], anchorBase[1]];
       sim.apply(p.id, { type: 'move', units: [v.id], to: anchorBase });
     }
 
@@ -586,7 +595,7 @@ export class Bot {
 
     // Ground army: include vehicles and infantry.
     const isHaulTruck = (u: Unit) => u.def === 'truck' && u.haul !== undefined;
-    const waitingInfantryNearBase = w.units.filter((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && !u.target && !u.reinforceTarget && distKm(u.pos, anchorBase) <= 15);
+    const waitingInfantryNearBase = w.units.filter((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && distKm(u.pos, anchorBase) <= 25);
     const isTrainingInfantry = w.queue.some((q) => q.unit === 'infantry' && w.buildings.find((b) => b.id === q.building)?.owner === p.id);
 
     const army = w.units.filter((u) => {
@@ -596,7 +605,7 @@ export class Bot {
       if (u.def === 'truck') {
         const passCount = u.cargo?.passengers?.length ?? 0;
         if (passCount === 0) return false;
-        if (passCount < 5 && distKm(u.pos, anchorBase) <= 15 && waitingInfantryNearBase.length > 0) {
+        if (passCount < 5 && distKm(u.pos, anchorBase) <= 20 && waitingInfantryNearBase.length > 0) {
           return false; // Wait at base to fill up to 5 squads!
         }
         return true;
@@ -605,17 +614,22 @@ export class Bot {
       // Standard Humvees without passengers wait at base for infantry to board
       if (u.def === 'humvee') {
         const passCount = u.cargo?.passengers?.length ?? 0;
-        if (passCount === 0 && distKm(u.pos, anchorBase) <= 15 && waitingInfantryNearBase.length > 0) {
+        if (passCount === 0 && distKm(u.pos, anchorBase) <= 20 && waitingInfantryNearBase.length > 0) {
           return false; // Wait for passenger squad to board
         }
         return true;
       }
 
-      // Infantry near base should wait for transports if an available transport with free seats is at base
+      // Infantry near base should wait for transports if an available transport with free seats exists or is arriving at base
       const availableTransportAtBase = w.units.some(
-        (t) => t.owner === p.id && (t.def === 'truck' || t.def === 'humvee') && !t.haul && !t.reinforceTarget && !t.target && distKm(t.pos, anchorBase) <= 15 && (sim.defs.u.get(t.def)?.passengerCap ?? 0) > (t.cargo?.passengers?.length ?? 0)
+        (t) => t.owner === p.id &&
+          (t.def === 'truck' || t.def === 'humvee') &&
+          !t.haul &&
+          !t.reinforceTarget &&
+          distKm(t.pos, anchorBase) <= 30 &&
+          (sim.defs.u.get(t.def)?.passengerCap ?? 0) > (t.cargo?.passengers?.length ?? 0)
       );
-      if (u.def === 'infantry' && distKm(u.pos, anchorBase) <= 15 && availableTransportAtBase) {
+      if (u.def === 'infantry' && distKm(u.pos, anchorBase) <= 20 && availableTransportAtBase) {
         return false;
       }
 
