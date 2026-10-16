@@ -9,7 +9,27 @@ export function buildFront(line: LngLat[], spacingKm: number): FrontNode[] {
   let total = 0;
   for (let i = 1; i < line.length; i++) total += distKm(line[i - 1], line[i]);
   const count = Math.max(8, Math.min(1200, Math.round(total / spacingKm) + 1));
-  return resample(line.map((p) => ({ lng: p[0], lat: p[1], v: 0 })), count);
+  const nodes = resample(line.map((p) => ({ lng: p[0], lat: p[1], v: 0 })), count);
+  for (let i = 1; i < nodes.length - 1; i++) {
+    const p = nodes[i - 1];
+    const cur = nodes[i];
+    const n = nodes[i + 1];
+    const kx = kmPerDegLng(cur.lat);
+    const v1x = (cur.lng - p.lng) * kx;
+    const v1y = (cur.lat - p.lat) * 111.32;
+    const v2x = (n.lng - cur.lng) * kx;
+    const v2y = (n.lat - cur.lat) * 111.32;
+    const len1 = Math.hypot(v1x, v1y);
+    const len2 = Math.hypot(v2x, v2y);
+    if (len1 > 0 && len2 > 0) {
+      const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
+      if (dot < -0.3) {
+        cur.lng = (p.lng + n.lng) / 2;
+        cur.lat = (p.lat + n.lat) / 2;
+      }
+    }
+  }
+  return nodes;
 }
 
 /** Redistribute nodes evenly along the line (keeps the shape, stops nodes bunching up or drifting apart). */

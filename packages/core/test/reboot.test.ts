@@ -773,21 +773,26 @@ if (skirmishGarrison.skirmishCount >= 6) {
 assert.equal(skirmishGarrison.ammo, 99, 'On 6th skirmish shot, ammo decrements by 1 (6x slower rate verified)');
 console.log('✓ Garrison Ammo: consumption rate 6x slower verified');
 
-// 25. Unit Vision Nerf (reduced further by 2.5x) & Vehicle Speed Boost (+20%)
+// 25. Unit Vision Nerf & Vehicle Speed Doubling (2x)
 const infUnitDef = rs.units.find((u) => u.id === 'infantry')!;
 assert.equal(infUnitDef.vision, 1.6, 'Infantry vision reduced to 1.6 km (was 4)');
 const humveeUnitDef = rs.units.find((u) => u.id === 'humvee')!;
 assert.equal(humveeUnitDef.vision, 1.8, 'Humvee vision reduced to 1.8 km (was 4.5)');
-assert.equal(humveeUnitDef.speed, 0.04, 'Humvee speed boosted +20% to 0.04 km/s (144 km/h)');
+assert.equal(humveeUnitDef.speed, 0.08, 'Humvee speed doubled to 0.08 km/s (288 km/h)');
 const truckUnitDef = rs.units.find((u) => u.id === 'truck')!;
 assert.equal(truckUnitDef.vision, 1.6, 'Truck vision reduced to 1.6 km (was 4)');
-assert.equal(truckUnitDef.speed, 0.03, 'Truck speed boosted +20% to 0.03 km/s (108 km/h)');
-console.log('✓ Vision & Speed: Infantry (vision 1.6), Humvee (vision 1.8, speed 144 km/h), Truck (vision 1.6, speed 108 km/h) verified');
+assert.equal(truckUnitDef.speed, 0.06, 'Truck speed doubled to 0.06 km/s (216 km/h)');
+console.log('✓ Vision & Speed: Infantry (vision 1.6), Humvee (vision 1.8, speed 288 km/h), Truck (vision 1.6, speed 216 km/h) verified');
 
-// 26. Front Line Node Density (1.5 km) & Smoothing (0.45)
+// 26. Front Line Node Density (1.5 km) & Static Stability (no unwanted smoothing drift)
 assert.equal(rs.rules.frontNodeSpacingKm, 1.5, 'Front node spacing is 1.5 km (dense nodes preventing sharp kinks)');
 assert.equal(rs.rules.frontSmoothing, 0.45, 'Front smoothing is 0.45');
-console.log('✓ Frontline Geometry: 1.5 km node spacing and 0.45 smoothing verified');
+// Verify front line does NOT drift or flatten itself on its own after start
+const initialFrontNode = { lng: sim.world.front[10].lng, lat: sim.world.front[10].lat };
+sim.step(1.0); // 1 second of simulation without combat
+assert.equal(sim.world.front[10].lng, initialFrontNode.lng, 'Frontline nodes remain stable without idle smoothing drift');
+assert.equal(sim.world.front[10].lat, initialFrontNode.lat, 'Frontline nodes remain stable without idle smoothing drift');
+console.log('✓ Frontline Geometry & Stability: 1.5 km density, no idle smoothing drift verified');
 
 // 27. Ammo Factory Production (2500 cost, 120s build, 1 steel -> 50 ammo in 5s)
 const ammoFactory = (sim as any).spawnBuilding('ammo_factory', sim.player('player1')!, friendlyPos, true);

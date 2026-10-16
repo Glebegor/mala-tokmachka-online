@@ -3632,15 +3632,13 @@ export class Sim {
 
     move(w.front, false, perNode);
 
-    // Position Laplacian relaxation on w.front nodes:
-    // Smooths out sharp acute angles and zigzag kinks along the front line
-    const smoothK = 0.15;
+    // Guard against severe acute spikes/kinks (turning backward by > 107 deg) only when actively moving
+    // Prevents the front line from smoothing itself out or moving on its own when idle
     for (let i = 1; i < w.front.length - 1; i++) {
-      const p = w.front[i - 1];
       const cur = w.front[i];
+      if (Math.abs(cur.v) === 0) continue;
+      const p = w.front[i - 1];
       const n = w.front[i + 1];
-      const midLng = (p.lng + n.lng) / 2;
-      const midLat = (p.lat + n.lat) / 2;
       const kx = kmPerDegLng(cur.lat);
       const v1x = (cur.lng - p.lng) * kx;
       const v1y = (cur.lat - p.lat) * 111.32;
@@ -3650,12 +3648,16 @@ export class Sim {
       const len2 = Math.hypot(v2x, v2y);
       if (len1 > 0 && len2 > 0) {
         const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
-        const k = dot < 0.5 ? 0.35 : smoothK;
-        const newLng = (1 - k) * cur.lng + k * midLng;
-        const newLat = (1 - k) * cur.lat + k * midLat;
-        if (!this.terrain?.isBarrier([newLng, newLat])) {
-          cur.lng = newLng;
-          cur.lat = newLat;
+        if (dot < -0.3) {
+          const midLng = (p.lng + n.lng) / 2;
+          const midLat = (p.lat + n.lat) / 2;
+          const k = 0.15;
+          const newLng = (1 - k) * cur.lng + k * midLng;
+          const newLat = (1 - k) * cur.lat + k * midLat;
+          if (!this.terrain?.isBarrier([newLng, newLat])) {
+            cur.lng = newLng;
+            cur.lat = newLat;
+          }
         }
       }
     }
