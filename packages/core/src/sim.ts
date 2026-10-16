@@ -985,6 +985,13 @@ export class Sim {
         if (!u) return fail('target garrison not found');
         const isGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
         if (!isGarrison) return fail('planning routes is only available for frontline garrisons');
+        if (cmd.retreatPath && cmd.retreatPath.length > 0) {
+          for (const pt of cmd.retreatPath) {
+            if (this.side(pt) !== u.team || this.foreign(pt)) {
+              return fail('Отступление возможно только на свою территорию');
+            }
+          }
+        }
         u.advancePath = cmd.advancePath && cmd.advancePath.length > 0 ? cmd.advancePath.map((pt) => [pt[0], pt[1]] as LngLat) : undefined;
         u.retreatPath = cmd.retreatPath && cmd.retreatPath.length > 0 ? cmd.retreatPath.map((pt) => [pt[0], pt[1]] as LngLat) : undefined;
         const post = u.frontPost !== undefined ? w.posts?.find((fp) => fp.id === u.frontPost) : w.posts?.find((fp) => fp.garrison.includes(u.id));
@@ -3675,8 +3682,7 @@ export class Sim {
         } else {
           const retreatPath = p.retreatPath ?? p.garrison.map((id) => this.unitById.get(id)?.retreatPath).find((rp) => rp && rp.length > 0);
           if (retreatPath && retreatPath.length > 0) {
-            const targetPt = retreatPath[0];
-            if (distKm(p.pos, targetPt) < 0.6) {
+            while (retreatPath.length > 0 && (this.side(retreatPath[0]) !== p.team || distKm(p.pos, retreatPath[0]) < 0.6)) {
               if (p.retreatPath) p.retreatPath.shift();
               for (const id of p.garrison) {
                 const u = this.unitById.get(id);
@@ -4005,7 +4011,7 @@ export class Sim {
       this.near(this.unitGrid, pos, 4.0, (u) => {
         const d = distKm(u.pos, pos);
         if (d > 4.0 || u.embarkedIn || u.hp <= 0) return;
-        const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+        const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
         if (!isFront) return;
         if (u.team === 0 && d < dist0) {
           dist0 = d;
@@ -4079,7 +4085,9 @@ export class Sim {
         const str0 = ((local0 as Unit).strength ?? 1) + Math.max(0, (((local0 as Unit).squadSize ?? 100) - 100) / 20);
         const str1 = ((local1 as Unit).strength ?? 1) + Math.max(0, (((local1 as Unit).squadSize ?? 100) - 100) / 20);
         if (Math.abs(str0 - str1) <= Math.max(str0, str1) * 0.25) {
-          return dynamicPush; // 0: stalemate, line holds
+          (local0 as Unit).frontStatus = 'holding';
+          (local1 as Unit).frontStatus = 'holding';
+          return 0; // stalemate, line holds
         }
       }
 
@@ -4138,7 +4146,7 @@ export class Sim {
       if (!closed) {
         for (const u of w.units) {
           if (u.hp <= 0 || u.embarkedIn || u.encircled || w.pockets.some((k) => pointInRing(k.nodes, u.pos))) continue;
-          if (u.def !== 'frontline_infantry' && !u.owner.startsWith('__front_')) continue;
+          if (u.def !== 'frontline_infantry' && !u.owner.startsWith('__front_') && u.frontPost === undefined) continue;
           const i = nearestNode(n, u.pos);
           if (i <= 0 || i >= len - 1) continue;
           const nodePos: LngLat = [n[i].lng, n[i].lat];
@@ -4153,18 +4161,39 @@ export class Sim {
             ? (u.pos[0] - n[i].lng) * ukx * nx + (u.pos[1] - n[i].lat) * 111.32 * ny
             : -((u.pos[0] - n[i].lng) * ukx * nx + (u.pos[1] - n[i].lat) * 111.32 * ny);
           const isHoldingAssault = (u.frontStatus === 'holding' || u.stance === 'hold') && toNodeProj > 0.8;
-          // Find opposing enemy garrison across the front line within 4.5 km
+          // Find opposing enemy garrison across the front line
           let oppGarrison: Unit | null = null;
-          let oppDist = 4.5;
-          this.near(this.unitGrid, u.pos, 4.5, (e) => {
-            if (e.team !== u.team && e.hp > 0 && !e.embarkedIn && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))) {
-              const d = distKm(u.pos, e.pos);
-              if (d < oppDist) {
-                oppDist = d;
-                oppGarrison = e;
+          let oppDist = 12.0;
+
+          const considerOpp = (e: Unit) => {
+            if (e.team !== u.team && e.hp > 0 && !e.embarkedIn) {
+              const isGarrison =
+                e.def === 'frontline_infantry' ||
+                e.owner.startsWith('__front_') ||
+                e.frontPost !== undefined;
+              if (isGarrison) {
+                const d = distKm(u.pos, e.pos);
+                if (d < oppDist) {
+                  oppDist = d;
+                  oppGarrison = e;
+                }
               }
             }
-          });
+          };
+
+          // 1. Search around u.pos (within 10 km)
+          this.near(this.unitGrid, u.pos, 10.0, (e) => considerOpp(e));
+
+          // 2. Search around the front line node n[i] (within 8.0 km)
+          this.near(this.unitGrid, nodePos, 8.0, (e) => considerOpp(e));
+
+          // 3. If u has advancePath, search around waypoints along the advance corridor (within 6.0 km of waypoints)
+          if (u.advancePath && u.advancePath.length > 0) {
+            for (let wpIdx = 0; wpIdx < Math.min(4, u.advancePath.length); wpIdx++) {
+              const wp = u.advancePath[wpIdx];
+              this.near(this.unitGrid, wp, 6.0, (e) => considerOpp(e));
+            }
+          }
 
           const myStr = (u.strength ?? 1) + Math.max(0, ((u.squadSize ?? 100) - 100) / 20);
           const oppStr = oppGarrison ? ((oppGarrison as Unit).strength ?? 1) + Math.max(0, (((oppGarrison as Unit).squadSize ?? 100) - 100) / 20) : 0;
@@ -4175,8 +4204,9 @@ export class Sim {
           const oppSuperiority = oppGarrison && oppAmmo > 0 && oppStr > myStr * 1.25;
 
           const hasAdvancePath = !!(u.advancePath && u.advancePath.length > 0);
+          const hasRetreatPath = !!(u.retreatPath && u.retreatPath.length > 0);
           const isAdvancing = hasAdvancePath ? (hasSuperiority && myAmmo > 0) : (!isHoldingAssault && (u.team === 0 ? v > 0.0005 : v < -0.0005) && hasSuperiority && myAmmo > 0);
-          const isRetreating = !hasAdvancePath && (myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)));
+          const isRetreating = !hasAdvancePath && (hasRetreatPath || myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)) || u.pushedDir !== undefined);
 
           if (isAdvancing) {
             u.frontStatus = 'advancing';
@@ -4188,6 +4218,7 @@ export class Sim {
               while (u.advancePath.length > 0 && distKm(u.pos, u.advancePath[0]) < 0.6) {
                 u.advancePath.shift();
               }
+              if (u.advancePath.length === 0) u.advancePath = undefined;
             }
             let dir: [number, number];
             if (u.advancePath && u.advancePath.length > 0) {
@@ -4244,9 +4275,10 @@ export class Sim {
             u.frontStatus = 'retreating';
             // Waypoint following for retreat:
             if (u.retreatPath && u.retreatPath.length > 0) {
-              while (u.retreatPath.length > 0 && distKm(u.pos, u.retreatPath[0]) < 0.6) {
+              while (u.retreatPath.length > 0 && (this.side(u.retreatPath[0]) !== u.team || distKm(u.pos, u.retreatPath[0]) < 0.6)) {
                 u.retreatPath.shift();
               }
+              if (u.retreatPath.length === 0) u.retreatPath = undefined;
             }
             let dir: [number, number];
             if (u.pushedDir) {

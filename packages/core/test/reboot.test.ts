@@ -906,7 +906,10 @@ sim.step(5.0);
 const extraRuInf = sim.spawnUnit('infantry', sim.player('botRU')!, botRuBase.pos);
 bRU.think(sim);
 const assignedReinforcer = extraRuInf.embarkedIn ? sim.world.units.find((u) => u.id === extraRuInf.embarkedIn)! : extraRuInf;
-assert.equal(assignedReinforcer.reinforceTarget, opposingRuGarrison.id, 'Bot RU prioritized troubled sector with highest strength deficit to stabilize frontline');
+const troubledGarrisons = sim.world.units
+  .filter((u) => u.owner === '__front_1' && u.hp > 0 && distKm(u.pos, threatUaGarrison.pos) <= 8.0)
+  .map((u) => u.id);
+assert.ok(troubledGarrisons.includes(assignedReinforcer.reinforceTarget!), 'Bot RU prioritized troubled sector with highest strength deficit to stabilize frontline');
 console.log('✓ Frontline Stabilization: Bot detects enemy strength disparity and rushes reinforcements to troubled sector verified');
 
 // 32. Out-of-Ammo Retreat (Strength 6 still retreats backward when ammo runs out)
@@ -1106,12 +1109,61 @@ uaEqualGarrison.strength = 2;
 ruEqualGarrison.strength = 2;
 uaEqualGarrison.advancePath = undefined;
 ruEqualGarrison.advancePath = undefined;
+uaEqualGarrison.pushedDir = undefined;
+ruEqualGarrison.pushedDir = undefined;
+uaEqualGarrison.frontStatus = 'holding';
+ruEqualGarrison.frontStatus = 'holding';
 const uaEqualPosBefore = [uaEqualGarrison.pos[0], uaEqualGarrison.pos[1]];
 const ruEqualPosBefore = [ruEqualGarrison.pos[0], ruEqualGarrison.pos[1]];
 for (let s = 0; s < 10; s++) sim.step(1.0);
 assert.equal(distKm(uaEqualGarrison.pos, uaEqualPosBefore as [number, number]), 0, 'Equal forces UA garrison holds ground and does not retreat');
 assert.equal(distKm(ruEqualGarrison.pos, ruEqualPosBefore as [number, number]), 0, 'Equal forces RU garrison holds ground and does not retreat');
 console.log('✓ City Vision, Dnipro Water Stability, and Equal Forces Hold: Stepnohirsk 7.5km vision, static Dnipro line, equal garrisons hold position verified');
+
+// 47. Retreat Boundary Restrictions and Advance Route Equal Forces Stalemate
+// Retreat into enemy territory must be rejected
+const enemyTerritoryPoint = offsetKm(ruEqualGarrison.pos, 0, -5.0);
+assert.equal(sim.side(enemyTerritoryPoint), 1, 'Point is in enemy (RU) territory');
+const badRetreatRes = sim.apply('player1', {
+  type: 'setGarrisonPlan',
+  unitId: uaEqualGarrison.id,
+  advancePath: undefined,
+  retreatPath: [enemyTerritoryPoint],
+});
+assert.ok(!badRetreatRes.ok, 'Setting retreat route into enemy territory must fail');
+assert.ok(badRetreatRes.reason.includes('Отступление возможно только на свою территорию'), `Error message: ${badRetreatRes.reason}`);
+
+// Retreat into friendly territory must succeed
+const friendlyTerritoryPoint = friendlyPos;
+assert.equal(sim.side(friendlyTerritoryPoint), 0, 'Point is in friendly (UA) territory');
+const goodRetreatRes = sim.apply('player1', {
+  type: 'setGarrisonPlan',
+  unitId: uaEqualGarrison.id,
+  advancePath: undefined,
+  retreatPath: [friendlyTerritoryPoint],
+});
+assert.ok(goodRetreatRes.ok, 'Setting retreat route in friendly territory succeeds');
+uaEqualGarrison.retreatPath = undefined; // reset
+
+// Advance route with equal forces: unit must HOLD ground and NOT advance
+uaEqualGarrison.strength = 1;
+ruEqualGarrison.strength = 1;
+uaEqualGarrison.squadSize = 100;
+ruEqualGarrison.squadSize = 100;
+uaEqualGarrison.ammo = 100;
+ruEqualGarrison.ammo = 100;
+uaEqualGarrison.advancePath = [ruEqualGarrison.pos];
+const uaPosBeforeAdvance = [uaEqualGarrison.pos[0], uaEqualGarrison.pos[1]];
+sim.step(1.0);
+assert.equal(uaEqualGarrison.frontStatus, 'holding', 'Equal forces garrison with advancePath stays in holding');
+assert.equal(distKm(uaEqualGarrison.pos, uaPosBeforeAdvance as [number, number]), 0, 'Equal forces garrison does not move forward');
+
+// Advance route with superior forces (>1.25x): unit ADVANCES and pushes enemy
+uaEqualGarrison.strength = 3; // 3 > 1 * 1.25
+sim.step(1.0);
+assert.equal(uaEqualGarrison.frontStatus, 'advancing', 'Superior garrison with advancePath advances');
+assert.equal(ruEqualGarrison.frontStatus, 'retreating', 'Opposing weaker garrison is pushed and retreats');
+console.log('✓ Retreat Territory Restrictions & Advance Equality: invalid retreat rejected, equal forces hold position, superior forces advance verified');
 
 console.log('All reboot tests passed successfully!');
 

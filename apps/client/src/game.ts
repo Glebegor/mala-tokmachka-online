@@ -881,6 +881,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         } else {
           const curPath = [...(targetUnit.retreatPath ?? [])];
           if (curPath.length >= 10) return toast('Максимум 10 точек маршрута', true);
+          if (sideAt(p) !== targetUnit.team || foreignAt(p)) return toast('Отступление возможно только в свой тыл / на свою территорию', true);
           curPath.push(p);
           targetUnit.retreatPath = curPath;
           send({ type: 'setGarrisonPlan', unitId: targetUnit.id, advancePath: targetUnit.advancePath, retreatPath: curPath });
@@ -2179,7 +2180,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             ? '⚔️ Гарнизон фронта (медленно наступает)'
             : u.frontStatus === 'retreating'
             ? '⚠️ Гарнизон фронта (медленно отступает)'
-            : '🛡️ Гарнизон фронта (удерживает рубеж)';
+            : (u.advancePath && u.advancePath.length > 0
+              ? '🛡️ Гарнизон фронта (удерживает рубеж: силы равны)'
+              : '🛡️ Гарнизон фронта (удерживает рубеж)');
           const statusColor = u.frontStatus === 'advancing' ? '#4ade80' : u.frontStatus === 'retreating' ? '#f87171' : '#8ec5fc';
 
           const isAdvActive = garrisonPlan?.unitId === u.id && garrisonPlan.mode === 'advance';
