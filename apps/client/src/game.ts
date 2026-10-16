@@ -1967,6 +1967,67 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               return h('div', { class: 'storage-item' }, ico, h('span', {}, res?.name ?? k), h('b', {}, Math.floor(v).toLocaleString('en-US')));
             }))));
         }
+        if ((b.def === 'mine' || b.def === 'steel_mill' || b.def === 'ammo_factory') && b.progress >= 1 && !locked) {
+          const targetDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
+          const targetLabel = b.def === 'mine' ? 'Сталелитейные заводы' : b.def === 'steel_mill' ? 'Заводы боеприпасов' : 'Склады';
+          const resLabel = b.def === 'mine' ? 'руды' : b.def === 'steel_mill' ? 'стали' : 'боеприпасов';
+          const targets = snap.buildings.filter((x) => x.team === b.team && x.progress >= 1 && x.def === targetDef);
+          const currentTargets = new Set(b.serviceTargets ?? []);
+          const myTrucks = snap.units.filter((u) => u.serviceBuilding === b.id && u.hp > 0);
+
+          const logBox = h('div', { class: 'storage-box', style: { marginTop: '10px' } });
+          logBox.append(
+            h('b', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, `🚚 Снабжение (${resLabel})`),
+            h('div', { class: 'stat' }, `Грузовиков на маршруте: ${myTrucks.length} (возит по 500 ${resLabel})`),
+          );
+
+          if (b.owner === me) {
+            const canAffordTruck = (snap.res.money ?? 0) >= 125;
+            const buyBtn = h('button', {
+              class: 'hud-btn sm' + (canAffordTruck ? '' : ' disabled'),
+              disabled: !canAffordTruck,
+              onClick: () => {
+                send({ type: 'buyLogisticsTruck', building: b.id });
+                toast('Куплен дополнительный грузовик снабжения');
+              }
+            }, '🚚 Купить грузовик снабжения · 125 💰');
+            logBox.append(buyBtn);
+          }
+
+          logBox.append(h('div', { class: 'stat', style: { marginTop: '8px' } }, `Куда доставлять (${targetLabel}):`));
+          if (!targets.length) {
+            logBox.append(h('div', { class: 'muted', style: { fontSize: '12px' } }, `Нет построенных объектов (${targetLabel.toLowerCase()}). Постройте их для доставки.`));
+          } else {
+            for (const tgt of targets) {
+              const td = defB.get(tgt.def);
+              const dist = Math.round(distKm(b.pos, tgt.pos) * 10) / 10;
+              const isChecked = currentTargets.has(tgt.id);
+              const stockVal = Math.floor(tgt.storage?.[b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo'] ?? 0);
+              const tgtRow = h('div', {
+                class: 'row',
+                style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: b.owner === me ? 'pointer' : 'default' },
+                onClick: () => {
+                  if (b.owner !== me) return;
+                  const nextTargets = new Set(currentTargets);
+                  if (nextTargets.has(tgt.id)) {
+                    if (nextTargets.size > 1) nextTargets.delete(tgt.id);
+                  } else {
+                    nextTargets.add(tgt.id);
+                  }
+                  send({ type: 'setServiceTargets', building: b.id, targets: [...nextTargets] });
+                }
+              },
+                h('div', { style: { display: 'flex', alignItems: 'center', gap: '6px' } },
+                  b.owner === me ? h('input', { type: 'checkbox', checked: isChecked, style: { cursor: 'pointer' } }) : null,
+                  h('span', {}, `${td?.icon ?? '🏢'} ${td?.name ?? 'Объект'} (${dist} км)`),
+                ),
+                h('small', { class: 'muted' }, `${stockVal}/5000`)
+              );
+              logBox.append(tgtRow);
+            }
+          }
+          side.append(logBox);
+        }
         if (b.def === 'aircraft_plant') side.append(h('div', { class: 'muted' }, 'Production starts with a coming update.'));
         // drones and missiles waiting here
         const waiting = stored.filter((x) => x.parkedAt === b.id && x.owner === me);
@@ -2881,7 +2942,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const holes = snap.pockets.filter((k) => k.team === 0).map(ring);
     const mapHoles = init.map.occupiedHoles ?? []; // e.g. the Sea of Azov: not occupied, but not a front either
     const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
-    (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiLineString', coordinates: [line, ...holes, ...patches] } } as any);
+    (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } as any);
     (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes, ...mapHoles], ...patches.map((p) => [p])] } } as any);
     (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
   }

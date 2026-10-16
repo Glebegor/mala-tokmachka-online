@@ -59,6 +59,10 @@ export type Command =
   /** Send units to reinforce and merge into a friendly frontline garrison squad. */
   | { type: 'reinforce'; units: number[]; targetUnit: number }
   /** Set advance and/or retreat planning paths for a frontline garrison post. */
-  | { type: 'setGarrisonPlan'; unitId: number; advancePath?: LngLat[]; retreatPath?: LngLat[] };
+  | { type: 'setGarrisonPlan'; unitId: number; advancePath?: LngLat[]; retreatPath?: LngLat[] }
+  /** Purchase an additional dedicated logistics truck directly in a building (mine, steel mill, ammo factory). */
+  | { type: 'buyLogisticsTruck'; building: number }
+  /** Select destination buildings to service for resource deliveries. */
+  | { type: 'setServiceTargets'; building: number; targets: number[] };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

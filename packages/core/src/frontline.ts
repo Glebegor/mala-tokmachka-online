@@ -236,17 +236,55 @@ export function pocketAt(pockets: Pocket[], p: LngLat): Pocket | null {
   return null;
 }
 
+function segmentsIntersect(
+  p1x: number, p1y: number, p2x: number, p2y: number,
+  p3x: number, p3y: number, p4x: number, p4y: number
+): boolean {
+  if (
+    Math.max(p1x, p2x) < Math.min(p3x, p4x) ||
+    Math.min(p1x, p2x) > Math.max(p3x, p4x) ||
+    Math.max(p1y, p2y) < Math.min(p3y, p4y) ||
+    Math.min(p1y, p2y) > Math.max(p3y, p4y)
+  ) {
+    return false;
+  }
+  const ccw = (ax: number, ay: number, bx: number, by: number, cx: number, cy: number) =>
+    (cy - ay) * (bx - ax) > (by - ay) * (cx - ax);
+  return (
+    ccw(p1x, p1y, p3x, p3y, p4x, p4y) !== ccw(p2x, p2y, p3x, p3y, p4x, p4y) &&
+    ccw(p1x, p1y, p2x, p2y, p3x, p3y) !== ccw(p1x, p1y, p2x, p2y, p4x, p4y)
+  );
+}
+
 /**
- * Look for two stretches of the line that have closed to within `maxKm` of each other (the jaws of a pincer meeting).
+ * Look for two stretches of the line that have closed to within `maxKm` of each other (the jaws of a pincer meeting)
+ * or crossed each other (self-intersection forming an encirclement).
  * Returns the node range [from, to] that would be cut off as a loop, or null. `minGap` ignores neighbours.
  */
 export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { from: number; to: number } | null {
+  // 1. Check for crossing / self-intersecting segments first
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const a1 = nodes[i];
+    const a2 = nodes[i + 1];
+    for (let j = i + Math.max(12, minGap); j < nodes.length - 1; j++) {
+      const b1 = nodes[j];
+      const b2 = nodes[j + 1];
+      if (segmentsIntersect(a1.lng, a1.lat, a2.lng, a2.lat, b1.lng, b1.lat, b2.lng, b2.lat)) {
+        return { from: i + 1, to: j };
+      }
+    }
+  }
+
+  // 2. Check for pincer jaws within maxKm
   let best: { from: number; to: number; d: number } | null = null;
+  const latMargin = (maxKm * 1.5) / KM;
   for (let i = 0; i < nodes.length; i++) {
     const kx = kmPerDegLng(nodes[i].lat);
     for (let j = i + minGap; j < nodes.length - 1; j++) {
-      // quick reject on latitude before the exact point-to-segment test
-      if (Math.min(Math.abs(nodes[j].lat - nodes[i].lat), Math.abs(nodes[j + 1].lat - nodes[i].lat)) * KM > maxKm * 3) continue;
+      const minLat = Math.min(nodes[j].lat, nodes[j + 1].lat) - latMargin;
+      const maxLat = Math.max(nodes[j].lat, nodes[j + 1].lat) + latMargin;
+      if (nodes[i].lat < minLat || nodes[i].lat > maxLat) continue;
+
       const ax = (nodes[j].lng - nodes[i].lng) * kx, ay = (nodes[j].lat - nodes[i].lat) * KM;
       const bx = (nodes[j + 1].lng - nodes[i].lng) * kx, by = (nodes[j + 1].lat - nodes[i].lat) * KM;
       const dx = bx - ax, dy = by - ay;
@@ -256,5 +294,6 @@ export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { 
       if (d <= maxKm && (!best || d < best.d)) best = { from: i + 1, to: t < 0.5 ? j : j + 1, d };
     }
   }
-  return best && best.to - best.from >= 2 ? { from: best.from, to: best.to } : null;
+  return best && best.to - best.from >= 3 ? { from: best.from, to: best.to } : null;
 }
+

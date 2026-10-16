@@ -68,7 +68,7 @@
   {
     "id": "truck",
     "name": "Грузовик",
-    "description": "Транспортный грузовик. Вмещает 5 отделений пехоты (25 человек) и до 3 000 любого ресурса (включая БК). Спавнится пустым.",
+    "description": "Транспортный грузовик для перевозки пехоты. Вмещает 5 отделений пехоты (25 человек). Припасы не перевозит.",
     "kind": "ground",
     "cost": {
       "money": 125
@@ -79,7 +79,28 @@
     "roadSpeedMult": 1.0,
     "cannotCrossFront": true,
     "passengerCap": 5,
-    "cargoCap": 3000,
+    "cargoCap": 0,
+    "range": 0,
+    "damage": 0,
+    "vision": 1.6,
+    "mobility": "wheeled",
+    "symbol": "motorized"
+  },
+  {
+    "id": "logistics_truck",
+    "name": "Логистический грузовик",
+    "description": "Грузовик снабжения промышленных объектов. Перевозит до 500 единиц сырья, стали или боеприпасов между предприятиями.",
+    "kind": "ground",
+    "cost": {
+      "money": 125
+    },
+    "trainTime": 10,
+    "hp": 600,
+    "speed": 0.144,
+    "roadSpeedMult": 1.0,
+    "cannotCrossFront": true,
+    "passengerCap": 0,
+    "cargoCap": 500,
     "range": 0,
     "damage": 0,
     "vision": 1.6,

@@ -1,4 +1,4 @@
-import { type BotDifficulty, type Building, distKm, distToFrontKm, inDeposit, isReconDrone, isStrikeDrone, moveToward, nearestNode, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
+import { type BotDifficulty, type Building, distKm, distToFrontKm, inDeposit, isReconDrone, isStrikeDrone, moveToward, nearestNode, normalAt, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
   'military_base',
@@ -409,28 +409,26 @@ export class Bot {
           const humveeMgCount = count('humvee_mg');
           const truckCount = count('truck');
 
-          // Ensure bot buys vehicles (truck, humvee) and infantry in balanced numbers:
+          // Ensure bot buys trucks, fills them completely (5 infantry), and supports mobile defense:
           // Truck: 125 (capacity 5 squads), Humvee: 150 (capacity 1 squad), Humvee MG: 200 (mobile AA), Infantry: 100
           const troopTrucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul).length;
           const humvees = w.units.filter((u) => u.owner === p.id && u.def === 'humvee').length;
-          const transportCapacity = troopTrucks * 5 + humvees * 1;
+          const passengersInTrucks = w.units
+            .filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul)
+            .reduce((sum, u) => sum + (u.cargo?.passengers?.length ?? 0), 0);
+          const emptyTruckSlots = troopTrucks * 5 - passengersInTrucks;
 
-          if (infCount < 1 && money >= 100) {
-            sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
-          } else if (troopTrucks < 1 && money >= 125) {
+          if (troopTrucks < 1 && money >= 125) {
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
-          } else if (humvees < 1 && money >= 150) {
-            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
-          } else if (infCount < transportCapacity && money >= 100) {
+          } else if (troopTrucks >= 1 && (infCount < emptyTruckSlots) && money >= 100) {
+            // Train infantry until truck is completely filled with 5 squads
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+          } else if (troopTrucks < 2 && money >= 250) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
           } else if (humveeMgCount < 2 && money >= 200) {
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee_mg' });
-          } else if (transportCapacity < infCount + 5 && money >= 125) {
-            if (money >= 150 && humvees < troopTrucks) {
-              sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
-            } else {
-              sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
-            }
+          } else if (humvees < 1 && money >= 150) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee' });
           } else if (money >= 100) {
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
           }
@@ -524,9 +522,27 @@ export class Bot {
     const anchorBase = myMilitaryBases[0]?.pos ?? fallbackBase?.pos ?? hq?.pos ?? sim.map.center;
     const anchor: LngLat = hq?.pos ?? sim.map.center;
 
-    // Disembark any passengers if vehicle arrived at a non-garrison destination
+    // Disembark truck passengers near the frontline and order infantry to march to their positions
     for (const v of w.units) {
-      if (v.owner === p.id && (v.cargo?.passengers?.length ?? 0) > 0 && !v.reinforceTarget && !v.target) {
+      if (v.owner === p.id && v.def === 'truck' && !v.haul) {
+        const passCount = v.cargo?.passengers?.length ?? 0;
+        if (passCount > 0 && v.reinforceTarget) {
+          const tgt = w.units.find((x) => x.id === v.reinforceTarget && x.hp > 0);
+          if (tgt && distKm(v.pos, tgt.pos) <= 3.5) {
+            const passIds = [...(v.cargo?.passengers ?? [])];
+            sim.apply(p.id, { type: 'disembark', transport: v.id });
+            for (const pid of passIds) {
+              sim.apply(p.id, { type: 'reinforce', units: [pid], targetUnit: tgt.id });
+            }
+            v.reinforceTarget = undefined;
+            v.target = null;
+            v.path = [];
+            sim.apply(p.id, { type: 'move', units: [v.id], to: anchorBase });
+          }
+        } else if (passCount > 0 && !v.reinforceTarget && !v.target && distKm(v.pos, anchorBase) > 20) {
+          sim.apply(p.id, { type: 'disembark', transport: v.id });
+        }
+      } else if (v.owner === p.id && (v.cargo?.passengers?.length ?? 0) > 0 && !v.reinforceTarget && !v.target) {
         sim.apply(p.id, { type: 'disembark', transport: v.id });
       }
     }
@@ -739,8 +755,15 @@ export class Bot {
             } else if ((sim.defs.u.get(u.def)?.mobility ?? 'foot') === 'foot') {
               added = u.strength ?? 1;
             }
-            incomingStr.set(target.id, (incomingStr.get(target.id) ?? 0) + added);
-            sim.apply(p.id, { type: 'reinforce', units: [u.id], targetUnit: target.id });
+            if (u.def === 'truck') {
+              const ni = nearestNode(w.front, target.pos);
+              const [nx, ny] = normalAt(w.front, ni);
+              const dropOff = offsetKm(target.pos, (p.team === 0 ? -nx : nx) * 2.0, (p.team === 0 ? -ny : ny) * 2.0);
+              u.reinforceTarget = target.id;
+              sim.apply(p.id, { type: 'move', units: [u.id], to: dropOff });
+            } else {
+              sim.apply(p.id, { type: 'reinforce', units: [u.id], targetUnit: target.id });
+            }
           }
         }
         return;

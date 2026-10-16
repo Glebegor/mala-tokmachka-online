@@ -45,6 +45,10 @@ export interface Building {
   course: { remaining: number; total: number } | null;
   /** Sub-houses in a housing district (each has 50 HP). */
   houses?: CityHouse[];
+  /** Service destination building IDs for logistics deliveries */
+  serviceTargets?: number[];
+  /** Flag to track if the automatic initial logistics truck has been spawned */
+  logisticsSpawned?: boolean;
 }
 
 export interface CityHouse {
@@ -202,6 +206,8 @@ export interface Unit {
   advancePath?: LngLat[];
   /** Custom retreat route drawn by player for this frontline garrison. */
   retreatPath?: LngLat[];
+  /** Building id that this logistics truck services. */
+  serviceBuilding?: number;
 }
 
 /**
@@ -276,6 +282,7 @@ export interface FrontPost {
   retreating?: boolean; // currently retreating backward
   advancePath?: LngLat[]; // custom advance route drawn by player
   retreatPath?: LngLat[]; // custom retreat route drawn by player
+  pushedDir?: [number, number]; // direction vector pushed by advancing enemy
 }
 
 /** Contested ground: a patch behind the front where one side's troops have sat unopposed. */

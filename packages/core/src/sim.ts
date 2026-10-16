@@ -1066,8 +1066,9 @@ export class Sim {
       case 'sprint': {
         const set = new Set(cmd.units);
         for (const u of w.units) {
-          if (!set.has(u.id) || u.owner !== p.id || this.defs.u.get(u.def)!.kind === 'air') continue;
-          if (cmd.active && ((u.stamina ?? 1) <= 0 || (u.fuel ?? 1) <= 0)) continue;
+          const ud = this.defs.u.get(u.def);
+          if (!set.has(u.id) || u.owner !== p.id || !ud || ud.kind === 'air' || (ud.mobility ?? 'foot') !== 'foot') continue;
+          if (cmd.active && (u.stamina ?? 1) <= 0) continue;
           u.sprint = !!cmd.active;
         }
         return ok();
@@ -1342,6 +1343,47 @@ export class Sim {
             u.parkedAt = undefined;
             u.pos = [b.pos[0], b.pos[1]];
             this.orderMove([u], targetB.pos, false, false, false);
+          }
+        }
+        return ok();
+      }
+      case 'buyLogisticsTruck': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.owner === p.id);
+        if (!b) return fail('building not found');
+        if (b.progress < 1) return fail('building under construction');
+        if (b.def !== 'mine' && b.def !== 'steel_mill' && b.def !== 'ammo_factory') {
+          return fail('not a logistics production building');
+        }
+        const cost = { money: 125 };
+        if (!this.canPay(p, cost)) return fail('not enough money for logistics truck');
+        this.payFor(p, cost);
+        this.spawnLogisticsTruck(b);
+        return ok();
+      }
+      case 'setServiceTargets': {
+        const b = w.buildings.find((x) => x.id === cmd.building && x.owner === p.id);
+        if (!b) return fail('building not found');
+        const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
+        const resType = b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo';
+        const valid = cmd.targets.filter((id) => w.buildings.some((x) => x.id === id && x.team === b.team && x.def === allowedDef));
+        b.serviceTargets = valid;
+
+        // Reassign existing logistics trucks servicing this building
+        const trucks = w.units.filter((u) => u.serviceBuilding === b.id && u.hp > 0);
+        if (valid.length > 0) {
+          for (let i = 0; i < trucks.length; i++) {
+            const tgtId = valid[i % valid.length];
+            const tgtB = w.buildings.find((x) => x.id === tgtId);
+            if (tgtB) {
+              this.apply(b.owner, {
+                type: 'setRoute',
+                unit: trucks[i].id,
+                fromBuilding: b.id,
+                toBuilding: tgtB.id,
+                resType,
+                minLoad: 500,
+              });
+            }
           }
         }
         return ok();
@@ -2005,6 +2047,99 @@ export class Sim {
         }
       }
     }
+    if (w.tick % 10 === 0) {
+      this.updateBuildingLogistics();
+    }
+  }
+
+  /** Spawns a dedicated logistics truck at a production building and configures its delivery route. */
+  spawnLogisticsTruck(b: Building, specificTargetId?: number): Unit | null {
+    const w = this.world;
+    const player = w.players.find((p) => p.id === b.owner);
+    if (!player) return null;
+    const truck = this.spawnUnit('logistics_truck', player, [b.pos[0], b.pos[1]]);
+    truck.serviceBuilding = b.id;
+
+    const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
+    const resType = b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo';
+
+    let targetId = specificTargetId;
+    if (!targetId && b.serviceTargets && b.serviceTargets.length > 0) {
+      const valid = b.serviceTargets.map((id) => w.buildings.find((x) => x.id === id && x.team === b.team && x.progress >= 1)).filter((x): x is Building => !!x);
+      if (valid.length > 0) {
+        valid.sort((a, bld) => (a.storage?.[resType] ?? 0) - (bld.storage?.[resType] ?? 0));
+        targetId = valid[0].id;
+      }
+    }
+    if (!targetId) {
+      let bestD = Infinity;
+      let bestB: Building | null = null;
+      for (const cand of w.buildings) {
+        if (cand.team === b.team && cand.progress >= 1 && cand.def === allowedDef && cand.id !== b.id) {
+          const d = distKm(b.pos, cand.pos);
+          if (d < bestD) {
+            bestD = d;
+            bestB = cand;
+          }
+        }
+      }
+      if (bestB) {
+        targetId = bestB.id;
+        b.serviceTargets = [bestB.id];
+      }
+    }
+
+    if (targetId) {
+      const targetB = w.buildings.find((x) => x.id === targetId);
+      if (targetB) {
+        this.apply(b.owner, {
+          type: 'setRoute',
+          unit: truck.id,
+          fromBuilding: b.id,
+          toBuilding: targetB.id,
+          resType,
+          minLoad: 500,
+        });
+      }
+    }
+
+    return truck;
+  }
+
+  /** Checks industrial buildings (mine, steel_mill, ammo_factory) and automatically launches initial logistics trucks. */
+  private updateBuildingLogistics() {
+    const w = this.world;
+    for (const b of w.buildings) {
+      if (b.progress < 1) continue;
+      if (b.def !== 'mine' && b.def !== 'steel_mill' && b.def !== 'ammo_factory') continue;
+      const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
+
+      if (b.serviceTargets) {
+        b.serviceTargets = b.serviceTargets.filter((id) => w.buildings.some((x) => x.id === id && x.team === b.team && x.progress >= 1 && x.def === allowedDef));
+      }
+
+      if (!b.serviceTargets || b.serviceTargets.length === 0) {
+        let bestD = Infinity;
+        let bestB: Building | null = null;
+        for (const cand of w.buildings) {
+          if (cand.team === b.team && cand.progress >= 1 && cand.def === allowedDef && cand.id !== b.id) {
+            const d = distKm(b.pos, cand.pos);
+            if (d < bestD) {
+              bestD = d;
+              bestB = cand;
+            }
+          }
+        }
+        if (bestB) {
+          b.serviceTargets = [bestB.id];
+        }
+      }
+
+      if (!b.logisticsSpawned && b.serviceTargets && b.serviceTargets.length > 0) {
+        b.logisticsSpawned = true;
+        this.spawnLogisticsTruck(b);
+      }
+    }
   }
 
   private training(dt: number) {
@@ -2210,14 +2345,10 @@ export class Sim {
     const shaken = ((target.suppressedUntil ?? 0) > this.world.time ? 1.25 : 1) * (air ? 1 : this.crowdTaken(target));
     const postBonus = target.frontPost !== undefined ? 0.65 : 1;
     const dealt = ((raw * shaken * (1 - cover) * (1 - city) * (1 - (air ? 0 : this.dugIn(target))) * (target.transport ? r.transportDamageMult : 1)) / (air ? 1 : this.holdMult(target.team, target.pos))) * postBonus;
-    if (target.frontPost !== undefined && attacker.frontPost !== undefined) {
-      const attackerPost = this.world.posts?.find((p) => p.id === attacker.frontPost);
-      const targetHasAmmo = (target.ammo ?? 1) > 0;
-      if (!attackerPost?.advancing && targetHasAmmo) {
-        target.hp = Math.max(30, target.hp - dealt);
-      } else {
-        target.hp -= dealt;
-      }
+    const isFrontlineTarget = target.frontPost !== undefined || target.def === 'frontline_infantry' || target.owner.startsWith('__front_');
+    if (isFrontlineTarget) {
+      // Frontline garrisons have conditionally infinite HP: they never die in skirmishes or frontline combat
+      target.hp = Math.max(500, target.hp - dealt);
     } else {
       target.hp -= dealt;
     }
@@ -2909,7 +3040,7 @@ export class Sim {
                 const eg: Unit = enemyGarrison;
                 this.shots.push({ def: u.def, team: u.team, from: u.pos, to: eg.pos });
                 const dmg = 5 + Math.floor(Math.random() * 15);
-                eg.hp = Math.max(100, eg.hp - dmg);
+                eg.hp = Math.max(500, eg.hp - dmg);
                 eg.lastHit = this.world.time;
                 u.skirmishCount = (u.skirmishCount ?? 0) + 1;
                 if (u.skirmishCount >= 6) {
@@ -3447,8 +3578,9 @@ export class Sim {
       const [nx, ny] = normalAt(w.front, ni);
       const kx = kmPerDegLng(w.front[ni].lat);
 
+      const inPocket = w.pockets.some((k) => pointInRing(k.nodes, p.pos));
       const advancePath = p.advancePath ?? p.garrison.map((id) => this.unitById.get(id)?.advancePath).find((ap) => ap && ap.length > 0);
-      if (hasAmmo && (hasSuperiority || (advancePath && advancePath.length > 0))) {
+      if (hasAmmo && hasSuperiority) {
         p.advancing = true;
         p.retreating = false;
 
@@ -3494,6 +3626,8 @@ export class Sim {
               const u = this.unitById.get(id);
               if (u) u.frontStatus = 'retreating';
             }
+            // Opponent must retreat in the same direction as the advancing force's attack vector
+            oppPost.pushedDir = [dir[0], dir[1]];
           }
           // The front line follows behind the advancing garrison, lagging at most 1 km
           const frontDist = distKm(p.pos, [w.front[ni].lng, w.front[ni].lat]);
@@ -3511,7 +3645,7 @@ export class Sim {
             newFrontLng += ((toPostX / dLen) * excess) / kx;
             newFrontLat += ((toPostY / dLen) * excess) / 111.32;
           }
-          if (!this.terrain?.isBarrier([newFrontLng, newFrontLat])) {
+          if (!inPocket && !this.terrain?.isBarrier([newFrontLng, newFrontLat])) {
             w.front[ni].lng = newFrontLng;
             w.front[ni].lat = newFrontLat;
             w.front[ni].v = p.team === 0 ? 0.024 : -0.024;
@@ -3534,26 +3668,32 @@ export class Sim {
         p.retreating = true;
 
         let dir: [number, number];
-        const retreatPath = p.retreatPath ?? p.garrison.map((id) => this.unitById.get(id)?.retreatPath).find((rp) => rp && rp.length > 0);
-        if (retreatPath && retreatPath.length > 0) {
-          const targetPt = retreatPath[0];
-          if (distKm(p.pos, targetPt) < 0.6) {
-            if (p.retreatPath) p.retreatPath.shift();
-            for (const id of p.garrison) {
-              const u = this.unitById.get(id);
-              if (u?.retreatPath && u.retreatPath !== p.retreatPath) u.retreatPath.shift();
+        if (p.pushedDir) {
+          // Defender pushed back in the direction of the enemy attack
+          dir = [p.pushedDir[0], p.pushedDir[1]];
+          p.pushedDir = undefined;
+        } else {
+          const retreatPath = p.retreatPath ?? p.garrison.map((id) => this.unitById.get(id)?.retreatPath).find((rp) => rp && rp.length > 0);
+          if (retreatPath && retreatPath.length > 0) {
+            const targetPt = retreatPath[0];
+            if (distKm(p.pos, targetPt) < 0.6) {
+              if (p.retreatPath) p.retreatPath.shift();
+              for (const id of p.garrison) {
+                const u = this.unitById.get(id);
+                if (u?.retreatPath && u.retreatPath !== p.retreatPath) u.retreatPath.shift();
+              }
             }
           }
-        }
-        if (retreatPath && retreatPath.length > 0) {
-          const targetPt = retreatPath[0];
-          const dx = (targetPt[0] - p.pos[0]) * kx;
-          const dy = (targetPt[1] - p.pos[1]) * 111.32;
-          const len = Math.hypot(dx, dy) || 1;
-          dir = [dx / len, dy / len];
-        } else {
-          // Retreat backward into friendly territory
-          dir = p.team === 0 ? [-nx, -ny] : [nx, ny];
+          if (retreatPath && retreatPath.length > 0) {
+            const targetPt = retreatPath[0];
+            const dx = (targetPt[0] - p.pos[0]) * kx;
+            const dy = (targetPt[1] - p.pos[1]) * 111.32;
+            const len = Math.hypot(dx, dy) || 1;
+            dir = [dx / len, dy / len];
+          } else {
+            // Retreat backward into friendly territory
+            dir = p.team === 0 ? [-nx, -ny] : [nx, ny];
+          }
         }
 
         // Calibrated garrison retreat speed
@@ -3586,7 +3726,7 @@ export class Sim {
             newFrontLng += ((toPostX / dLen) * excess) / kx;
             newFrontLat += ((toPostY / dLen) * excess) / 111.32;
           }
-          if (!this.terrain?.isBarrier([newFrontLng, newFrontLat])) {
+          if (!inPocket && !this.terrain?.isBarrier([newFrontLng, newFrontLat])) {
             w.front[ni].lng = newFrontLng;
             w.front[ni].lat = newFrontLat;
             w.front[ni].v = p.team === 0 ? -0.06 : 0.06;
@@ -3982,7 +4122,7 @@ export class Sim {
       // Follow advancePath / retreatPath waypoint-by-waypoint, or advance along normal with line
       if (!closed) {
         for (const u of w.units) {
-          if (u.hp <= 0 || u.embarkedIn) continue;
+          if (u.hp <= 0 || u.embarkedIn || u.encircled || w.pockets.some((k) => pointInRing(k.nodes, u.pos))) continue;
           if (u.def !== 'frontline_infantry' && !u.owner.startsWith('__front_')) continue;
           const i = nearestNode(n, u.pos);
           if (i <= 0 || i >= len - 1) continue;
@@ -4196,17 +4336,27 @@ export class Sim {
   private pinch() {
     const w = this.world;
     const r = this.ruleset.rules;
-    const hit = findPinch(w.front, r.pinchKm, 5);
+    const hit = findPinch(w.front, r.pinchKm, 16);
     if (!hit) return;
     const loop = w.front.slice(hit.from, hit.to + 1);
-    w.front = [...w.front.slice(0, hit.from), ...w.front.slice(hit.to + 1)];
     const area = ringAreaKm2(loop);
-    // too small to matter: the kink is simply straightened out
-    if (Math.abs(area) < r.pocketMinAreaKm2 * 1.5 || loop.length < 4 || w.pockets.length >= 8) return;
+    // too small to matter: do not cut the front line
+    if (Math.abs(area) < r.pocketMinAreaKm2 || loop.length < 8 || w.pockets.length >= 8) return;
+    w.front = [...w.front.slice(0, hit.from), ...w.front.slice(hit.to + 1)];
     // the loop keeps the line's direction, so team 0 is still on its left: counter-clockwise means team 0 is inside
     const team: Team = area > 0 ? 0 : 1;
-    const pocket: Pocket = { id: w.nextId++, team, nodes: loop.map((n) => ({ ...n, v: 0 })) };
+    const closedNodes = loop.map((n) => ({ ...n, v: 0 }));
+    if (closedNodes.length > 2 && distKm([closedNodes[0].lng, closedNodes[0].lat], [closedNodes[closedNodes.length - 1].lng, closedNodes[closedNodes.length - 1].lat]) > 0.05) {
+      closedNodes.push({ ...closedNodes[0] });
+    }
+    const pocket: Pocket = { id: w.nextId++, team, nodes: closedNodes };
     w.pockets.push(pocket);
+    // Immediately mark trapped units inside the cauldron as encircled
+    for (const u of w.units) {
+      if (pointInRing(pocket.nodes, u.pos)) {
+        u.encircled = true;
+      }
+    }
     const trapped = w.units.filter((u) => u.team === team && pointInRing(pocket.nodes, u.pos)).length;
     this.hooks.emit('cauldronFormed', { id: pocket.id, team, units: trapped, areaKm2: Math.round(Math.abs(area)) });
   }

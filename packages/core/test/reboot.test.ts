@@ -669,7 +669,7 @@ const truckDef = rs.units.find((u) => u.id === 'truck')!;
 assert.ok(truckDef, 'Truck defined in units.json');
 assert.equal(truckDef.cost.money, 125, 'Truck cost is 125');
 assert.equal(truckDef.passengerCap, 5, 'Truck carries 5 squads (25 people)');
-assert.equal(truckDef.cargoCap, 3000, 'Truck carries up to 3000 resources');
+assert.equal(truckDef.cargoCap ?? 0, 0, 'Truck carries 0 resources (troops only)');
 
 // Test vehicle spawning & no idle ammo drain
 const spawnedHumvee = sim.spawnUnit('humvee', sim.player('player1')!, friendlyPos);
@@ -684,8 +684,12 @@ assert.equal(humveeMgDef.airVision, 8.0, 'Humvee MG has 8 km air vision');
 
 const spawnedTruck = sim.spawnUnit('truck', sim.player('player1')!, friendlyPos);
 assert.equal(spawnedTruck.ammo ?? 0, 0, 'Truck spawns empty without ammo');
-assert.equal(Object.keys(spawnedTruck.cargo?.res ?? {}).length, 0, 'Truck spawns with empty cargo');
-console.log('✓ Vehicles: Humvee (150c, 1 squad cap, 0 spawn ammo), Humvee MG (200c, 1000 ammo, airDamage 1.2, airVision 8km), Truck (125c, 5 squads cap, 3000 cargo cap, spawns empty) verified');
+assert.equal(spawnedTruck.cargo?.cap ?? 0, 0, 'Truck carries 0 cargo (troops only)');
+assert.equal(rs.units.find((u) => u.id === 'truck')?.passengerCap, 5, 'Truck holds 5 squads');
+const logTruckDef = rs.units.find((u) => u.id === 'logistics_truck')!;
+assert.ok(logTruckDef, 'logistics_truck defined in units.json');
+assert.equal(logTruckDef.cargoCap, 500, 'logistics_truck has 500 cargo cap');
+console.log('✓ Vehicles: Humvee (150c, 1 squad cap, 0 spawn ammo), Humvee MG (200c, 1000 ammo, airDamage 1.2, airVision 8km), Truck (125c, 5 squads cap, 0 cargo cap, troops only), Logistics Truck (500 cargo cap) verified');
 
 // 21. Bot AI Frontline Reinforcement near Military Base
 const botUABase = sim.world.buildings.find((b) => b.owner === 'botUA' && b.def === 'military_base')!;
@@ -1037,8 +1041,45 @@ for (let s = 0; s < 5; s++) sim.step(1.0);
 const afterNi = nearestNode(sim.world.front, gHold.pos);
 const afterFrontDist = distKm(gHold.pos, [sim.world.front[afterNi].lng, sim.world.front[afterNi].lat]);
 assert.ok(afterFrontDist < initialFrontDist, 'Frontline rapidly shifted forward towards/ahead of holding assault unit at 4x speed');
-console.log('✓ Frontline 4x Catch-up: front moves forward in front of holding assault garrison verified');
+// 43. Vehicle Sprint Restriction: Infantry can sprint, vehicles cannot sprint
+const testInfantry = sim.spawnUnit('infantry', sim.player('player1')!, friendlyPos);
+const testHumvee = sim.spawnUnit('humvee', sim.player('player1')!, friendlyPos);
+sim.apply('player1', { type: 'sprint', units: [testInfantry.id, testHumvee.id], active: true });
+assert.equal(testInfantry.sprint, true, 'Infantry can sprint');
+assert.equal(testHumvee.sprint, false, 'Vehicles cannot sprint');
+console.log('✓ Sprint Restriction: Infantry can sprint, vehicles cannot sprint verified');
+
+// 44. Frontline Garrison Infinite HP (min 500 HP, cannot die from combat/skirmishes)
+const testTargetGarrison = activeGarrisons[6]!;
+testTargetGarrison.hp = 600;
+(sim as any).hitUnit(testInfantry, testTargetGarrison, 5000);
+assert.ok(testTargetGarrison.hp >= 500, `Frontline garrison HP clamped to >= 500 (actual=${testTargetGarrison.hp})`);
+console.log('✓ Frontline Garrison Infinite HP: Minimum 500 HP preserved, units do not die in combat verified');
+
+// 45. Industrial Building Logistics: Automatic Logistics Truck & Management
+const testLogMine = (sim as any).spawnBuilding('mine', sim.player('player1')!, friendlyPos, true);
+testLogMine.progress = 1.0;
+const testLogSteelMill = (sim as any).spawnBuilding('steel_mill', sim.player('player1')!, offsetKm(friendlyPos, 15, 0), true);
+testLogSteelMill.progress = 1.0;
+(sim as any).updateBuildingLogistics();
+assert.ok(testLogMine.logisticsSpawned, 'Mine automatically spawned logistics truck upon steel mill availability');
+const spawnedLogTruck = sim.world.units.find((u) => u.serviceBuilding === testLogMine.id && u.def === 'logistics_truck');
+assert.ok(spawnedLogTruck, 'Logistics truck spawned and servicing mine');
+assert.equal(spawnedLogTruck.cargo?.cap, 500, 'Logistics truck carries 500 resources');
+assert.ok(spawnedLogTruck.haul, 'Logistics truck assigned haul route to steel mill');
+
+// Test buying additional logistics truck and setting service targets
+const initialMoney = sim.player('player1')!.res.money ?? 0;
+const buyRes = sim.apply('player1', { type: 'buyLogisticsTruck', building: testLogMine.id });
+assert.ok(buyRes.ok, 'Buying additional logistics truck succeeded');
+assert.equal(sim.world.units.filter((u) => u.serviceBuilding === testLogMine.id).length, 2, '2 trucks now servicing mine');
+
+const setTargetsRes = sim.apply('player1', { type: 'setServiceTargets', building: testLogMine.id, targets: [testLogSteelMill.id] });
+assert.ok(setTargetsRes.ok, 'Setting service targets succeeded');
+assert.deepEqual(testLogMine.serviceTargets, [testLogSteelMill.id], 'Mine service targets updated');
+console.log('✓ Industrial Building Logistics: 500-resource auto trucks, buyLogisticsTruck, setServiceTargets verified');
 
 console.log('All reboot tests passed successfully!');
+
 
 

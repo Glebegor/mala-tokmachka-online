@@ -167,11 +167,12 @@ export function renderUnitHud(el: HTMLElement, c: HudContext) {
     fm('return', 'Return fire', 'Only shoot back once hit'),
     fm('hold', 'Hold fire', 'Never shoot (stay hidden)')));
 
-  // 4. sprint and stamina (ground only)
-  if (ground.length) {
-    const on = ground.some((u) => u.sprint);
-    el.append(h('button', { class: 'hud-btn' + (on ? ' active' : ''), title: 'Double speed: infantry tire (60 s of running, 3 min to recover), vehicles burn 50% more fuel', onClick: () => c.send({ type: 'sprint', units: ids, active: !on }) }, `Sprint ${on ? 'ON' : 'OFF'}`));
-    const tired = ground.filter((u) => u.stamina !== undefined);
+  // 4. sprint and stamina (foot infantry only, vehicles cannot sprint)
+  const footUnits = ground.filter((u) => (c.defU.get(u.def)?.mobility ?? 'foot') === 'foot' && c.defU.get(u.def)?.kind !== 'air');
+  if (footUnits.length) {
+    const on = footUnits.some((u) => u.sprint);
+    el.append(h('button', { class: 'hud-btn' + (on ? ' active' : ''), title: 'Double speed: infantry tire (60 s of running, 3 min to recover)', onClick: () => c.send({ type: 'sprint', units: footUnits.map((u) => u.id), active: !on }) }, `Sprint ${on ? 'ON' : 'OFF'}`));
+    const tired = footUnits.filter((u) => u.stamina !== undefined);
     if (tired.length) el.append(meter('Stamina', tired.reduce((a, u) => a + (u.stamina ?? 100), 0) / tired.length, 'stamina'));
   }
 
