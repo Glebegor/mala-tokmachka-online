@@ -22,14 +22,14 @@
   {
     "id": "humvee",
     "name": "Хамви",
-    "description": "Бронированный внедорожник. Вмещает 1 отделение пехоты (5 человек) и 500 боеприпасов (БК).",
+    "description": "Бронированный внедорожник. Вмещает 1 отделение пехоты (5 человек) и 500 боеприпасов (БК). Спавнится без БК.",
     "kind": "ground",
     "cost": {
       "money": 150
     },
     "trainTime": 10,
     "hp": 800,
-    "speed": 0.08,
+    "speed": 0.096,
     "roadSpeedMult": 1.25,
     "cannotCrossFront": true,
     "passengerCap": 1,
@@ -44,23 +44,26 @@
   {
     "id": "humvee_mg",
     "name": "Хамви с пулемётом",
-    "description": "Боевой внедорожник с крупнокалиберным пулемётом. Боезапас: 1000 БК.",
+    "description": "Мобильная ПВО на базе бронеавтомобиля с крупнокалиберным пулемётом. Обзор по воздуху: 8 км. Боезапас: 1000 БК.",
     "kind": "ground",
     "cost": {
       "money": 200
     },
     "trainTime": 12,
     "hp": 900,
-    "speed": 0.0611,
+    "speed": 0.0733,
     "roadSpeedMult": 1.25,
     "cannotCrossFront": true,
     "maxAmmo": 1000,
     "ammoPerShot": 1,
     "range": 2.0,
     "damage": 40,
+    "airDamage": 1.2,
+    "targets": "air",
     "vision": 1.8,
+    "airVision": 8.0,
     "mobility": "wheeled",
-    "symbol": "motorized"
+    "symbol": "antiair"
   },
   {
     "id": "truck",
@@ -72,7 +75,7 @@
     },
     "trainTime": 10,
     "hp": 600,
-    "speed": 0.06,
+    "speed": 0.072,
     "roadSpeedMult": 1.25,
     "cannotCrossFront": true,
     "passengerCap": 5,
@@ -100,6 +103,22 @@
     "vision": 1.6,
     "mobility": "foot",
     "symbol": "infantry"
+  },
+  {
+    "id": "drone",
+    "name": "БПЛА",
+    "description": "Беспилотный летательный аппарат.",
+    "kind": "air",
+    "cost": {
+      "money": 100
+    },
+    "trainTime": 5,
+    "hp": 50,
+    "speed": 0.1,
+    "range": 0,
+    "damage": 0,
+    "vision": 5,
+    "symbol": "drone"
   }
 ]
 

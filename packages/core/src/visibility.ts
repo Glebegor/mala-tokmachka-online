@@ -14,33 +14,51 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
   const w = sim.world;
   const fog = sim.ruleset.rules.fogOfWar;
   const watchers: { pos: LngLat; r: number }[] = [];
+  const airWatchers: { pos: LngLat; r: number }[] = [];
   if (fog) {
     for (const b of w.buildings) {
-      if (b.team === team && b.progress >= 1) watchers.push({ pos: b.pos, r: sim.defs.b.get(b.def)!.vision ?? 6 });
+      if (b.team === team && b.progress >= 1) {
+        const r = sim.defs.b.get(b.def)!.vision ?? 6;
+        watchers.push({ pos: b.pos, r });
+        airWatchers.push({ pos: b.pos, r });
+      }
     }
     for (const u of w.units) {
       if (u.team !== team || u.embarkedIn) continue;
       const d = sim.defs.u.get(u.def)!;
-      watchers.push({ pos: u.pos, r: d.vision * (d.kind === 'air' ? 1 : sim.terrainAt(u.pos).vision ?? 1) });
+      const terrVis = d.kind === 'air' ? 1 : sim.terrainAt(u.pos).vision ?? 1;
+      watchers.push({ pos: u.pos, r: d.vision * terrVis });
+      airWatchers.push({ pos: u.pos, r: (d.airVision ?? d.vision) * terrVis });
     }
   }
   // watchers bucketed by ~0.25° cells (each in every cell its sight touches): an object only checks the watchers of its cell
   const CELL = 0.25;
   const grid = new Map<number, { pos: LngLat; r: number }[]>();
+  const airGrid = new Map<number, { pos: LngLat; r: number }[]>();
   const key = (x: number, y: number) => x * 100000 + y;
-  for (const s of watchers) {
-    const ry = Math.ceil(s.r / 111 / CELL), rx = Math.ceil(s.r / (111 * Math.cos((s.pos[1] * Math.PI) / 180)) / CELL);
-    const cx = Math.floor(s.pos[0] / CELL), cy = Math.floor(s.pos[1] / CELL);
-    for (let x = cx - rx; x <= cx + rx; x++) for (let y = cy - ry; y <= cy + ry; y++) {
-      const k = key(x, y);
-      const l = grid.get(k);
-      l ? l.push(s) : grid.set(k, [s]);
+  const populateGrid = (targetGrid: Map<number, { pos: LngLat; r: number }[]>, list: { pos: LngLat; r: number }[]) => {
+    for (const s of list) {
+      const ry = Math.ceil(s.r / 111 / CELL), rx = Math.ceil(s.r / (111 * Math.cos((s.pos[1] * Math.PI) / 180)) / CELL);
+      const cx = Math.floor(s.pos[0] / CELL), cy = Math.floor(s.pos[1] / CELL);
+      for (let x = cx - rx; x <= cx + rx; x++) for (let y = cy - ry; y <= cy + ry; y++) {
+        const k = key(x, y);
+        const l = targetGrid.get(k);
+        l ? l.push(s) : targetGrid.set(k, [s]);
+      }
     }
-  }
+  };
+  populateGrid(grid, watchers);
+  populateGrid(airGrid, airWatchers);
+
   const seen = (p: LngLat, conceal = 1) => {
     if (!fog) return true;
     const l = grid.get(key(Math.floor(p[0] / CELL), Math.floor(p[1] / CELL)));
     return !!l && l.some((s) => distKm(s.pos, p) <= s.r * conceal);
+  };
+  const seenAir = (p: LngLat) => {
+    if (!fog) return true;
+    const l = airGrid.get(key(Math.floor(p[0] / CELL), Math.floor(p[1] / CELL)));
+    return !!l && l.some((s) => distKm(s.pos, p) <= s.r);
   };
   const me = w.players.find((p) => p.id === playerId);
 
@@ -71,7 +89,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
         if (u.parkedAt !== undefined && u.team !== team) return false; // grounded at a launcher
         if (u.team === team) return true;
         const d = sim.defs.u.get(u.def)!;
-        if (d.kind === 'air') return seen(u.pos);
+        if (d.kind === 'air') return seenAir(u.pos);
         // vehicles are louder than men on foot; terrain hides both
         const stealth = d.stealth ?? ((d.mobility ?? 'foot') === 'foot' ? 1 : 1.35);
         return seen(u.pos, sim.terrainAt(u.pos).concealment * stealth);

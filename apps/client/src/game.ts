@@ -2179,7 +2179,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
 
           side.append(
             h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, 'Пехотный рубеж'), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
-            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${Math.round(u.ammo ?? 100)}`),
+            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${Math.round(u.ammo ?? 100)} / ${(u.strength ?? 1) * 100}`),
             h('div', { class: 'stat', style: { color: statusColor, marginTop: '4px' } }, statusText),
             h('div', { class: 'stat', style: { fontSize: '11px', color: '#94a3b8', marginTop: '6px' } }, `${advInfo} · ${retInfo}`),
             h('div', { style: { display: 'flex', gap: '4px', marginTop: '6px' } }, advBtn, retBtn, clearBtn),

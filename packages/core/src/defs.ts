@@ -148,6 +148,8 @@ export interface UnitDef {
   range: number; // km
   damage: number; // dps
   vision: number; // km
+  /** Air target vision radius (km), e.g. for mobile anti-air. If omitted, uses vision. */
+  airVision?: number;
 }
 
 export interface TerrainDef {
