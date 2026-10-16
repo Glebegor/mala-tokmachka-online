@@ -4,7 +4,7 @@
     "icon": "coin",
     "name": "Money",
     "color": "#e8c35a",
-    "start": 10000,
+    "start": 15000,
     "cap": 99999
   },
   {

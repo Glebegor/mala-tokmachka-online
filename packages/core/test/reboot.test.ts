@@ -24,17 +24,17 @@ assert.ok(sim.world.units.every((u) => !(u.pos[0] < 35.35 && u.pos[1] < 47.7)), 
 assert.ok(sim.world.units.every((u) => (u.strength ?? 1) === 1 && (u.morale ?? 100) === 100 && (u.ammo ?? 100) === 100), 'all frontline squads have strength=1, morale=100, ammo=100');
 console.log(`✓ Frontline garrisons: ${sim.world.units.length} squads deployed along overland front line (Dnipro excluded, strength/morale/ammo verified)`);
 
-// 2. Resources: Money (10k start), Ore (cap 5000), Steel (cap 5000), Ammo (cap 50000)
+// 2. Resources: Money (15k start), Ore (cap 5000), Steel (cap 5000), Ammo (cap 50000)
 assert.equal(rs.resources.length, 4, '4 resources defined: money, ore, steel, ammo');
 const moneyRes = rs.resources.find((r) => r.id === 'money')!;
-assert.equal(moneyRes.start, 10000, 'starting money is 10k');
+assert.equal(moneyRes.start, 15000, 'starting money is 15k');
 const oreRes = rs.resources.find((r) => r.id === 'ore')!;
 assert.equal(oreRes.cap, 5000, 'ore cap is 5000');
 const steelResInit = rs.resources.find((r) => r.id === 'steel')!;
 assert.equal(steelResInit.cap, 5000, 'steel cap is 5000');
 const ammoResInit = rs.resources.find((r) => r.id === 'ammo')!;
 assert.equal(ammoResInit.cap, 50000, 'ammo cap is 50000');
-console.log('✓ Resources: Money (10k start), Ore (cap 5k), Steel (cap 5k), and Ammo (cap 50k) verified');
+console.log('✓ Resources: Money (15k start), Ore (cap 5k), Steel (cap 5k), and Ammo (cap 50k) verified');
 
 // 3. Buildings: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing, Steel Mill, Ammo Factory
 assert.equal(rs.buildings.length, 9, '9 building definitions exist');
@@ -791,20 +791,20 @@ if (skirmishGarrison.skirmishCount >= 6) {
 assert.equal(skirmishGarrison.ammo, 99, 'On 6th skirmish shot, ammo decrements by 1 (6x slower rate verified)');
 console.log('✓ Garrison Ammo: consumption rate 6x slower verified');
 
-// 25. Unit Vision Nerf & Vehicle Speed (+20%)
+// 25. Unit Vision (+30% Infantry) & Vehicle Speed (+20%)
 const infUnitDef = rs.units.find((u) => u.id === 'infantry')!;
-assert.equal(infUnitDef.vision, 1.6, 'Infantry vision reduced to 1.6 km (was 4)');
+assert.equal(infUnitDef.vision, 2.08, 'Infantry vision increased by 30% to 2.08 km (was 1.6)');
 const humveeUnitDef = rs.units.find((u) => u.id === 'humvee')!;
-assert.equal(humveeUnitDef.vision, 1.8, 'Humvee vision reduced to 1.8 km (was 4.5)');
+assert.equal(humveeUnitDef.vision, 1.8, 'Humvee vision is 1.8 km (was 4.5)');
 assert.equal(humveeUnitDef.speed, 0.096, 'Humvee speed increased to 0.096 km/s (345.6 km/h)');
 const humveeMgUnitDef = rs.units.find((u) => u.id === 'humvee_mg')!;
 assert.equal(humveeMgUnitDef.speed, 0.0733, 'Humvee MG speed increased to 0.0733 km/s (263.9 km/h)');
 const truckUnitDef = rs.units.find((u) => u.id === 'truck')!;
-assert.equal(truckUnitDef.vision, 1.6, 'Truck vision reduced to 1.6 km (was 4)');
+assert.equal(truckUnitDef.vision, 1.6, 'Truck vision is 1.6 km (was 4)');
 assert.equal(truckUnitDef.speed, 0.072, 'Truck speed increased to 0.072 km/s (259.2 km/h)');
 const frontInfDef = rs.units.find((u) => u.id === 'frontline_infantry')!;
-assert.equal(frontInfDef.vision, 1.6, 'Frontline infantry vision reduced to 1.6 km');
-console.log('✓ Vision & Speed (+20%): Infantry (vision 1.6), Humvee (vision 1.8, speed 345.6 km/h), Humvee MG (speed 263.9 km/h), Truck (vision 1.6, speed 259.2 km/h) verified');
+assert.equal(frontInfDef.vision, 2.08, 'Frontline infantry vision increased by 30% to 2.08 km');
+console.log('✓ Vision & Speed: Infantry (vision 2.08), Humvee (vision 1.8, speed 345.6 km/h), Humvee MG (speed 263.9 km/h), Truck (vision 1.6, speed 259.2 km/h) verified');
 
 // 26. Front Line Node Density (1.5 km) & Static Stability (no unwanted smoothing drift)
 assert.equal(rs.rules.frontNodeSpacingKm, 1.5, 'Front node spacing is 1.5 km (dense nodes preventing sharp kinks)');
