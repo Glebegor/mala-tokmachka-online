@@ -112,6 +112,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           strength: u.strength ?? 1,
           squadSize: u.squadSize,
           frontStatus: u.frontStatus,
+          advancePath: u.team === team && u.advancePath ? u.advancePath.map(p4) : undefined,
+          retreatPath: u.team === team && u.retreatPath ? u.retreatPath.map(p4) : undefined,
         };
       }),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),

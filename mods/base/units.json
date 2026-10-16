@@ -97,7 +97,7 @@
     "squadSize": 100,
     "range": 1.5,
     "damage": 50,
-    "vision": 8,
+    "vision": 1.6,
     "mobility": "foot",
     "symbol": "infantry"
   }

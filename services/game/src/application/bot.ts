@@ -218,7 +218,7 @@ function findBotDepositPos(sim: Sim, team: Team, type: 'iron' | 'oil'): LngLat |
       if (sim.side(spot) !== team) continue;
       const distFromFront = Math.abs(distToFrontKm(sim.world.front, spot));
       if (distFromFront < sim.ruleset.rules.minBuildDistanceFromFront * (bDef.category === 'civil' ? 2 : 1)) continue;
-      const clash = sim.world.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, spot) < sim.spacingBetween(bDef, x.def, false));
+      const clash = sim.world.buildings.find((x) => x.def !== 'housing' && distKm(x.pos, spot) < Math.max(1.0, sim.spacingBetween(bDef, x.def, false)));
       if (!clash) return spot;
     }
   }

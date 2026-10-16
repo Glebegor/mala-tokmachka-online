@@ -198,6 +198,10 @@ export interface Unit {
   reinforceTarget?: number;
   /** Frontline status: holding, advancing, or retreating. */
   frontStatus?: 'holding' | 'advancing' | 'retreating';
+  /** Custom advance route drawn by player for this frontline garrison. */
+  advancePath?: LngLat[];
+  /** Custom retreat route drawn by player for this frontline garrison. */
+  retreatPath?: LngLat[];
 }
 
 /**
@@ -269,6 +273,9 @@ export interface FrontPost {
   garrison: number[]; // IDs of units holding this post
   cap: number; // max units
   advancing?: boolean; // currently pushing forward
+  retreating?: boolean; // currently retreating backward
+  advancePath?: LngLat[]; // custom advance route drawn by player
+  retreatPath?: LngLat[]; // custom retreat route drawn by player
 }
 
 /** Contested ground: a patch behind the front where one side's troops have sat unopposed. */

@@ -57,6 +57,8 @@ export type Command =
   /** Dispatch drones waiting at a factory to fly to the nearest launch site / airfield. */
   | { type: 'dispatchDrones'; building: number; targetLauncher?: number }
   /** Send units to reinforce and merge into a friendly frontline garrison squad. */
-  | { type: 'reinforce'; units: number[]; targetUnit: number };
+  | { type: 'reinforce'; units: number[]; targetUnit: number }
+  /** Set advance and/or retreat planning paths for a frontline garrison post. */
+  | { type: 'setGarrisonPlan'; unitId: number; advancePath?: LngLat[]; retreatPath?: LngLat[] };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

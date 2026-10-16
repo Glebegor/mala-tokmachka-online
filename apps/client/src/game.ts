@@ -76,6 +76,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let fog: FogOverlay | null = null;
   /** Click modes for delivery routes and artillery barrages. */
   const pick: Pickers = { route: null, bombard: null, launch: null, fuel: null, launchFrom: null, rally: null };
+  let garrisonPlan: { unitId: number; mode: 'advance' | 'retreat' } | null = null;
   let stored: UnitView[] = [];
   /** Attack-move or plain move, and the formation for group moves (set in the command panel, A / F). */
   const orders: OrderStyle = { attack: false, formation: 'spread' };
@@ -864,6 +865,29 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (performance.now() - suppressClick < 250) return; // the click that ends a box selection
       if (marking) return sendMark(marking, p);
       if (e.originalEvent.altKey && !placing) return sendMark('look', p); // quick ping
+      if (garrisonPlan) {
+        const targetUnit = snap?.units.find((x) => x.id === garrisonPlan!.unitId);
+        if (!targetUnit) {
+          garrisonPlan = null;
+          return render();
+        }
+        if (garrisonPlan.mode === 'advance') {
+          const curPath = [...(targetUnit.advancePath ?? [])];
+          if (curPath.length >= 10) return toast('Максимум 10 точек маршрута', true);
+          curPath.push(p);
+          targetUnit.advancePath = curPath;
+          send({ type: 'setGarrisonPlan', unitId: targetUnit.id, advancePath: curPath, retreatPath: targetUnit.retreatPath });
+          toast(`Точка наступления #${curPath.length} добавлена`);
+        } else {
+          const curPath = [...(targetUnit.retreatPath ?? [])];
+          if (curPath.length >= 10) return toast('Максимум 10 точек маршрута', true);
+          curPath.push(p);
+          targetUnit.retreatPath = curPath;
+          send({ type: 'setGarrisonPlan', unitId: targetUnit.id, advancePath: targetUnit.advancePath, retreatPath: curPath });
+          toast(`Точка отступления #${curPath.length} добавлена`);
+        }
+        return render();
+      }
       if (pick.bombard) {
         send({ type: 'bombard', units: pick.bombard.unitIds, target: p });
         toast('Barrage area set');
@@ -918,6 +942,11 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       selectAt(e.point, e.originalEvent.shiftKey);
     });
     map.on('contextmenu', (e) => {
+      if (garrisonPlan) {
+        garrisonPlan = null;
+        toast('Планирование завершено');
+        return render();
+      }
       if (pick.bombard) {
         send({ type: 'bombard', units: pick.bombard.unitIds, target: [e.lngLat.lng, e.lngLat.lat] });
         pick.bombard = null;
@@ -932,7 +961,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     });
     // right press, drag the way the front should face, release: the group forms up there facing that way
     mapEl.addEventListener('mousedown', (e) => {
-      if (e.button !== 2 || !selUnits.size || (e.target as Element).closest?.('.maplibregl-marker') || placing || marking || pick.bombard || pick.route || pick.launch || pick.fuel || pick.launchFrom || pick.rally) return;
+      if (e.button !== 2 || !selUnits.size || (e.target as Element).closest?.('.maplibregl-marker') || placing || marking || pick.bombard || pick.route || pick.launch || pick.fuel || pick.launchFrom || pick.rally || garrisonPlan) return;
       const r = mapEl.getBoundingClientRect();
       const ll = map.unproject([e.clientX - r.left, e.clientY - r.top]);
       faceDrag = { to: [ll.lng, ll.lat], x: e.clientX, y: e.clientY };
@@ -1136,6 +1165,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (e.key.toLowerCase() === 'p' && !e.ctrlKey && !e.metaKey) return toggleMarkMenu();
     if (e.key.toLowerCase() === 'h' && !e.ctrlKey && !e.metaKey) return showGuide();
     if (e.key === 'Escape') {
+      if (garrisonPlan) {
+        garrisonPlan = null;
+        return render();
+      }
       if (pick.route || pick.bombard || pick.launch || pick.fuel || pick.launchFrom || pick.rally) return void ((pick.route = pick.bombard = pick.launch = pick.fuel = pick.launchFrom = pick.rally = null), render());
       return cancelPlacing();
     }
@@ -2078,12 +2111,85 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             : '🛡️ Гарнизон фронта (удерживает рубеж)';
           const statusColor = u.frontStatus === 'advancing' ? '#4ade80' : u.frontStatus === 'retreating' ? '#f87171' : '#8ec5fc';
 
+          const isAdvActive = garrisonPlan?.unitId === u.id && garrisonPlan.mode === 'advance';
+          const isRetActive = garrisonPlan?.unitId === u.id && garrisonPlan.mode === 'retreat';
+
+          const advBtn = h(
+            'button',
+            {
+              class: isAdvActive ? 'primary' : 'ghost',
+              style: { flex: '1', fontSize: '11px', padding: '4px 6px', borderColor: isAdvActive ? '#22c55e' : undefined },
+              onClick: () => {
+                if (isAdvActive) {
+                  garrisonPlan = null;
+                  toast('Маршрут наступления сохранен');
+                } else {
+                  garrisonPlan = { unitId: u.id, mode: 'advance' };
+                  toast('Кликайте по карте для задания точек наступления (ПКМ для завершения)');
+                }
+                render();
+              },
+            },
+            isAdvActive ? '✓ Готово' : '⚔️ Наступление',
+          );
+
+          const retBtn = h(
+            'button',
+            {
+              class: isRetActive ? 'primary' : 'ghost',
+              style: { flex: '1', fontSize: '11px', padding: '4px 6px', borderColor: isRetActive ? '#f97316' : undefined },
+              onClick: () => {
+                if (isRetActive) {
+                  garrisonPlan = null;
+                  toast('Маршрут отступления сохранен');
+                } else {
+                  garrisonPlan = { unitId: u.id, mode: 'retreat' };
+                  toast('Кликайте по карте для задания точек отступления (ПКМ для завершения)');
+                }
+                render();
+              },
+            },
+            isRetActive ? '✓ Готово' : '🛡️ Отступление',
+          );
+
+          const clearBtn = h(
+            'button',
+            {
+              class: 'ghost',
+              style: { fontSize: '11px', padding: '4px 6px', color: '#f87171' },
+              title: 'Сбросить маршруты',
+              onClick: () => {
+                u.advancePath = [];
+                u.retreatPath = [];
+                garrisonPlan = null;
+                send({ type: 'setGarrisonPlan', unitId: u.id, advancePath: [], retreatPath: [] });
+                toast('Маршруты сброшены');
+                render();
+              },
+            },
+            '✕ Сброс',
+          );
+
+          const advInfo = u.advancePath && u.advancePath.length > 0
+            ? `Наступление: ${u.advancePath.length} точ.`
+            : 'Наступление: прямо';
+          const retInfo = u.retreatPath && u.retreatPath.length > 0
+            ? `Отступление: ${u.retreatPath.length} точ.`
+            : 'Отступление: в тыл';
+
           side.append(
             h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, 'Пехотный рубеж'), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
             h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${Math.round(u.ammo ?? 100)}`),
-            h('div', { class: 'stat', style: { color: statusColor, marginTop: '6px' } }, statusText),
-            h('div', { class: 'muted', style: { marginTop: '8px', fontSize: '12px' } }, 'ПКМ своим отрядом пехоты по этой позиции для отправки на укрепление.'),
+            h('div', { class: 'stat', style: { color: statusColor, marginTop: '4px' } }, statusText),
+            h('div', { class: 'stat', style: { fontSize: '11px', color: '#94a3b8', marginTop: '6px' } }, `${advInfo} · ${retInfo}`),
+            h('div', { style: { display: 'flex', gap: '4px', marginTop: '6px' } }, advBtn, retBtn, clearBtn),
           );
+          if (garrisonPlan?.unitId === u.id) {
+            side.append(
+              h('div', { class: 'stat', style: { color: '#fbbf24', marginTop: '6px', fontSize: '11px' } }, garrisonPlan.mode === 'advance' ? 'Кликайте по карте для точек наступления. ПКМ — закончить.' : 'Кликайте по карте для точек отступления. ПКМ — закончить.'),
+            );
+          }
+          side.append(h('div', { class: 'muted', style: { marginTop: '8px', fontSize: '11px' } }, 'ПКМ своим отрядом пехоты по этой позиции для отправки на укрепление.'));
         } else if (u.def === 'infantry') {
           side.append(
             h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, d.name), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
@@ -2260,11 +2366,12 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     routeBanner.textContent = pick.route
       ? pick.route.stops.length ? 'Delivery route: click buildings to add stops, the map to add a waypoint, then Start route (Esc cancels)' : 'Delivery route: click the building to load at (Esc cancels)'
       : '';
-    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch || pick.fuel || pick.launchFrom || pick.rally));
+    mapEl.classList.toggle('picking', !!(pick.route || pick.bombard || pick.launch || pick.fuel || pick.launchFrom || pick.rally || garrisonPlan));
   }
 
   /** Full refresh after a local change (selection, grouping). */
   function render() {
+    if (garrisonPlan && !selUnits.has(garrisonPlan.unitId)) garrisonPlan = null;
     if (sideQueue && selBuilding !== sideQueue.building) (sideQueue = null), queueSlot.replaceChildren();
     renderSide();
     renderGroups();
@@ -2384,6 +2491,40 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       rings.push({ type: 'Feature', properties: { color: '#f59e0b' }, geometry: { type: 'LineString', coordinates: circle(posOf(u), d.range, 64) } });
       rings.push({ type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: circle(posOf(u), d.minRange, 48) } });
       if (u.bombardTarget) rings.push({ type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: circle(u.bombardTarget, 1, 32) } });
+    }
+    // planned routes for frontline garrisons (advance = green, retreat = orange)
+    for (const u of snap.units) {
+      if (!selUnits.has(u.id)) continue;
+      const isFrontGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+      if (!isFrontGarrison) continue;
+      if (u.advancePath && u.advancePath.length > 0) {
+        rings.push({
+          type: 'Feature',
+          properties: { color: '#22c55e', w: 3, o: 0.9 },
+          geometry: { type: 'LineString', coordinates: [posOf(u), ...u.advancePath] },
+        });
+        for (const pt of u.advancePath) {
+          rings.push({
+            type: 'Feature',
+            properties: { color: '#22c55e', w: 2, o: 0.9 },
+            geometry: { type: 'LineString', coordinates: circle(pt, 0.25, 16) },
+          });
+        }
+      }
+      if (u.retreatPath && u.retreatPath.length > 0) {
+        rings.push({
+          type: 'Feature',
+          properties: { color: '#f97316', w: 3, o: 0.9 },
+          geometry: { type: 'LineString', coordinates: [posOf(u), ...u.retreatPath] },
+        });
+        for (const pt of u.retreatPath) {
+          rings.push({
+            type: 'Feature',
+            properties: { color: '#f97316', w: 2, o: 0.9 },
+            geometry: { type: 'LineString', coordinates: circle(pt, 0.25, 16) },
+          });
+        }
+      }
     }
     // recon drones' patrol circles
     (map.getSource('orbits') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.units.filter((u) => selUnits.has(u.id) && u.loiterCenter && u.loiterRadius).map((u) => ({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: circle(u.loiterCenter!, u.loiterRadius!, 48) } })) } as any);

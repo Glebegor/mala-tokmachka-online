@@ -45,7 +45,7 @@ assert.equal(hqDef.maxPerPlayer, 1, 'only 1 HQ per player');
 
 const mbDef = rs.buildings.find((b) => b.id === 'military_base')!;
 assert.equal(mbDef.cost.money, 2500, 'Military base costs 2500');
-assert.equal(mbDef.buildTime, 120, 'Military base takes 120s (2 min)');
+assert.equal(mbDef.buildTime, 90, 'Military base takes 90s (1.5 min / 1m 30s)');
 assert.equal(mbDef.sameKindKm, 20, 'Military base has sameKindKm = 20');
 
 const whDef = rs.buildings.find((b) => b.id === 'warehouse')!;
@@ -782,7 +782,9 @@ assert.equal(humveeUnitDef.speed, 0.08, 'Humvee speed doubled to 0.08 km/s (288 
 const truckUnitDef = rs.units.find((u) => u.id === 'truck')!;
 assert.equal(truckUnitDef.vision, 1.6, 'Truck vision reduced to 1.6 km (was 4)');
 assert.equal(truckUnitDef.speed, 0.06, 'Truck speed doubled to 0.06 km/s (216 km/h)');
-console.log('✓ Vision & Speed: Infantry (vision 1.6), Humvee (vision 1.8, speed 288 km/h), Truck (vision 1.6, speed 216 km/h) verified');
+const frontInfDef = rs.units.find((u) => u.id === 'frontline_infantry')!;
+assert.equal(frontInfDef.vision, 1.6, 'Frontline infantry vision reduced to 1.6 km');
+console.log('✓ Vision & Speed: Infantry (vision 1.6), Humvee (vision 1.8, speed 288 km/h), Truck (vision 1.6, speed 216 km/h), Frontline Infantry (vision 1.6) verified');
 
 // 26. Front Line Node Density (1.5 km) & Static Stability (no unwanted smoothing drift)
 assert.equal(rs.rules.frontNodeSpacingKm, 1.5, 'Front node spacing is 1.5 km (dense nodes preventing sharp kinks)');
@@ -858,5 +860,54 @@ const assignedReinforcer = extraRuInf.embarkedIn ? sim.world.units.find((u) => u
 assert.equal(assignedReinforcer.reinforceTarget, opposingRuGarrison.id, 'Bot RU prioritized troubled sector with highest strength deficit to stabilize frontline');
 console.log('✓ Frontline Stabilization: Bot detects enemy strength disparity and rushes reinforcements to troubled sector verified');
 
+// 32. Out-of-Ammo Retreat (Strength 6 still retreats backward when ammo runs out)
+const testRetreatGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0)!;
+testRetreatGarrison.strength = 6;
+testRetreatGarrison.ammo = 0; // Completely out of ammo
+for (let s = 0; s < 10; s++) sim.step(1.0);
+assert.equal(testRetreatGarrison.frontStatus, 'retreating', 'Garrison with strength 6 retreats when ammo runs out');
+console.log('✓ Out-of-Ammo Retreat: Garrison with strength 6 retreats when ammo runs out verified');
+
+// 33. Set Garrison Plan (Advance & Retreat Routes)
+const planGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && u.id !== testRetreatGarrison.id)!;
+planGarrison.ammo = 100;
+planGarrison.strength = 5;
+const advPt1 = offsetKm(planGarrison.pos, 0.4, 0.4);
+const advPt2 = offsetKm(planGarrison.pos, 0.8, 0.8);
+const retPt1 = offsetKm(planGarrison.pos, -0.4, -0.4);
+const planRes = sim.apply('player1', {
+  type: 'setGarrisonPlan',
+  unitId: planGarrison.id,
+  advancePath: [advPt1, advPt2],
+  retreatPath: [retPt1],
+});
+assert.ok(planRes.ok, 'setGarrisonPlan command succeeded');
+assert.equal(planGarrison.advancePath?.length, 2, 'Garrison unit received 2 advance waypoints');
+assert.equal(planGarrison.retreatPath?.length, 1, 'Garrison unit received 1 retreat waypoint');
+
+// Check visibility snapshot preserves paths for friendly player
+const snapFriendly = snapshotFor(sim, 'player1', 0);
+const snapPlanGarrison = snapFriendly.units.find((u) => u.id === planGarrison.id);
+assert.equal(snapPlanGarrison?.advancePath?.length, 2, 'Snapshot includes advancePath for friendly player');
+assert.equal(snapPlanGarrison?.retreatPath?.length, 1, 'Snapshot includes retreatPath for friendly player');
+
+// Enemy does not see planning routes
+const snapEnemy = snapshotFor(sim, 'player2', 1);
+const snapPlanGarrisonEnemy = snapEnemy.units.find((u) => u.id === planGarrison.id);
+assert.equal(snapPlanGarrisonEnemy?.advancePath, undefined, 'Enemy cannot see garrison advance plan');
+assert.equal(snapPlanGarrisonEnemy?.retreatPath, undefined, 'Enemy cannot see garrison retreat plan');
+console.log('✓ Garrison Planning: Advance and retreat routes drawing and visibility verified');
+
+// 34. Frontline Lag Restriction (<= 1.0 km)
+for (let s = 0; s < 15; s++) sim.step(1.0);
+const planPost = sim.world.posts?.find((p) => p.garrison.includes(planGarrison.id));
+const chkPos = planPost ? planPost.pos : planGarrison.pos;
+const ni = nearestNode(sim.world.front, chkPos);
+const frontPt: [number, number] = [sim.world.front[ni].lng, sim.world.front[ni].lat];
+const dLag = distKm(chkPos, frontPt);
+assert.ok(dLag <= 1.05, `Front line lag behind advancing garrison does not exceed 1.0 km (actual=${dLag.toFixed(2)} km)`);
+console.log('✓ Frontline Lag: Solid frontline follows behind advancing garrison, strictly <= 1.0 km verified');
+
 console.log('All reboot tests passed successfully!');
+
 
