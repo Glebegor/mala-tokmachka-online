@@ -339,6 +339,8 @@ export interface World {
   units: Unit[];
   queue: TrainItem[];
   front: FrontNode[];
+  /** Starting front line nodes (used as baseline to compute front depth and salient expansion). */
+  initialFront?: FrontNode[];
   pockets: Pocket[];
   grey: GreyZone[];
   /** Ground the front has just passed over: contested until held (see `RulesConfig.liberateSeconds`). */

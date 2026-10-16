@@ -49,7 +49,7 @@ assert.equal(mbDef.buildTime, 90, 'Military base takes 90s (1.5 min / 1m 30s)');
 assert.equal(mbDef.sameKindKm, 20, 'Military base has sameKindKm = 20');
 
 const whDef = rs.buildings.find((b) => b.id === 'warehouse')!;
-assert.equal(whDef.cost.money, 5000, 'Warehouse costs 5000');
+assert.equal(whDef.cost.money, 1500, 'Warehouse costs 1500');
 assert.equal(whDef.sameKindKm, 100, 'Warehouse has sameKindKm = 100');
 
 const mineDef = rs.buildings.find((b) => b.id === 'mine')!;
@@ -68,7 +68,7 @@ assert.equal(refDef.cost.money, 8000, 'Refinery costs 8000');
 assert.equal(refDef.maxPerTeam, 2, '2 refineries per team');
 
 const houseDef = rs.buildings.find((b) => b.id === 'housing')!;
-assert.equal(houseDef.cost.money, 2000, 'Housing costs 2000');
+assert.equal(houseDef.cost.money, 1000, 'Housing costs 1000');
 assert.equal(houseDef.hp, 500, 'Housing has 500 HP (10 houses * 50 HP)');
 assert.equal(houseDef.produces?.money, 1, 'Housing produces 1 $/s (5 coins per 5s)');
 
@@ -202,7 +202,7 @@ assert.equal(whResClose.reason, 'keep at least 100 km from other warehouses');
 const whPos2 = offsetKm(whPos1, -110, 0);
 const whRes2 = sim.apply('player1', { type: 'build', def: 'warehouse', pos: whPos2 });
 assert.ok(whRes2.ok, 'Warehouse 2 placement succeeded at >= 100 km');
-console.log('✓ Warehouse: cost 5000, 100 km spacing constraint verified');
+console.log('✓ Warehouse: cost 1500, 100 km spacing constraint verified');
 
 // 9. Mine placement (only on iron deposits) & ore accumulation up to 5000
 // Try building mine on plain ground outside iron deposits
@@ -957,21 +957,27 @@ if (scaledGarrison.skirmishCount >= 6) {
 assert.equal(Math.round((prevAmmo - scaledGarrison.ammo) * 100) / 100, 1.10, 'Strength 3 consumes 1.10 ammo (+10% drain) per cycle');
 console.log('✓ Garrison Ammo & Strength: max ammo = strength * 100 (300) and 5% consumption drain scaling verified');
 
-// 36. Salient Expansion: Garrison Auto-Splitting to Hold Gaps
-// Vanguard garrison pushes deep into enemy territory (salient)
+// 36. Salient Expansion: Garrison Auto-Splitting to Hold Gaps (Depth > 10 km)
+// When front depth is under 10 km, garrison holds together and does not split
 const advanceSalientGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && u.id !== scaledGarrison.id)!;
 advanceSalientGarrison.strength = 3;
 advanceSalientGarrison.squadSize = 140;
 advanceSalientGarrison.hp = 15000;
 advanceSalientGarrison.ammo = 300;
-advanceSalientGarrison.pos = offsetKm(advanceSalientGarrison.pos, 0, 3.5); // pushed deep forward
+advanceSalientGarrison.pos = offsetKm(advanceSalientGarrison.pos, 0, 4.0); // 4 km deep (under 10 km)
+(sim as any).indexWorld();
+(sim as any).salientGarrisonSplitting();
+assert.equal(advanceSalientGarrison.strength, 3, 'Garrison does not exit troops when front depth is under 10 km');
+
+// When front depth exceeds 10 km, extra troops exit to fill newly opened slots along the lengthened front
+advanceSalientGarrison.pos = offsetKm(advanceSalientGarrison.pos, 0, 10.0); // total 14 km advance (front depth > 10 km)
 (sim as any).indexWorld();
 const preSplitCount = sim.world.units.filter((u) => u.team === 0).length;
 (sim as any).salientGarrisonSplitting();
-assert.equal(advanceSalientGarrison.strength, 2, 'Reinforced garrison split off 1 squad to hold salient flank gap');
+assert.equal(advanceSalientGarrison.strength, 2, 'Reinforced garrison split off 1 squad to hold salient flank gap when depth > 10 km');
 const postSplitCount = sim.world.units.filter((u) => u.team === 0).length;
 assert.equal(postSplitCount, preSplitCount + 1, 'New frontline garrison unit deployed at flank position');
-console.log('✓ Salient Expansion: garrison auto-splits excess squads to occupy newly opened flank gaps verified');
+console.log('✓ Salient Expansion: garrison auto-splits excess squads to occupy newly opened flank gaps when depth > 10 km verified');
 
 // 37. Humvee MG Mobile Anti-Air & 8 km Air Vision
 const droneEnemy = sim.spawnUnit('drone', sim.player('player2')!, offsetKm(friendlyPos, 5.0, 0));

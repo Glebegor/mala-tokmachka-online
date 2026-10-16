@@ -158,6 +158,8 @@ export class Sim {
     const startRes: ResourceAmounts = {};
     for (const res of this.ruleset.resources) if (!this.isGood(res.id)) startRes[res.id] = res.start; // goods start in the HQ
     const players: Player[] = slots.map((s) => ({ ...s, res: { ...startRes }, share: true }));
+    const front = buildFront(this.map.front, r.frontNodeSpacingKm);
+    const initialFront = front.map((n) => ({ ...n }));
     const w: World = {
       tick: 0,
       time: 0,
@@ -165,7 +167,8 @@ export class Sim {
       buildings: [],
       units: [],
       queue: [],
-      front: buildFront(this.map.front, r.frontNodeSpacingKm),
+      front,
+      initialFront,
       pockets: [],
       grey: [],
       liberated: [],
@@ -3617,24 +3620,60 @@ export class Sim {
     }
   }
 
+  private distToSegmentKm(p: LngLat, a: LngLat, b: LngLat): number {
+    const kx = kmPerDegLng(p[1]);
+    const px = p[0] * kx;
+    const py = p[1] * 111.32;
+    const ax = a[0] * kx;
+    const ay = a[1] * 111.32;
+    const bx = b[0] * kx;
+    const by = b[1] * 111.32;
+    const dx = bx - ax;
+    const dy = by - ay;
+    const lenSq = dx * dx + dy * dy;
+    if (lenSq === 0) return Math.hypot(px - ax, py - ay);
+    const t = Math.max(0, Math.min(1, ((px - ax) * dx + (py - ay) * dy) / lenSq));
+    const projX = ax + t * dx;
+    const projY = ay + t * dy;
+    return Math.hypot(px - projX, py - projY);
+  }
+
   /**
    * Salient Expansion & Garrison Splitting (Requirement 2):
-   * When a reinforced frontline garrison (strength > 1) pushes deep into enemy territory and the front line
-   * expands / stretches, excess squads exit the garrison and deploy automatically to hold newly opened positions / flanks.
+   * When a front line penetrates or bulges deeply (> 10 km depth) either during attack (advancing salient)
+   * or defense (holding stretched breakthrough gaps), reinforced garrisons (strength > 1) redistribute
+   * surplus squads to automatically occupy newly opened empty slots along the lengthened front line.
    */
   private salientGarrisonSplitting() {
     const w = this.world;
     if (!w.front || w.front.length < 2) return;
     const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);
 
-    // Find all reinforced frontline garrisons with ammo that have pushed deep into the front (salient vanguard)
+    // Find all reinforced frontline garrisons with ammo that are in sectors with front depth > 10 km
     const reinforced = w.units.filter((u) => {
       if (u.hp <= 0 || u.embarkedIn || (u.strength ?? 1) <= 1 || (u.ammo ?? 0) <= 0) return false;
       const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
       if (!isFront) return false;
+
       const uNode = nearestNode(w.front, u.pos);
-      const isDeep = this.side(u.pos) !== u.team || distKm(u.pos, [w.front[uNode].lng, w.front[uNode].lat]) >= 1.5;
-      return isDeep;
+      const nodePt: LngLat = [w.front[uNode].lng, w.front[uNode].lat];
+
+      // Measure front depth:
+      // 1) Displacement from initial front line (for both attack advances and defensive retreats)
+      const depthFromInitial = w.initialFront
+        ? Math.max(Math.abs(distToFrontKm(w.initialFront, u.pos)), Math.abs(distToFrontKm(w.initialFront, nodePt)))
+        : 0;
+      // 2) Garrison penetration distance beyond the front line
+      const penetrationDepth = distKm(u.pos, nodePt);
+      // 3) Local curvature / salient depth relative to flank chord ~15 km away
+      const iLeft = Math.max(0, uNode - 10);
+      const iRight = Math.min(w.front.length - 1, uNode + 10);
+      const pLeft: LngLat = [w.front[iLeft].lng, w.front[iLeft].lat];
+      const pRight: LngLat = [w.front[iRight].lng, w.front[iRight].lat];
+      const chordDepth = this.distToSegmentKm(nodePt, pLeft, pRight);
+
+      const frontDepth = Math.max(depthFromInitial, penetrationDepth, chordDepth);
+      return frontDepth >= 10.0;
     });
 
     for (const u of reinforced) {
@@ -3644,7 +3683,7 @@ export class Sim {
       let assignedPost: FrontPost | null = null;
       if (w.posts && w.posts.length > 0) {
         for (const p of w.posts) {
-          if (p.team === u.team && p.garrison.length === 0 && distKm(p.pos, u.pos) <= 12.0) {
+          if (p.team === u.team && p.garrison.length === 0 && distKm(p.pos, u.pos) <= 15.0) {
             assignedPost = p;
             break;
           }
@@ -3658,25 +3697,26 @@ export class Sim {
         spawnPos = assignedPost.pos;
         matchedNodeIdx = assignedPost.nodeIdx;
       } else {
-        // 2. Check adjacent front nodes within 12 km to find any undefended gap along the stretched salient
+        // 2. Search adjacent front nodes along the lengthened front line to find any empty slot (unheld within 2.5 km)
         const uNode = nearestNode(w.front, u.pos);
-        for (let offset = 1; offset <= 8; offset++) {
+        for (let offset = 1; offset <= 15; offset++) {
           for (const sign of [-1, 1]) {
             const ni = uNode + offset * sign;
             if (ni < 0 || ni >= w.front.length) continue;
-            const nodePt: LngLat = [w.front[ni].lng, w.front[ni].lat];
-            if (distKm(nodePt, u.pos) > 12.0) continue;
+            const slotPt: LngLat = [w.front[ni].lng, w.front[ni].lat];
+            if (distKm(slotPt, u.pos) > 25.0) continue;
 
-            // Is there any friendly garrison guarding this stretch within 1.2 km?
+            // Is there any friendly garrison guarding this stretch within 2.5 km?
             let hasFriendly = false;
-            this.near(this.unitGrid, nodePt, 1.2, (g) => {
-              if (g.team === u.team && g.hp > 0 && distKm(g.pos, nodePt) <= 1.2 && (g.def === 'frontline_infantry' || g.owner.startsWith('__front_'))) {
+            this.near(this.unitGrid, slotPt, 2.5, (g) => {
+              if (g.team === u.team && g.hp > 0 && distKm(g.pos, slotPt) <= 2.5 && (g.def === 'frontline_infantry' || g.owner.startsWith('__front_'))) {
                 hasFriendly = true;
               }
             });
             if (!hasFriendly) {
               const [nx, ny] = normalAt(w.front, ni);
-              const candPos: LngLat = offsetKm(nodePt, (u.team === 0 ? -nx : nx) * 0.8, (u.team === 0 ? -ny : ny) * 0.8);
+              // Position new squad on the friendly side of the front line (for both attack and defense)
+              const candPos: LngLat = offsetKm(slotPt, (u.team === 0 ? -nx : nx) * 0.8, (u.team === 0 ? -ny : ny) * 0.8);
               if (isDry(candPos) && this.side(candPos) === u.team) {
                 spawnPos = candPos;
                 matchedNodeIdx = ni;
