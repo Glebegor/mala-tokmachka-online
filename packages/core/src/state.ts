@@ -212,6 +212,8 @@ export interface Unit {
   retreatPath?: LngLat[];
   /** Temporary 2x retreat boost when pressured or correcting position against advancing enemy. */
   retreatBoost?: boolean;
+  /** ID of the opposing counterpart garrison across the front line (1-on-1 pairing). */
+  pairId?: number;
   /** Building id that this logistics truck services. */
   serviceBuilding?: number;
   /** Direction vector pushed by advancing enemy. */

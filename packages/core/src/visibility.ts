@@ -138,6 +138,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           squadSize: u.squadSize,
           frontStatus: u.frontStatus,
           marchTarget: u.team === team && u.marchTarget ? p4(u.marchTarget) : undefined,
+          pairId: u.pairId,
           advancePath: u.team === team && u.advancePath ? u.advancePath.map(p4) : undefined,
           retreatPath: u.team === team && u.retreatPath ? u.retreatPath.map(p4) : undefined,
           retreatBoost: u.team === team ? u.retreatBoost : undefined,

@@ -1341,6 +1341,80 @@ assert.equal(marchingSquad.marchTarget, undefined, 'marchTarget cleared upon arr
 
 console.log('✓ HoI4 Frontline Mechanics: Strength 5 start, 500 soldiers, empty segment detection, donor -1 str/-100 soldiers, and marching deployment verified');
 
+// 49. Frontline Garrison Strict 1-on-1 Pairing, Duel Skirmishes, and Flank Advancements (Смежники)
+// 1. Frontline garrisons paired 1-on-1 symmetrically
+(sim as any).indexWorld();
+const pairedGarrisons = sim.world.units.filter((u) => u.pairId !== undefined && u.hp > 0);
+assert.ok(pairedGarrisons.length > 0, 'Frontline garrisons have pairId assigned');
+for (const u of pairedGarrisons.slice(0, 10)) {
+  const p = (sim as any).unitById.get(u.pairId!);
+  assert.ok(p, `Pair unit ${u.pairId} exists in unitById`);
+  assert.equal(p.team, 1 - u.team, 'Pair is on opposing team');
+  assert.equal(p.pairId, u.id, 'Pair relationship is strictly symmetrical 1-on-1');
+}
+
+// 2. Skirmish target selection strictly prioritizes paired counterpart over closer breakthrough enemy
+const testUa = sim.world.units.find(
+  (u) => u.team === 0 && u.id > 10 && u.pairId !== undefined && u.hp > 0 && distKm(u.pos, (sim as any).unitById.get(u.pairId)?.pos ?? [0, 0]) <= 2.5
+)!;
+assert.ok(testUa, 'Found valid UA frontline garrison with pair');
+const testRuPair = (sim as any).unitById.get(testUa.pairId!)!;
+testUa.ammo = 500;
+testRuPair.ammo = 500;
+
+// Spawn an unrelated third enemy garrison much closer to testUa (closer than testRuPair)
+const pairDist = distKm(testUa.pos, testRuPair.pos);
+const intruderPos: LngLat = [
+  testUa.pos[0] + (testRuPair.pos[0] - testUa.pos[0]) * 0.4,
+  testUa.pos[1] + (testRuPair.pos[1] - testUa.pos[1]) * 0.4,
+];
+const intruderRu = (sim as any).spawnFrontlineUnit(sim.world, 1, intruderPos);
+intruderRu.ammo = 500;
+(sim as any).indexWorld();
+
+// Run skirmish targeting: testUa must target testRuPair (its pair), NOT intruderRu (despite intruderRu being closer)
+testUa.skirmishTimer = 0.01;
+(sim as any).shots.length = 0;
+sim.step(0.1);
+const skirmishShot = (sim as any).shots.find((s: any) => distKm(s.from, testUa.pos) < 0.01);
+assert.ok(skirmishShot, 'Skirmish shot was fired by garrison');
+assert.ok(distKm(skirmishShot.to, testRuPair.pos) < 0.01, 'Garrison strictly fires at its paired counterpart, not intervening closer intruder');
+intruderRu.hp = 0; // Clean up intruder
+
+// 3. Flank garrison (смежник) without advancePath advances with retreating pair
+// Prepare sector garrisons in holding status, equal strength
+const uNode = nearestNode(sim.world.front, testUa.pos);
+const [unx, uny] = normalAt(sim.world.front, uNode);
+testRuPair.pos = offsetKm(testUa.pos, unx * 1.8, uny * 1.8);
+for (const u of sim.world.units.filter((u) => distKm(u.pos, testUa.pos) <= 6.0)) {
+  u.ammo = 500;
+  u.strength = 5;
+  u.squadSize = 500;
+  u.advancePath = undefined;
+  u.pushedDir = undefined;
+  u.frontStatus = 'holding';
+}
+(sim as any).indexWorld();
+
+// When pair is holding, friendly смежник holds position
+sim.step(1.0);
+assert.equal(testUa.frontStatus, 'holding', 'Friendly garrison holds when pair is holding');
+
+// When enemy pair retreats (e.g. pushed by adjacent breakthrough), friendly смежник advances with pair
+testRuPair.frontStatus = 'retreating';
+const targetPos = [testRuPair.pos[0], testRuPair.pos[1]] as LngLat;
+const distBeforeAdv = distKm(testUa.pos, targetPos);
+sim.step(1.0);
+assert.equal(testUa.frontStatus, 'advancing', 'Friendly смежник switches to advancing when opposing pair retreats');
+assert.ok(distKm(testUa.pos, targetPos) < distBeforeAdv, 'Friendly смежник moves forward towards retreating pair');
+
+// When enemy pair stops retreating and resumes holding, friendly смежник stops advancing and holds
+testRuPair.frontStatus = 'holding';
+sim.step(1.0);
+assert.equal(testUa.frontStatus, 'holding', 'Friendly смежник transitions back to holding once enemy pair stops retreating');
+
+console.log('✓ Frontline Garrison 1-on-1 Pairs, Duel Skirmishes, and Flank Advancement (Смежники) verified');
+
 console.log('All reboot tests passed successfully!');
 
 
