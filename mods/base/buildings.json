@@ -144,5 +144,18 @@
       "ammo": 10
     },
     "spacedFrom": ["steel_mill"]
+  },
+  {
+    "id": "drone_factory",
+    "name": "Дроновый завод",
+    "category": "military",
+    "icon": "✈",
+    "description": "Военный завод по производству БПЛА. Стоит 2 500$, строится 1 минуту.",
+    "cost": {
+      "money": 2500
+    },
+    "buildTime": 60,
+    "hp": 5000,
+    "trains": []
   }
 ]

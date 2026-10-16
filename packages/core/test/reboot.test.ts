@@ -36,8 +36,8 @@ const ammoResInit = rs.resources.find((r) => r.id === 'ammo')!;
 assert.equal(ammoResInit.cap, 50000, 'ammo cap is 50000');
 console.log('✓ Resources: Money (15k start), Ore (cap 5k), Steel (cap 5k), and Ammo (cap 50k) verified');
 
-// 3. Buildings: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing, Steel Mill, Ammo Factory
-assert.equal(rs.buildings.length, 9, '9 building definitions exist');
+// 3. Buildings: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing, Steel Mill, Ammo Factory, Drone Factory
+assert.equal(rs.buildings.length, 10, '10 building definitions exist');
 const hqDef = rs.buildings.find((b) => b.id === 'hq')!;
 assert.equal(hqDef.hp, 10000, 'HQ has 10,000 HP');
 assert.equal(hqDef.sameKindKm, 100, 'HQ has sameKindKm = 100');
@@ -77,7 +77,14 @@ assert.equal(ammoFactDef.cost.money, 2500, 'Ammo factory costs 2500');
 assert.equal(ammoFactDef.buildTime, 120, 'Ammo factory build time is 120s (2 min)');
 assert.equal(ammoFactDef.consumes?.steel, 0.2, 'Ammo factory consumes 0.2 steel/s (1 steel in 5s)');
 assert.equal(ammoFactDef.produces?.ammo, 10, 'Ammo factory produces 10 ammo/s (50 ammo in 5s)');
-console.log('✓ Buildings defined: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing, Steel Mill, Ammo Factory verified');
+
+const droneFactDef = rs.buildings.find((b) => b.id === 'drone_factory')!;
+assert.ok(droneFactDef, 'Drone factory defined in buildings.json');
+assert.equal(droneFactDef.cost.money, 2500, 'Drone factory costs 2500');
+assert.equal(droneFactDef.buildTime, 60, 'Drone factory build time is 60s (1 min)');
+assert.equal(droneFactDef.category, 'military', 'Drone factory is military category');
+assert.deepEqual(droneFactDef.trains, [], 'Drone factory trains array is empty');
+console.log('✓ Buildings defined: HQ, Military Base, Warehouse, Mine, Oil Rig, Refinery, Housing, Steel Mill, Ammo Factory, Drone Factory verified');
 
 // 4. Procedural Terrain Full Map Coverage
 const validTerrainIds = rs.terrain.map((t) => t.id);
@@ -806,15 +813,18 @@ const infUnitDef = rs.units.find((u) => u.id === 'infantry')!;
 assert.equal(infUnitDef.vision, 2.08, 'Infantry vision increased by 30% to 2.08 km (was 1.6)');
 const humveeUnitDef = rs.units.find((u) => u.id === 'humvee')!;
 assert.equal(humveeUnitDef.vision, 1.8, 'Humvee vision is 1.8 km (was 4.5)');
-assert.equal(humveeUnitDef.speed, 0.096, 'Humvee speed increased to 0.096 km/s (345.6 km/h)');
+assert.equal(humveeUnitDef.speed, 0.192, 'Humvee speed doubled to 0.192 km/s (691.2 km/h)');
+assert.equal(humveeUnitDef.roadSpeedMult, 1.0, 'Humvee roadSpeedMult is 1.0 (acceleration removed)');
 const humveeMgUnitDef = rs.units.find((u) => u.id === 'humvee_mg')!;
-assert.equal(humveeMgUnitDef.speed, 0.0733, 'Humvee MG speed increased to 0.0733 km/s (263.9 km/h)');
+assert.equal(humveeMgUnitDef.speed, 0.1466, 'Humvee MG speed doubled to 0.1466 km/s (527.8 km/h)');
+assert.equal(humveeMgUnitDef.roadSpeedMult, 1.0, 'Humvee MG roadSpeedMult is 1.0 (acceleration removed)');
 const truckUnitDef = rs.units.find((u) => u.id === 'truck')!;
 assert.equal(truckUnitDef.vision, 1.6, 'Truck vision is 1.6 km (was 4)');
-assert.equal(truckUnitDef.speed, 0.072, 'Truck speed increased to 0.072 km/s (259.2 km/h)');
+assert.equal(truckUnitDef.speed, 0.144, 'Truck speed doubled to 0.144 km/s (518.4 km/h)');
+assert.equal(truckUnitDef.roadSpeedMult, 1.0, 'Truck roadSpeedMult is 1.0 (acceleration removed)');
 const frontInfDef = rs.units.find((u) => u.id === 'frontline_infantry')!;
 assert.equal(frontInfDef.vision, 2.08, 'Frontline infantry vision increased by 30% to 2.08 km');
-console.log('✓ Vision & Speed: Infantry (vision 2.08), Humvee (vision 1.8, speed 345.6 km/h), Humvee MG (speed 263.9 km/h), Truck (vision 1.6, speed 259.2 km/h) verified');
+console.log('✓ Vision & Speed: Infantry (vision 2.08), Humvee (vision 1.8, speed 691.2 km/h, road 1.0), Humvee MG (speed 527.8 km/h, road 1.0), Truck (vision 1.6, speed 518.4 km/h, road 1.0) verified');
 
 // 26. Front Line Node Density (1.5 km) & Static Stability (no unwanted smoothing drift)
 assert.equal(rs.rules.frontNodeSpacingKm, 1.5, 'Front node spacing is 1.5 km (dense nodes preventing sharp kinks)');

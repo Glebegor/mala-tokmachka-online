@@ -1567,6 +1567,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (clash) return 'Слишком близко к другой военной базе (минимум 20 км)';
       return null;
     }
+    if (def.id === 'drone_factory') {
+      if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
+      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
+      if (!myHq) return 'Сначала необходимо построить Военный штаб';
+      const clash = snap.buildings.find((b) => b.def === 'drone_factory' && distKm(b.pos, p) < 1);
+      if (clash) return 'Место занято другим заводом';
+      return null;
+    }
     if (def.id === 'warehouse') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
