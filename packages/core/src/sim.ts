@@ -4045,9 +4045,8 @@ export class Sim {
       const hold: [number, number] = [this.holdMult(0, pos), this.holdMult(1, pos)];
       const resist = this.terrainAt(pos).frontResist;
 
-      // The front line across the Dnipro river / reservoir is static: no troops are in the water
-      const isDniproWater = (pos[0] < 35.35 && pos[1] < 47.7) || (this.terrain?.isBarrier(pos) ?? false);
-      if (isDniproWater) return 0;
+      // The front line across water bodies (Dnipro river / reservoir / sea) is static
+      if (this.terrain?.isBarrier(pos)) return 0;
 
       // Find local frontline garrisons for each team holding this sector (within 4.0 km of pos)
       let local0: Unit | null = null;
@@ -4068,6 +4067,9 @@ export class Sim {
           local1 = u;
         }
       });
+
+      // Sectors with no frontline garrisons holding them (e.g. Dnipro water front) stay completely static
+      if (!local0 && !local1) return 0;
 
       // Dynamic front line movement (out-of-ammo pressure and manpower disparity)
       let dynamicPush = 0;
@@ -4179,7 +4181,10 @@ export class Sim {
         let lat = n[i].lat + dlat;
 
         // the line does not advance across open sea or a big river
-        if (this.terrain?.isBarrier([lng, lat]) && !this.terrain.isBarrier([n[i].lng, n[i].lat])) {
+        if (
+          this.terrain?.isBarrier([lng, lat]) &&
+          !this.terrain.isBarrier([n[i].lng, n[i].lat])
+        ) {
           n[i].v = 0;
           continue;
         }
@@ -4300,8 +4305,8 @@ export class Sim {
 
               // Anti-overtake: Attacker can NEVER get closer than 0.95 km or overtake defending garrison
               const minBufferKm = 0.95;
-              const nextPosTentative: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
-              const nextDist = distKm(nextPosTentative, opp.pos);
+              const nextTentative: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+              const nextDist = distKm(nextTentative, opp.pos);
               if (distToOpp < 1.4 && projAlong < 0) {
                 // Attacker ended up past/behind the defender: halt until defender repositions in front
                 stepKm = 0;
@@ -4314,41 +4319,94 @@ export class Sim {
               }
             }
 
+            // 1. Advance the FRONT LINE ahead of the garrison first
+            if (stepKm > 0) {
+              const shiftLng = (dir[0] * stepKm) / ukx;
+              const shiftLat = (dir[1] * stepKm) / 111.32;
+              const nextFrontPos: LngLat = [n[i].lng + shiftLng, n[i].lat + shiftLat];
+              if (!this.terrain?.isBarrier(nextFrontPos) && !this.foreign(nextFrontPos)) {
+                n[i].lng = nextFrontPos[0];
+                n[i].lat = nextFrontPos[1];
+                n[i].v = u.team === 0 ? 0.024 : -0.024;
+                this.occ.tick = -1; // front moved: invalidate occupied index
+
+                // Smooth cosine propagation across 8 neighbor nodes (12 km spread)
+                const spread = 8;
+                for (let j = 1; j <= spread; j++) {
+                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.75;
+                  if (i - j >= 0) {
+                    const pLng = n[i - j].lng + shiftLng * w;
+                    const pLat = n[i - j].lat + shiftLat * w;
+                    if (!this.terrain?.isBarrier([pLng, pLat]) && !this.foreign([pLng, pLat])) {
+                      n[i - j].lng = pLng;
+                      n[i - j].lat = pLat;
+                    }
+                  }
+                  if (i + j < len) {
+                    const pLng = n[i + j].lng + shiftLng * w;
+                    const pLat = n[i + j].lat + shiftLat * w;
+                    if (!this.terrain?.isBarrier([pLng, pLat]) && !this.foreign([pLng, pLat])) {
+                      n[i + j].lng = pLng;
+                      n[i + j].lat = pLat;
+                    }
+                  }
+                }
+              }
+            }
+
+            // Ensure front line leads ahead of the advancing garrison (standoff ~0.4 km) and does not lag
+            const toFrontX = (n[i].lng - u.pos[0]) * ukx;
+            const toFrontY = (n[i].lat - u.pos[1]) * 111.32;
+            const projAlongDir = toFrontX * dir[0] + toFrontY * dir[1];
+
+            if (projAlongDir < 0.35) {
+              const pushAheadKm = 0.4 - projAlongDir;
+              const shiftLng = (dir[0] * pushAheadKm) / ukx;
+              const shiftLat = (dir[1] * pushAheadKm) / 111.32;
+              const nextFrontPos: LngLat = [n[i].lng + shiftLng, n[i].lat + shiftLat];
+              if (!this.terrain?.isBarrier(nextFrontPos) && !this.foreign(nextFrontPos)) {
+                n[i].lng = nextFrontPos[0];
+                n[i].lat = nextFrontPos[1];
+                n[i].v = u.team === 0 ? 0.024 : -0.024;
+                this.occ.tick = -1;
+
+                const spread = 8;
+                for (let j = 1; j <= spread; j++) {
+                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.75;
+                  if (i - j >= 0) {
+                    const pLng = n[i - j].lng + shiftLng * w;
+                    const pLat = n[i - j].lat + shiftLat * w;
+                    if (!this.terrain?.isBarrier([pLng, pLat]) && !this.foreign([pLng, pLat])) {
+                      n[i - j].lng = pLng;
+                      n[i - j].lat = pLat;
+                    }
+                  }
+                  if (i + j < len) {
+                    const pLng = n[i + j].lng + shiftLng * w;
+                    const pLat = n[i + j].lat + shiftLat * w;
+                    if (!this.terrain?.isBarrier([pLng, pLat]) && !this.foreign([pLng, pLat])) {
+                      n[i + j].lng = pLng;
+                      n[i + j].lat = pLat;
+                    }
+                  }
+                }
+              }
+            }
+
+            // 2. Garrison advances along dir BEHIND the leading front line, strictly in friendly territory
             if (stepKm > 0) {
               const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
-              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
+              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos) && this.side(nextPos) === u.team) {
                 u.pos = nextPos;
                 if (u.post) u.post = [nextPos[0], nextPos[1]];
               }
             }
 
-            // Front line lag restriction: strictly <= 1.0 km behind an advancing garrison
-            // Smoothly distribute catch-up to adjacent nodes to maintain continuous curvature without spikes
-            const curDist = distKm(u.pos, [n[i].lng, n[i].lat]);
-            if (curDist > 1.0) {
-              const excess = curDist - 1.0;
-              const toPostX = (u.pos[0] - n[i].lng) * ukx;
-              const toPostY = (u.pos[1] - n[i].lat) * 111.32;
-              const dLen = Math.hypot(toPostX, toPostY) || 1;
-              const shiftLng = ((toPostX / dLen) * excess) / ukx;
-              const shiftLat = ((toPostY / dLen) * excess) / 111.32;
-              n[i].lng += shiftLng;
-              n[i].lat += shiftLat;
-              if (i > 0) {
-                n[i - 1].lng += shiftLng * 0.6;
-                n[i - 1].lat += shiftLat * 0.6;
-              }
-              if (i < len - 1) {
-                n[i + 1].lng += shiftLng * 0.6;
-                n[i + 1].lat += shiftLat * 0.6;
-              }
-              if (i > 1) {
-                n[i - 2].lng += shiftLng * 0.25;
-                n[i - 2].lat += shiftLat * 0.25;
-              }
-              if (i < len - 2) {
-                n[i + 2].lng += shiftLng * 0.25;
-                n[i + 2].lat += shiftLat * 0.25;
+            // Waypoint completion
+            if (u.advancePath && u.advancePath.length > 0) {
+              if (distKm([n[i].lng, n[i].lat], u.advancePath[0]) < 0.8 || distKm(u.pos, u.advancePath[0]) < 0.8) {
+                u.advancePath.shift();
+                if (u.advancePath.length === 0) u.advancePath = undefined;
               }
             }
           } else if (isRetreating) {
@@ -4395,19 +4453,22 @@ export class Sim {
             u.retreatBoost = false;
             u.pushedDir = undefined;
           }
+
+          const post = w.posts?.find((p) => p.garrison.includes(u.id));
+          if (post) post.pos = [u.pos[0], u.pos[1]];
         }
       }
     };
 
     move(w.front, false, perNode);
 
-    // Guard against severe acute spikes/kinks (turning backward by > 107 deg) only when actively moving
-    // Prevents the front line from smoothing itself out or moving on its own when idle
+    // Guard against severe acute spikes/kinks (turning backward by > 78 deg) when active
+    // Smooths out sharp hinges (including river-land transitions) without drifting idle lines
     for (let i = 1; i < w.front.length - 1; i++) {
       const cur = w.front[i];
-      if (Math.abs(cur.v) === 0) continue;
       const p = w.front[i - 1];
       const n = w.front[i + 1];
+      if (Math.abs(cur.v) === 0 && Math.abs(p.v) === 0 && Math.abs(n.v) === 0) continue;
       const kx = kmPerDegLng(cur.lat);
       const v1x = (cur.lng - p.lng) * kx;
       const v1y = (cur.lat - p.lat) * 111.32;
@@ -4417,13 +4478,17 @@ export class Sim {
       const len2 = Math.hypot(v2x, v2y);
       if (len1 > 0 && len2 > 0) {
         const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
-        if (dot < -0.3) {
+        if (dot < 0.2) {
           const midLng = (p.lng + n.lng) / 2;
           const midLat = (p.lat + n.lat) / 2;
-          const k = 0.15;
+          const k = 0.25;
           const newLng = (1 - k) * cur.lng + k * midLng;
           const newLat = (1 - k) * cur.lat + k * midLat;
-          if (!this.terrain?.isBarrier([newLng, newLat])) {
+          if (
+            !this.terrain?.isBarrier([newLng, newLat]) &&
+            this.terrainAt([newLng, newLat]).id !== 'water' &&
+            !this.foreign([newLng, newLat])
+          ) {
             cur.lng = newLng;
             cur.lat = newLat;
           }

@@ -1118,7 +1118,23 @@ const ruEqualPosBefore = [ruEqualGarrison.pos[0], ruEqualGarrison.pos[1]];
 for (let s = 0; s < 10; s++) sim.step(1.0);
 assert.equal(distKm(uaEqualGarrison.pos, uaEqualPosBefore as [number, number]), 0, 'Equal forces UA garrison holds ground and does not retreat');
 assert.equal(distKm(ruEqualGarrison.pos, ruEqualPosBefore as [number, number]), 0, 'Equal forces RU garrison holds ground and does not retreat');
-console.log('✓ City Vision, Dnipro Water Stability, and Equal Forces Hold: Stepnohirsk 7.5km vision, static Dnipro line, equal garrisons hold position verified');
+
+// Natural smooth curvature across the entire front line (no sharp folding kinks near Dnipro or elsewhere)
+for (let i = 1; i < sim.world.front.length - 1; i++) {
+  const p = sim.world.front[i - 1];
+  const c = sim.world.front[i];
+  const n = sim.world.front[i + 1];
+  const kx = kmPerDegLng(c.lat);
+  const v1 = [(c.lng - p.lng) * kx, (c.lat - p.lat) * 111.32];
+  const v2 = [(n.lng - c.lng) * kx, (n.lat - c.lat) * 111.32];
+  const l1 = Math.hypot(v1[0], v1[1]);
+  const l2 = Math.hypot(v2[0], v2[1]);
+  if (l1 > 0.01 && l2 > 0.01) {
+    const dot = (v1[0] * v2[0] + v1[1] * v2[1]) / (l1 * l2);
+    assert.ok(dot > -0.65, `Front line at node ${i} has natural smooth transition without acute kinks (dot=${dot.toFixed(2)})`);
+  }
+}
+console.log('✓ City Vision, Dnipro Water Stability, and Equal Forces Hold: Stepnohirsk 7.5km vision, static Dnipro line, equal garrisons hold position, natural Dnipro curvature verified');
 
 // 47. Retreat Boundary Restrictions and Advance Route Equal Forces Stalemate
 // Retreat into enemy territory must be rejected
@@ -1163,7 +1179,21 @@ uaEqualGarrison.strength = 3; // 3 > 1 * 1.25
 sim.step(1.0);
 assert.equal(uaEqualGarrison.frontStatus, 'advancing', 'Superior garrison with advancePath advances');
 assert.equal(ruEqualGarrison.frontStatus, 'retreating', 'Opposing weaker garrison is pushed and retreats');
-console.log('✓ Retreat Territory Restrictions & Advance Equality: invalid retreat rejected, equal forces hold position, superior forces advance verified');
+assert.equal(sim.side(uaEqualGarrison.pos), uaEqualGarrison.team, 'Advancing garrison never crosses into enemy territory');
+
+const advNi = nearestNode(sim.world.front, uaEqualGarrison.pos);
+const advFrontNode = sim.world.front[advNi];
+const advKx = kmPerDegLng(uaEqualGarrison.pos[1]);
+const advDir = [
+  (ruEqualGarrison.pos[0] - uaEqualGarrison.pos[0]) * advKx,
+  (ruEqualGarrison.pos[1] - uaEqualGarrison.pos[1]) * 111.32,
+];
+const advD = Math.hypot(advDir[0], advDir[1]) || 1;
+const toFrontAdvX = (advFrontNode.lng - uaEqualGarrison.pos[0]) * advKx;
+const toFrontAdvY = (advFrontNode.lat - uaEqualGarrison.pos[1]) * 111.32;
+const projAhead = (toFrontAdvX * advDir[0] + toFrontAdvY * advDir[1]) / advD;
+assert.ok(projAhead >= 0.15, `Front line advances ahead of garrison, not behind it (projAhead=${projAhead.toFixed(2)} km)`);
+console.log('✓ Retreat Territory Restrictions & Advance Equality: invalid retreat rejected, equal forces hold position, superior forces advance, garrison strictly in friendly ground with front line leading ahead verified');
 
 // 48. Garrison Anti-Overtake, 2x Retreat Speed Boost, and Foreign Border Separation Buffer
 // 48.1 Anti-Overtake & 2x Retreat Boost:
