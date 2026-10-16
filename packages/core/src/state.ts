@@ -206,6 +206,8 @@ export interface Unit {
   advancePath?: LngLat[];
   /** Custom retreat route drawn by player for this frontline garrison. */
   retreatPath?: LngLat[];
+  /** Temporary 2x retreat boost when pressured or correcting position against advancing enemy. */
+  retreatBoost?: boolean;
   /** Building id that this logistics truck services. */
   serviceBuilding?: number;
   /** Direction vector pushed by advancing enemy. */

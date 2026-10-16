@@ -16,7 +16,7 @@ function findBotHqPos(sim: Sim, team: Team): LngLat {
   const step = Math.max(1, Math.floor(roads.length / 2500));
   for (let i = 0; i < roads.length; i += step) {
     const pt = roads[i];
-    if (!isDry(pt) || !farFromHqs(pt)) continue;
+    if (!isDry(pt) || !farFromHqs(pt) || sim.nearForeign(pt, 15)) continue;
     if (team === 0) {
       // Ukraine: West (lng <= 32.5), on Ukrainian side, far from front (>= 200 km)
       if (pt[0] <= 32.5 && sim.side(pt) === 0 && distToFrontKm(front, pt) >= 200) {
@@ -34,7 +34,7 @@ function findBotHqPos(sim: Sim, team: Team): LngLat {
   if (!candidates.length) {
     for (let i = 0; i < roads.length; i += step) {
       const pt = roads[i];
-      if (!isDry(pt) || !farFromHqs(pt)) continue;
+      if (!isDry(pt) || !farFromHqs(pt) || sim.nearForeign(pt, 15)) continue;
       if (team === 0) {
         if (pt[0] <= 33.5 && sim.side(pt) === 0 && distToFrontKm(front, pt) >= 160) {
           candidates.push(pt);
@@ -52,7 +52,7 @@ function findBotHqPos(sim: Sim, team: Team): LngLat {
     const ang = Math.random() * Math.PI * 2;
     const r = 0.05 + Math.random() * 0.1;
     const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
-    if (isDry(nudged) && farFromHqs(nudged)) return nudged;
+    if (isDry(nudged) && farFromHqs(nudged) && !sim.nearForeign(nudged, 15)) return nudged;
     return pick;
   }
 
@@ -74,7 +74,7 @@ function findBotMilitaryBasePos(sim: Sim, team: Team): LngLat | null {
 
   for (let i = 0; i < roads.length; i += step) {
     const pt = roads[i];
-    if (!isDry(pt) || sim.side(pt) !== team || !farFromBases(pt)) continue;
+    if (!isDry(pt) || sim.side(pt) !== team || !farFromBases(pt) || sim.nearForeign(pt, 15)) continue;
     const dist = Math.abs(distToFrontKm(front, pt));
     if (dist < 5) continue; // avoid active front edge
 
@@ -93,13 +93,13 @@ function findBotMilitaryBasePos(sim: Sim, team: Team): LngLat | null {
     const ang = Math.random() * Math.PI * 2;
     const r = 0.05 + Math.random() * 0.15;
     const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
-    if (isDry(nudged) && sim.side(nudged) === team && farFromBases(nudged)) return nudged;
-    if (farFromBases(pick)) return pick;
+    if (isDry(nudged) && sim.side(nudged) === team && farFromBases(nudged) && !sim.nearForeign(nudged, 15)) return nudged;
+    if (farFromBases(pick) && !sim.nearForeign(pick, 15)) return pick;
   }
   return list[0];
 }
 
-/** Finds a location for a warehouse at ~80 km distance from the front line, maintaining >= 100 km spacing from other warehouses */
+/** Finds a location for a warehouse at ~70 km distance from the front line, maintaining >= 100 km spacing from other warehouses */
 function findBotWarehousePos(sim: Sim, team: Team): LngLat | null {
   const roads = sim.roads?.nodes ?? [];
   const front = sim.world.front;
@@ -113,14 +113,14 @@ function findBotWarehousePos(sim: Sim, team: Team): LngLat | null {
 
   for (let i = 0; i < roads.length; i += step) {
     const pt = roads[i];
-    if (!isDry(pt) || sim.side(pt) !== team || !farFromWarehouses(pt)) continue;
+    if (!isDry(pt) || sim.side(pt) !== team || !farFromWarehouses(pt) || sim.nearForeign(pt, 15)) continue;
     const dist = Math.abs(distToFrontKm(front, pt));
     if (dist < 20) continue;
 
-    // Target ~80 km from the front line (65-95 km ideal)
-    if (dist >= 65 && dist <= 95) {
+    // Target ~70 km from the front line (55-85 km ideal, acceptable 40-110 km - 10 km closer than before)
+    if (dist >= 55 && dist <= 85) {
       idealCandidates.push(pt);
-    } else if (dist >= 50 && dist <= 120) {
+    } else if (dist >= 40 && dist <= 110) {
       acceptableCandidates.push(pt);
     }
   }
@@ -133,8 +133,8 @@ function findBotWarehousePos(sim: Sim, team: Team): LngLat | null {
     const ang = Math.random() * Math.PI * 2;
     const r = 0.05 + Math.random() * 0.15;
     const nudged = offsetKm(pick, Math.cos(ang) * r, Math.sin(ang) * r);
-    if (isDry(nudged) && sim.side(nudged) === team && farFromWarehouses(nudged)) return nudged;
-    if (farFromWarehouses(pick)) return pick;
+    if (isDry(nudged) && sim.side(nudged) === team && farFromWarehouses(nudged) && !sim.nearForeign(nudged, 15)) return nudged;
+    if (farFromWarehouses(pick) && !sim.nearForeign(pick, 15)) return pick;
   }
   return list[0];
 }

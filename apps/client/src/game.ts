@@ -1,7 +1,7 @@
 import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
-  DEBUFFS, DEPOSITS, depositsGeoJSON, distKm, distToFrontKm, forbiddenRings, formationSpot, inDeposit, inOccupied, inPolygon, isReconDrone, isStrikeDrone, LIBERATED_CELL, offsetKm, pointInRing, proceduralTerrain, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  DEBUFFS, DEPOSITS, depositsGeoJSON, distKm, distToFrontKm, forbiddenRings, formationSpot, inDeposit, inOccupied, inPolygon, isReconDrone, isStrikeDrone, kmPerDegLng, LIBERATED_CELL, offsetKm, pointInRing, proceduralTerrain, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ResourceDeposit, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 
@@ -520,6 +520,36 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   let matchDeposits: ResourceDeposit[] | undefined;
   function foreignAt(p: LngLat): boolean {
     return forbidden.some((r) => inPolygon(p, r));
+  }
+
+  function nearForeignAt(p: LngLat, marginKm = 15): boolean {
+    if (foreignAt(p)) return true;
+    if (!forbidden.length) return false;
+    const kx = kmPerDegLng(p[1]);
+    const dLng = marginKm / kx;
+    const dLat = marginKm / 111.32;
+    for (const ring of forbidden) {
+      for (let i = 0; i < ring.length - 1; i++) {
+        const a = ring[i];
+        const c = ring[i + 1];
+        const minX = Math.min(a[0], c[0]) - dLng;
+        const maxX = Math.max(a[0], c[0]) + dLng;
+        const minY = Math.min(a[1], c[1]) - dLat;
+        const maxY = Math.max(a[1], c[1]) + dLat;
+        if (p[0] < minX || p[0] > maxX || p[1] < minY || p[1] > maxY) continue;
+        const acX = (c[0] - a[0]) * kx;
+        const acY = (c[1] - a[1]) * 111.32;
+        const apX = (p[0] - a[0]) * kx;
+        const apY = (p[1] - a[1]) * 111.32;
+        const lenSq = acX * acX + acY * acY;
+        let t = lenSq > 0 ? (apX * acX + apY * acY) / lenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        const projX = a[0] + (c[0] - a[0]) * t;
+        const projY = a[1] + (c[1] - a[1]) * t;
+        if (distKm(p, [projX, projY]) <= marginKm) return true;
+      }
+    }
+    return false;
   }
 
   const fullWest = 20.5;
@@ -1552,6 +1582,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'Недостаточно денег';
     if (def.id === 'hq') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
+      if (foreignAt(p) || nearForeignAt(p, 15)) return 'Нельзя строить ближе 15 км к границе с нейтральным государством';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (myHq) return 'Военный штаб уже построен (максимум 1)';
       const clash = snap.buildings.find((b) => b.def === 'hq' && distKm(b.pos, p) < 100);
@@ -1561,7 +1592,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (def.id === 'military_base') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
-      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      if (foreignAt(p) || nearForeignAt(p, 15)) return 'Нельзя строить ближе 15 км к границе с нейтральным государством';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (!myHq) return 'Сначала необходимо построить Военный штаб';
       const clash = snap.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, p) < 20);
@@ -1581,7 +1612,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (def.id === 'warehouse') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
-      if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
+      if (foreignAt(p) || nearForeignAt(p, 15)) return 'Нельзя строить ближе 15 км к границе с нейтральным государством';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (!myHq) return 'Сначала необходимо построить Военный штаб';
       const clash = snap.buildings.find((b) => b.def === 'warehouse' && distKm(b.pos, p) < 100);

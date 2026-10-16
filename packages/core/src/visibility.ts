@@ -139,6 +139,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           frontStatus: u.frontStatus,
           advancePath: u.team === team && u.advancePath ? u.advancePath.map(p4) : undefined,
           retreatPath: u.team === team && u.retreatPath ? u.retreatPath.map(p4) : undefined,
+          retreatBoost: u.team === team ? u.retreatBoost : undefined,
           serviceBuilding: own ? u.serviceBuilding : undefined,
         };
       }),

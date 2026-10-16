@@ -2,7 +2,7 @@ import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
 import { Bot } from '../../../services/game/src/application/bot';
-import { Sim, offsetKm, distToFrontKm, distKm, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses, nearestNode, normalAt, snapshotFor, type Unit } from '../src';
+import { Sim, offsetKm, distToFrontKm, distKm, kmPerDegLng, DEPOSITS, inDeposit, depositsGeoJSON, generateCityHouses, nearestNode, normalAt, snapshotFor, type Unit, type LngLat } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -1164,6 +1164,83 @@ sim.step(1.0);
 assert.equal(uaEqualGarrison.frontStatus, 'advancing', 'Superior garrison with advancePath advances');
 assert.equal(ruEqualGarrison.frontStatus, 'retreating', 'Opposing weaker garrison is pushed and retreats');
 console.log('✓ Retreat Territory Restrictions & Advance Equality: invalid retreat rejected, equal forces hold position, superior forces advance verified');
+
+// 48. Garrison Anti-Overtake, 2x Retreat Speed Boost, and Foreign Border Separation Buffer
+// 48.1 Anti-Overtake & 2x Retreat Boost:
+// Position attacker and defender along front line:
+uaEqualGarrison.strength = 5; // superior
+ruEqualGarrison.strength = 1;
+ruEqualGarrison.ammo = 50;
+uaEqualGarrison.ammo = 50;
+ruEqualGarrison.pos = [35.5, 47.5];
+uaEqualGarrison.pos = offsetKm(ruEqualGarrison.pos, 0, 1.2); // 1.2 km distance (< 1.4 km triggers retreatBoost)
+uaEqualGarrison.advancePath = [ruEqualGarrison.pos];
+
+// Step simulation: Attacker pushes, defender retreats
+sim.step(1.0);
+assert.equal(uaEqualGarrison.frontStatus, 'advancing', 'Attacker is advancing');
+assert.equal(ruEqualGarrison.frontStatus, 'retreating', 'Defender is retreating');
+assert.ok(ruEqualGarrison.retreatBoost, 'Defender receives 2x retreat speed boost when pressed within 1.4 km');
+
+// Test strict anti-overtake: artificially place attacker right on top of / within 0.95 km of defender
+uaEqualGarrison.pos = offsetKm(ruEqualGarrison.pos, 0, 0.5); // 0.5 km (< 0.95 km buffer)
+const attackerPosStuck = [uaEqualGarrison.pos[0], uaEqualGarrison.pos[1]];
+sim.step(0.1);
+// Attacker must have halted or maintained distance >= 0.95 km (never overtaken or stepped closer)
+assert.ok(distKm(uaEqualGarrison.pos, attackerPosStuck as [number, number]) < 0.001, 'Attacker holds position and cannot advance into the 0.95 km buffer');
+
+// When defender retreats beyond 1.6 km directly ahead along the advance route:
+ruEqualGarrison.pos = offsetKm(uaEqualGarrison.pos, 0, 1.8);
+uaEqualGarrison.advancePath = [ruEqualGarrison.pos];
+sim.step(1.0);
+assert.ok(!ruEqualGarrison.retreatBoost, 'Retreat boost turns off once safe distance >= 1.6 km is re-established');
+
+// When defender retreats beyond visibility (> 2.2 km), it stops retreat boost and holds
+ruEqualGarrison.pos = offsetKm(uaEqualGarrison.pos, 0, 3.0);
+ruEqualGarrison.advancePath = undefined;
+ruEqualGarrison.retreatPath = undefined;
+sim.step(1.0);
+assert.ok(!ruEqualGarrison.retreatBoost, 'Retreat boost turns off beyond visibility (> 2.2 km)');
+assert.equal(ruEqualGarrison.frontStatus, 'holding', 'Defender stops retreating beyond visibility and holds');
+
+// 48.2 Foreign Border Protection:
+// Find point near foreign border (Belarus border)
+if (sim.forbidden.length > 0 && sim.forbidden[0].length > 0) {
+  const borderPt = sim.forbidden[0][0]; // on the border
+  assert.ok(sim.nearForeign(borderPt, 15), 'Point on/near foreign border is identified as nearForeign');
+
+  // Attempt to build military_base near foreign border:
+  const p1 = sim.player('player1')!;
+  p1.res.money = 100000;
+  p1.res.metal = 50000;
+  // Point within 15 km of foreign border inside Ukraine
+  let ptNearBorder: LngLat | null = null;
+  for (let dKm = 1; dKm <= 14; dKm++) {
+    const candidate: LngLat = [borderPt[0], borderPt[1] - dKm / 111.32];
+    if (sim.isPlayableGround(candidate) && sim.side(candidate) === 0 && sim.nearForeign(candidate, 15)) {
+      ptNearBorder = candidate;
+      break;
+    }
+  }
+  if (ptNearBorder) {
+    const buildRes = sim.apply('player1', {
+      type: 'build',
+      def: 'military_base',
+      pos: ptNearBorder,
+    });
+    assert.ok(!buildRes.ok, 'Building military base < 15 km from foreign border must fail');
+    assert.ok(buildRes.reason.includes('15 km'), `Rejection message mentions 15 km: ${buildRes.reason}`);
+  }
+
+  // Unit spawning safety: spawnUnit must never place ground unit inside foreign territory
+  const foreignPt: LngLat = [borderPt[0], borderPt[1] + 5.0 / 111.32];
+  if (sim.foreign(foreignPt)) {
+    const spawned = sim.spawnUnit('infantry', p1, foreignPt);
+    assert.ok(!sim.foreign(spawned.pos), 'spawnUnit never places a unit inside foreign territory');
+  }
+}
+
+console.log('✓ Garrison Anti-Overtake, 2x Retreat Speed Boost, and Foreign Border Separation Buffer verified');
 
 console.log('All reboot tests passed successfully!');
 

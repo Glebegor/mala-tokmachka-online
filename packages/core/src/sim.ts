@@ -305,7 +305,7 @@ export class Sim {
 
   spawnUnit(def: string, p: Player, pos: LngLat): Unit {
     const d = this.defs.u.get(def)!;
-    pos = this.dry(d, pos);
+    pos = this.dry(d, pos, p.team);
     const recon = isReconDrone(d);
     const u: Unit = {
       id: this.world.nextId++, def, owner: p.id, team: p.team, pos, hp: d.hp * this.ranks[0].hp, target: null, cooldown: 0, xp: 0, rank: 0,
@@ -339,7 +339,7 @@ export class Sim {
       const u = this.world.units.find((x) => x.id === id);
       if (!u) continue;
       u.embarkedIn = undefined;
-      u.pos = this.dry(this.defs.u.get(u.def)!, [t.pos[0] + 0.01, t.pos[1] + 0.01]);
+      u.pos = this.dry(this.defs.u.get(u.def)!, [t.pos[0] + 0.01, t.pos[1] + 0.01], u.team);
       (u.path = []), (u.target = null);
     }
     if (t.cargo) t.cargo.passengers = [];
@@ -509,13 +509,21 @@ export class Sim {
     return best ? [route(best.pos, b.pos)] : [];
   }
 
-  /** Never drop a ground unit into a river: fall back to dry spots around the intended position. */
-  private dry(d: UnitDef, pos: LngLat): LngLat {
-    if (!this.blockedFor(d) || !this.terrain?.isBarrier(pos)) return pos;
+  /** Never drop a ground unit into water, foreign or enemy territory: fall back to valid friendly dry spots. */
+  private dry(d: UnitDef, pos: LngLat, team?: Team): LngLat {
+    const isInvalid = (q: LngLat) => {
+      if (this.foreign(q)) return true;
+      if (this.blockedFor(d) && this.terrain?.isBarrier(q)) return true;
+      if (team !== undefined && this.side(q) !== team) return true;
+      return false;
+    };
+
+    if (!isInvalid(pos)) return pos;
+
     for (let k = 1; k <= 32; k++) {
-      const r = 0.02 * Math.ceil(k / 8);
+      const r = 0.015 * Math.ceil(k / 8);
       const q: LngLat = [pos[0] + r * Math.cos(k * 0.785), pos[1] + r * 0.7 * Math.sin(k * 0.785)];
-      if (!this.terrain.isBarrier(q)) return q;
+      if (!isInvalid(q)) return q;
     }
     return pos;
   }
@@ -524,7 +532,7 @@ export class Sim {
   private evict(b: Building, hpMult = 1) {
     b.inside.forEach((u, i) => {
       const d = this.defs.u.get(u.def)!;
-      u.pos = this.dry(d, [b.pos[0] + 0.022 * Math.cos(i * 1.1 + 0.4), b.pos[1] + 0.016 * Math.sin(i * 1.1 + 0.4)]);
+      u.pos = this.dry(d, [b.pos[0] + 0.022 * Math.cos(i * 1.1 + 0.4), b.pos[1] + 0.016 * Math.sin(i * 1.1 + 0.4)], b.team);
       u.hp = Math.max(1, u.hp * hpMult);
       u.path = [];
       u.target = null;
@@ -759,20 +767,21 @@ export class Sim {
         if (this.terrainAt(cmd.pos).id === 'water') return fail('cannot build on water');
         // Military HQ and Military Base can be placed anywhere on playable dry ground
         if (d.id === 'hq') {
+          if (this.nearForeign(cmd.pos, 15)) return fail('keep at least 15 km from borders of neighbouring states');
           const clash = w.buildings.find((b) => b.def === 'hq' && distKm(b.pos, cmd.pos) < 100);
           if (clash) return fail('keep at least 100 km from other military HQs');
         } else if (d.id === 'military_base') {
           const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
           if (!hasHq) return fail('must place military HQ first');
           if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
-          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
+          if (this.foreign(cmd.pos) || this.nearForeign(cmd.pos, 15)) return fail('keep at least 15 km from borders of neighbouring states');
           const clash = w.buildings.find((b) => b.def === 'military_base' && distKm(b.pos, cmd.pos) < 20);
           if (clash) return fail('keep at least 20 km from other military bases');
         } else if (d.id === 'warehouse') {
           const hasHq = w.buildings.some((b) => b.owner === p.id && b.def === 'hq');
           if (!hasHq) return fail('must place military HQ first');
           if (this.side(cmd.pos) !== p.team) return fail('cannot build on enemy territory');
-          if (this.foreign(cmd.pos)) return fail('cannot build on territory of neighbouring states');
+          if (this.foreign(cmd.pos) || this.nearForeign(cmd.pos, 15)) return fail('keep at least 15 km from borders of neighbouring states');
           const clash = w.buildings.find((b) => b.def === 'warehouse' && distKm(b.pos, cmd.pos) < 100);
           if (clash) return fail('keep at least 100 km from other warehouses');
         } else if (d.id === 'mine') {
@@ -1456,6 +1465,44 @@ export class Sim {
       const b = this.ringBoxes![i];
       return p[0] >= b[0] && p[0] <= b[2] && p[1] >= b[1] && p[1] <= b[3] && inPolygon(p, r);
     });
+  }
+
+  /** Within marginKm of a neighbouring country's border? */
+  nearForeign(p: LngLat, marginKm = 15): boolean {
+    if (this.foreign(p)) return true;
+    if (!this.forbidden.length) return false;
+    this.ringBoxes ??= this.forbidden.map((r) => [Math.min(...r.map((q) => q[0])), Math.min(...r.map((q) => q[1])), Math.max(...r.map((q) => q[0])), Math.max(...r.map((q) => q[1]))]);
+    const kx = kmPerDegLng(p[1]);
+    const dLng = marginKm / kx;
+    const dLat = marginKm / 111.32;
+    const pBox = [p[0] - dLng, p[1] - dLat, p[0] + dLng, p[1] + dLat];
+
+    for (let rIdx = 0; rIdx < this.forbidden.length; rIdx++) {
+      const b = this.ringBoxes[rIdx];
+      if (pBox[2] < b[0] || pBox[0] > b[2] || pBox[3] < b[1] || pBox[1] > b[3]) continue;
+      const ring = this.forbidden[rIdx];
+      for (let i = 0; i < ring.length - 1; i++) {
+        const a = ring[i];
+        const c = ring[i + 1];
+        const minX = Math.min(a[0], c[0]) - dLng;
+        const maxX = Math.max(a[0], c[0]) + dLng;
+        const minY = Math.min(a[1], c[1]) - dLat;
+        const maxY = Math.max(a[1], c[1]) + dLat;
+        if (p[0] < minX || p[0] > maxX || p[1] < minY || p[1] > maxY) continue;
+
+        const acX = (c[0] - a[0]) * kx;
+        const acY = (c[1] - a[1]) * 111.32;
+        const apX = (p[0] - a[0]) * kx;
+        const apY = (p[1] - a[1]) * 111.32;
+        const lenSq = acX * acX + acY * acY;
+        let t = lenSq > 0 ? (apX * acX + apY * acY) / lenSq : 0;
+        t = Math.max(0, Math.min(1, t));
+        const projX = a[0] + (c[0] - a[0]) * t;
+        const projY = a[1] + (c[1] - a[1]) * t;
+        if (distKm(p, [projX, projY]) <= marginKm) return true;
+      }
+    }
+    return false;
   }
 
   /** One stretch without boats: straight if open, by road if that is quicker (or the only way). */
@@ -4208,10 +4255,11 @@ export class Sim {
           const isAdvancing = hasAdvancePath ? (hasSuperiority && myAmmo > 0) : (!isHoldingAssault && (u.team === 0 ? v > 0.0005 : v < -0.0005) && hasSuperiority && myAmmo > 0);
           const isRetreating = !hasAdvancePath && (hasRetreatPath || myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)) || u.pushedDir !== undefined);
 
+          const opp: any = oppGarrison;
           if (isAdvancing) {
             u.frontStatus = 'advancing';
-            if (oppGarrison) {
-              (oppGarrison as Unit).frontStatus = 'retreating';
+            if (opp) {
+              opp.frontStatus = 'retreating';
             }
             // Waypoint following for advance:
             if (u.advancePath && u.advancePath.length > 0) {
@@ -4231,15 +4279,47 @@ export class Sim {
               dir = u.team === 0 ? [nx, ny] : [-nx, -ny];
             }
 
-            if (oppGarrison) {
-              (oppGarrison as Unit).pushedDir = [dir[0], dir[1]];
+            let stepKm = Math.max(0.012, Math.abs(v)) * dt;
+
+            if (opp) {
+              const toOppX = (opp.pos[0] - u.pos[0]) * ukx;
+              const toOppY = (opp.pos[1] - u.pos[1]) * 111.32;
+              const distToOpp = Math.hypot(toOppX, toOppY);
+              const projAlong = toOppX * dir[0] + toOppY * dir[1];
+
+              // Push direction mirrors the advancing garrison's current trajectory
+              opp.pushedDir = [dir[0], dir[1]];
+
+              // Defender retreat boost control:
+              // If pressed (< 1.4 km) or defender is misaligned (projection along advance < 1.1 km):
+              if (distToOpp < 1.4 || (distToOpp < 2.0 && projAlong < 1.1)) {
+                opp.retreatBoost = true;
+              } else if (distToOpp >= 1.6 && projAlong >= 1.4) {
+                opp.retreatBoost = false;
+              }
+
+              // Anti-overtake: Attacker can NEVER get closer than 0.95 km or overtake defending garrison
+              const minBufferKm = 0.95;
+              const nextPosTentative: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+              const nextDist = distKm(nextPosTentative, opp.pos);
+              if (distToOpp < 1.4 && projAlong < 0) {
+                // Attacker ended up past/behind the defender: halt until defender repositions in front
+                stepKm = 0;
+              } else if (nextDist < minBufferKm) {
+                if (distToOpp > minBufferKm) {
+                  stepKm = Math.min(stepKm, Math.max(0, distToOpp - minBufferKm));
+                } else {
+                  stepKm = 0; // Hold until defender pulls back
+                }
+              }
             }
 
-            const stepKm = Math.max(0.012, Math.abs(v)) * dt;
-            const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
-            if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
-              u.pos = nextPos;
-              if (u.post) u.post = [nextPos[0], nextPos[1]];
+            if (stepKm > 0) {
+              const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
+                u.pos = nextPos;
+                if (u.post) u.post = [nextPos[0], nextPos[1]];
+              }
             }
 
             // Front line lag restriction: strictly <= 1.0 km behind an advancing garrison
@@ -4281,27 +4361,39 @@ export class Sim {
               if (u.retreatPath.length === 0) u.retreatPath = undefined;
             }
             let dir: [number, number];
-            if (u.pushedDir) {
-              dir = [u.pushedDir[0], u.pushedDir[1]];
-              u.pushedDir = undefined;
-            } else if (u.retreatPath && u.retreatPath.length > 0) {
+            if (u.retreatPath && u.retreatPath.length > 0) {
               const targetPt = u.retreatPath[0];
               const dxKm = (targetPt[0] - u.pos[0]) * ukx;
               const dyKm = (targetPt[1] - u.pos[1]) * 111.32;
               const dLen = Math.hypot(dxKm, dyKm) || 1;
               dir = [dxKm / dLen, dyKm / dLen];
+            } else if (u.pushedDir) {
+              dir = [u.pushedDir[0], u.pushedDir[1]];
             } else {
               dir = u.team === 0 ? [-nx, -ny] : [nx, ny];
             }
 
-            const stepKm = Math.max(0.008, Math.abs(v)) * dt;
-            const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
-            if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
-              u.pos = nextPos;
-              if (u.post) u.post = [nextPos[0], nextPos[1]];
+            const distToNode = distKm(u.pos, nodePos);
+            const distToEnemy = opp ? distKm(u.pos, opp.pos) : distToNode;
+
+            // Defender must not retreat farther than visibility (~2.2 km) with this boost unless having a manual retreat route
+            if (!u.retreatPath && distToEnemy > 2.2 && (u.ammo ?? 0) > 0) {
+              u.retreatBoost = false;
+              u.pushedDir = undefined;
+              u.frontStatus = 'holding';
+            } else {
+              const baseSpeed = Math.max(0.012, Math.abs(v)) * dt;
+              const stepKm = u.retreatBoost ? baseSpeed * 2.0 : baseSpeed;
+              const nextPos: LngLat = [u.pos[0] + (dir[0] * stepKm) / ukx, u.pos[1] + (dir[1] * stepKm) / 111.32];
+              if (!this.terrain?.isBarrier(nextPos) && !this.foreign(nextPos)) {
+                u.pos = nextPos;
+                if (u.post) u.post = [nextPos[0], nextPos[1]];
+              }
             }
           } else {
             u.frontStatus = 'holding';
+            u.retreatBoost = false;
+            u.pushedDir = undefined;
           }
         }
       }
