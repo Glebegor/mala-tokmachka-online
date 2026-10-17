@@ -1066,7 +1066,7 @@ export class Sim {
         }
 
         const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
-        const tgtOwner = this.side(tgtCenter);
+        const tgtOwner = this.tileMap ? this.tileMap.ownerOf(tgtCell[0], tgtCell[1]) : this.side(tgtCenter);
 
         // Friendly tile movement (redeploy garrison over 60s)
         if (tgtOwner === u.team) {
@@ -1921,7 +1921,8 @@ export class Sim {
     this.stepMarchingGarrisons(dt);
     this.updateTileAssaults(dt);
     if (w.tick % r.tickRate === 0) this.frontlineGarrisons(1.0);
-    if (!peace && w.tick % (r.tickRate * 2) === 0) this.salientGarrisonSplitting();
+    if (!peace && !this.tileMap && w.tick % (r.tickRate * 2) === 0) this.salientGarrisonSplitting();
+    if (!peace && w.tick % (r.tickRate * 5) === 0) this.rebalanceTileFrontlineGaps();
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
     if (!peace) this.frontline(dt), (this.occ.tick = -1); // the line moved: territory index is stale
     if (!peace && w.tick % r.tickRate === 5 && this.breakthrough()) this.occ.tick = -1;
@@ -1931,6 +1932,26 @@ export class Sim {
     if (w.tick % 5 === 0) this.countCrowds();
     if (w.tick % 2 === 0) this.refreshStatus();
     if (!peace && w.tick % r.tickRate === 0) this.greyZones(), this.liberation();
+
+    // In tile mode, remove any idle frontline garrison that ended up stranded deep in enemy territory
+    if (this.tileMap && w.tick % (r.tickRate * 3) === 0) {
+      for (const u of w.units) {
+        if (u.hp <= 0 || u.embarkedIn || u.assault || (this.defs.u.get(u.def)?.kind === 'air')) continue;
+        const isGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
+        if (!isGarrison) continue;
+        const [ux, uy] = cellOf(u.pos);
+        if (this.tileMap.ownerOf(ux, uy) !== u.team) {
+          const inCauldron = w.pockets.some((p) => p.team === u.team && pointInRing(p.nodes, u.pos));
+          if (!inCauldron) {
+            const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+            const hasFriendlyNeighbor = dirs.some(([dx, dy]) => this.tileMap.ownerOf(ux + dx, uy + dy) === u.team);
+            if (!hasFriendlyNeighbor) {
+              u.hp = 0;
+            }
+          }
+        }
+      }
+    }
     if (r.peaceSeconds > 0 && w.time >= r.peaceSeconds && w.time - dt < r.peaceSeconds) this.hooks.emit('ceasefireOver', {});
 
     if (Math.floor(w.time) !== prevSec) this.hooks.emit('tick', { time: Math.floor(w.time) });
@@ -2010,6 +2031,16 @@ export class Sim {
       // Assault completed (60 seconds elapsed)
       if (a.elapsed >= a.total) {
         if (a.isRelocation) {
+          // Relocation must strictly target friendly territory!
+          const tileOwner = this.tileMap ? this.tileMap.ownerOf(tgtCell[0], tgtCell[1]) : this.side(a.targetPos);
+          if (tileOwner !== u.team) {
+            // Cannot relocate into enemy ground without combat! Abort relocation and return to startPos
+            u.pos = [a.startPos[0], a.startPos[1]];
+            u.assault = undefined;
+            u.frontStatus = 'holding';
+            continue;
+          }
+
           const friend = w.units.find(
             (x) => x.team === u.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === tgtCell[0] && cellOf(x.pos)[1] === tgtCell[1] && x.id !== u.id
           );
@@ -2157,14 +2188,15 @@ export class Sim {
 
     const hasOrthogonalEnemy = (cx: number, cy: number, opp: Team) => {
       const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-      return dirs.some(([dx, dy]) => this.side(cellCenter(cx + dx, cy + dy)) === opp);
+      return dirs.some(([dx, dy]) => (this.tileMap ? this.tileMap.ownerOf(cx + dx, cy + dy) : this.side(cellCenter(cx + dx, cy + dy))) === opp);
     };
 
     const isBorderTile = (cx: number, cy: number) => {
       const pos = cellCenter(cx, cy);
       if (pos[0] < 35.35 && pos[1] < 47.7) return false; // Dnipro
+      const owner = this.tileMap ? this.tileMap.ownerOf(cx, cy) : this.side(pos);
       return (
-        this.side(pos) === team &&
+        owner === team &&
         this.isPlayableGround(pos) &&
         this.terrainAt(pos).id !== 'water' &&
         !this.foreign(pos) &&
@@ -2182,10 +2214,10 @@ export class Sim {
            (x.assault && x.assault.targetCell[0] === cx && x.assault.targetCell[1] === cy))
       );
 
-    // 1. Find all empty border tiles in the active sector (within 10 tiles of capturedCell)
+    // 1. Find all empty border tiles in the active sector (within 4 tiles of capturedCell)
     const emptyBorderTiles: [number, number][] = [];
-    for (let dx = -10; dx <= 10; dx++) {
-      for (let dy = -10; dy <= 10; dy++) {
+    for (let dx = -4; dx <= 4; dx++) {
+      for (let dy = -4; dy <= 4; dy++) {
         const cx = capturedCell[0] + dx;
         const cy = capturedCell[1] + dy;
         if (isBorderTile(cx, cy) && !hasStationedGarrison(cx, cy)) {
@@ -2201,7 +2233,7 @@ export class Sim {
       return da - db;
     });
 
-    // 2. Cover empty border tiles ONLY by taking troops from garrisons with strength >= 2.
+    // 2. Cover empty border tiles ONLY by taking troops from immediately neighboring garrisons (d <= 2 tiles) with strength >= 2.
     // The squad leaves the donor garrison (donor strength falls by 1) and marches over 60s to the free tile.
     for (const emptyTile of [...emptyBorderTiles]) {
       let bestDonor: Unit | null = null;
@@ -2214,8 +2246,9 @@ export class Sim {
         if ((g.strength ?? 1) < 2) continue; // ONLY strength 2 and higher!
 
         const gPos = cellOf(g.pos);
-        const d = Math.hypot(gPos[0] - emptyTile[0], gPos[1] - emptyTile[1]);
-        if (d <= 15 && d < minD) {
+        // User rule: only immediately neighboring / adjacent garrisons can cover (d <= 2 tiles max, no cross-map marching)!
+        const d = Math.max(Math.abs(gPos[0] - emptyTile[0]), Math.abs(gPos[1] - emptyTile[1]));
+        if (d <= 2 && d < minD) {
           minD = d;
           bestDonor = g;
         }
@@ -2247,7 +2280,7 @@ export class Sim {
         newG.frontStatus = 'advancing';
 
         this.hooks?.emit('toast', {
-          text: `Выделен гарнизон для прикрытия тайла [${emptyTile[0]}, ${emptyTile[1]}] (выдвинулся из [${cellOf(bestDonor.pos)[0]}, ${cellOf(bestDonor.pos)[1]}], сила донора: ${bestDonor.strength})`,
+          text: `Выделен гарнизон для прикрытия соседнего тайла [${emptyTile[0]}, ${emptyTile[1]}] (выдвинулся из [${cellOf(bestDonor.pos)[0]}, ${cellOf(bestDonor.pos)[1]}], сила донора: ${bestDonor.strength})`,
         });
 
         const idx = emptyBorderTiles.indexOf(emptyTile);
@@ -2262,20 +2295,21 @@ export class Sim {
       if (!isFront) return false;
       if (attackingUnit && g.id === attackingUnit.id) return false;
       const [gx, gy] = cellOf(g.pos);
-      if (Math.abs(gx - capturedCell[0]) > 10 || Math.abs(gy - capturedCell[1]) > 10) return false;
+      if (Math.abs(gx - capturedCell[0]) > 4 || Math.abs(gy - capturedCell[1]) > 4) return false;
       return !hasOrthogonalEnemy(gx, gy, oppTeam);
     });
 
     for (const g of strandedGarrisons) {
-      // Rear garrison without enemy borders: stack with nearest frontline garrison
+      // Rear garrison without enemy borders: merge with adjacent frontline garrison (within 2 tiles!)
       let nearestFg: Unit | null = null;
       let minD = Infinity;
+      const [gx, gy] = cellOf(g.pos);
       for (const fg of w.units) {
         if (fg.team === team && fg.id !== g.id && fg.hp > 0 && !fg.embarkedIn && !fg.assault) {
           const [fgx, fgy] = cellOf(fg.pos);
           if (hasOrthogonalEnemy(fgx, fgy, oppTeam)) {
-            const d = distKm(g.pos, fg.pos);
-            if (d < minD) {
+            const d = Math.max(Math.abs(gx - fgx), Math.abs(gy - fgy));
+            if (d <= 2 && d < minD) {
               minD = d;
               nearestFg = fg;
             }
@@ -2294,8 +2328,85 @@ export class Sim {
         };
         g.frontStatus = 'advancing';
         this.hooks?.emit('toast', {
-          text: `Гарнизон переходит для усиления позиции [${tgt[0]}, ${tgt[1]}]`,
+          text: `Гарнизон переходит для усиления соседней позиции [${tgt[0]}, ${tgt[1]}]`,
         });
+      }
+    }
+  }
+
+  /**
+   * Periodic check (every 5s) for empty friendly border tiles.
+   * If a border tile has no stationed garrison, an immediately adjacent / neighboring (d <= 2)
+   * friendly garrison with strength >= 2 detaches a squad to cover it.
+   * Garrisons from far away are NEVER pulled.
+   */
+  private rebalanceTileFrontlineGaps() {
+    if (!this.tileMap) return;
+    const w = this.world;
+
+    for (const team of [0, 1] as const) {
+      const borderTiles = this.tileMap.getBorderTiles(team);
+
+      const isCoveredByNearbyGarrison = (cx: number, cy: number) =>
+        w.units.some(
+          (x) =>
+            x.team === team &&
+            x.hp > 0 &&
+            !x.embarkedIn &&
+            ((!x.assault && Math.max(Math.abs(cellOf(x.pos)[0] - cx), Math.abs(cellOf(x.pos)[1] - cy)) <= 1) ||
+             (x.assault && Math.max(Math.abs(x.assault.targetCell[0] - cx), Math.abs(x.assault.targetCell[1] - cy)) <= 1))
+        );
+
+      for (const [cx, cy] of borderTiles) {
+        const pos = cellCenter(cx, cy);
+        if (pos[0] < 35.35 && pos[1] < 47.7) continue; // Dnipro river
+        if (!this.isPlayableGround(pos) || this.terrainAt(pos).id === 'water' || this.foreign(pos) || this.terrain?.isBarrier(pos)) continue;
+        if (isCoveredByNearbyGarrison(cx, cy)) continue;
+
+        // Found true frontline gap without any garrison within <= 1 tile: look for adjacent donor (d <= 2 tiles)
+        let bestDonor: Unit | null = null;
+        let minD = Infinity;
+
+        for (const g of w.units) {
+          if (g.team !== team || g.hp <= 0 || g.embarkedIn || g.assault) continue;
+          if (g.attackDebuffUntil && g.attackDebuffUntil > w.time) continue;
+          const isFront = g.def === 'frontline_infantry' || g.owner.startsWith('__front_') || g.frontPost !== undefined;
+          if (!isFront) continue;
+          if ((g.strength ?? 1) < 2) continue; // ONLY strength >= 2
+
+          const [gx, gy] = cellOf(g.pos);
+          const d = Math.max(Math.abs(gx - cx), Math.abs(gy - cy));
+          if (d <= 2 && d < minD) {
+            minD = d;
+            bestDonor = g;
+          }
+        }
+
+        if (bestDonor) {
+          const prevStr = bestDonor.strength ?? 2;
+          bestDonor.strength = prevStr - 1;
+          bestDonor.squadSize = Math.max(100, (bestDonor.squadSize ?? (prevStr * 100)) - 100);
+          bestDonor.hp = Math.min(bestDonor.strength * 5000, bestDonor.hp);
+
+          const spawnPos: LngLat = [bestDonor.pos[0], bestDonor.pos[1]];
+          const newG = this.spawnFrontlineUnit(w, team, spawnPos);
+          newG.owner = bestDonor.owner;
+          newG.strength = 1;
+          newG.squadSize = 100;
+          newG.hp = 5000;
+          newG.ammo = Math.min(100, bestDonor.ammo ?? 100);
+          newG.post = cellCenter(cx, cy);
+
+          newG.assault = {
+            targetCell: [cx, cy],
+            startPos: [spawnPos[0], spawnPos[1]],
+            targetPos: cellCenter(cx, cy),
+            elapsed: 0,
+            total: 60,
+            isRelocation: true,
+          };
+          newG.frontStatus = 'advancing';
+        }
       }
     }
   }
@@ -4530,6 +4641,7 @@ export class Sim {
    * a squad (1 strength, 100 soldiers), which marches to the gap and begins holding it upon arrival.
    */
   private salientGarrisonSplitting() {
+    if (this.tileMap) return;
     const w = this.world;
     if (!w.front || w.front.length < 2) return;
     const isDry = (pt: LngLat) => this.isPlayableGround(pt) && this.terrainAt(pt).id !== 'water' && !this.terrain?.isBarrier(pt);

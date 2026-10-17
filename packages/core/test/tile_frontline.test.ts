@@ -287,9 +287,16 @@ if (adjEnemyCell2) {
   const rearDy = adjEnemyCell2[1] - curCell2[1];
   const rearTile2: [number, number] = [adjEnemyCell2[0] + rearDx, adjEnemyCell2[1] + rearDy];
   sim.tileMap.setOwner(rearTile2[0], rearTile2[1], 1);
-  // Clear any existing units from the rear tile so it is guaranteed empty
-  sim.world.units = sim.world.units.filter((u) => u.id === ruDefender2.id || u.id === gUA.id || cellOf(u.pos)[0] !== rearTile2[0] || cellOf(u.pos)[1] !== rearTile2[1]);
+  // Clear any existing units from the rear tile and in-transit merges to defender so defender is isolated
+  sim.world.units = sim.world.units.filter(
+    (u) =>
+      u.id === ruDefender2.id ||
+      u.id === gUA.id ||
+      ((cellOf(u.pos)[0] !== rearTile2[0] || cellOf(u.pos)[1] !== rearTile2[1]) &&
+        (!u.assault || u.assault.targetCell[0] !== adjEnemyCell2[0] || u.assault.targetCell[1] !== adjEnemyCell2[1]))
+  );
 
+  gUA.strength = 3;
   gUA.squadSize = 300; // 300 attackers (superior force)
   gUA.ammo = 100;
   gUA.hp = 15000;
@@ -348,6 +355,12 @@ existingGarrison.strength = 1;
 existingGarrison.squadSize = 100;
 existingGarrison.hp = 5000;
 existingGarrison.ammo = 80;
+
+// Place guard at previous cell so it is not an empty gap needing coverage
+const guard = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(curUaCellNow[0], curUaCellNow[1]));
+guard.strength = 1;
+guard.squadSize = 100;
+guard.hp = 5000;
 
 // Find another adjacent friendly tile to spawn an incoming garrison
 let neighborOfFriend: [number, number] | null = null;
@@ -581,9 +594,18 @@ for (let i = 0; i < 60; i++) sim.step(1.0);
 
 assert.equal(sim.side(cellCenter(stretchTarget[0], stretchTarget[1])), 0, 'Target captured');
 assert.equal(attacker10.strength, 1, 'Attacker strength reduced from 2 to 1 (detached squad to cover stretched front)');
-const startGarrison = sim.world.units.find((u) => u.team === 0 && u.hp > 0 && cellOf(u.pos)[0] === stretchStart[0] && cellOf(u.pos)[1] === stretchStart[1]);
-assert.ok(startGarrison, 'Detached squad spawned at empty border tile [1780, 3470] to cover stretched frontline');
+const startGarrison = sim.world.units.find(
+  (u) =>
+    u.team === 0 &&
+    u.hp > 0 &&
+    ((cellOf(u.pos)[0] === stretchStart[0] && cellOf(u.pos)[1] === stretchStart[1]) ||
+      (u.assault && u.assault.targetCell[0] === stretchStart[0] && u.assault.targetCell[1] === stretchStart[1]))
+);
+assert.ok(startGarrison, 'Detached squad dispatched to cover empty border tile [1780, 3470]');
 assert.equal(startGarrison.strength, 1, 'Detached squad has strength 1');
+// Step 60s for detached squad to march to stretchStart
+for (let i = 0; i < 60; i++) sim.step(1.0);
+assert.deepEqual(cellOf(startGarrison.pos), stretchStart, 'Detached squad arrived at empty border tile');
 console.log('✓ Frontline Stretching & Detachment Verified: Attacker detached 1 squad to cover empty border tile');
 
 // 11. Test Stranded Rear Garrison Redeployment & Stacking (Requirement 3):
@@ -985,6 +1007,70 @@ assert.equal(garrB.encircled, false, 'Garrison B encircled status cleared after 
 assert.ok(sim.supplyFor(garrA) !== null, 'Warehouse supply restored to relieved garrison');
 
 console.log('✓ Cauldron Detection, 2x Debuffs, Diagonal Non-relief & Relief Verified!');
+
+// 6. Test Neighbor-Only Gap Coverage (d <= 2 tiles) & Relocation Safety
+console.log('--- Testing Neighbor-Only Gap Coverage & Relocation Rules ---');
+const gapTile: [number, number] = [2100, 3100];
+sim.tileMap.setOwner(gapTile[0], gapTile[1], 0);
+// Surround gapTile with enemy on one side to make it a border tile
+sim.tileMap.setOwner(gapTile[0] + 1, gapTile[1], 1);
+sim.tileMap.setOwner(gapTile[0] - 1, gapTile[1], 0);
+
+// Place a distant donor (d = 5 tiles away, Chebyshev distance > 2)
+const distantDonorTile: [number, number] = [gapTile[0] - 5, gapTile[1]];
+sim.tileMap.setOwner(distantDonorTile[0], distantDonorTile[1], 0);
+const distantGarrison = sim.spawnUnit('frontline_infantry', uaPlayer, cellCenter(distantDonorTile[0], distantDonorTile[1]));
+distantGarrison.strength = 3;
+distantGarrison.squadSize = 300;
+distantGarrison.hp = 15000;
+
+// Rebalance should NOT pull from distant donor (> 2 tiles)
+(sim as any).rebalanceTileFrontlineGaps();
+assert.equal(distantGarrison.strength, 3, 'Distant donor (> 2 tiles away) is NOT pulled to cover gap');
+
+// Now place an adjacent donor (d = 2 tiles away, Chebyshev distance <= 2)
+const adjacentDonorTile: [number, number] = [gapTile[0] - 2, gapTile[1]];
+sim.tileMap.setOwner(adjacentDonorTile[0], adjacentDonorTile[1], 0);
+const adjGarrison = sim.spawnUnit('frontline_infantry', uaPlayer, cellCenter(adjacentDonorTile[0], adjacentDonorTile[1]));
+adjGarrison.strength = 2;
+adjGarrison.squadSize = 200;
+adjGarrison.hp = 10000;
+
+// Rebalance should now pick adjacent donor
+(sim as any).rebalanceTileFrontlineGaps();
+assert.equal(adjGarrison.strength, 1, 'Adjacent donor (d <= 2) donates 1 squad to cover gap');
+assert.equal(adjGarrison.squadSize, 100, 'Adjacent donor headcount drops by 100');
+
+// Verify relocation into enemy tile is aborted
+const relGarrison = sim.spawnUnit('frontline_infantry', uaPlayer, cellCenter(gapTile[0], gapTile[1]));
+const enemyTile: [number, number] = [gapTile[0] + 1, gapTile[1]];
+assert.equal(sim.tileMap.ownerOf(enemyTile[0], enemyTile[1]), 1, 'Target tile is enemy owned');
+relGarrison.assault = {
+  targetCell: enemyTile,
+  startPos: [relGarrison.pos[0], relGarrison.pos[1]],
+  targetPos: cellCenter(enemyTile[0], enemyTile[1]),
+  elapsed: 60,
+  total: 60,
+  isRelocation: true, // Relocation attempted into enemy tile
+};
+(sim as any).updateTileAssaults(1.0);
+assert.equal(relGarrison.assault, undefined, 'Relocation assault terminated');
+assert.deepEqual(relGarrison.pos, [cellCenter(gapTile[0], gapTile[1])[0], cellCenter(gapTile[0], gapTile[1])[1]], 'Relocation aborted and garrison kept at startPos');
+assert.equal(sim.tileMap.ownerOf(enemyTile[0], enemyTile[1]), 1, 'Enemy tile remains enemy owned');
+
+// Verify rogue idle garrison deep in enemy rear surrenders
+const rogueGarrison = sim.spawnUnit('frontline_infantry', uaPlayer, cellCenter(gapTile[0] + 10, gapTile[1] + 10));
+sim.tileMap.setOwner(gapTile[0] + 10, gapTile[1] + 10, 1);
+for (let dx = -1; dx <= 1; dx++) {
+  for (let dy = -1; dy <= 1; dy++) {
+    sim.tileMap.setOwner(gapTile[0] + 10 + dx, gapTile[1] + 10 + dy, 1);
+  }
+}
+assert.equal(rogueGarrison.hp > 0, true, 'Rogue garrison initially alive');
+// Step sim past 3-second sweep
+for (let i = 0; i < 40; i++) sim.step(0.1);
+assert.equal(rogueGarrison.hp, 0, 'Rogue idle garrison stranded deep in enemy territory surrendered');
+console.log('✓ Neighbor-Only Gap Coverage, Relocation Safety & Rogue Garrison Surrender Verified!');
 
 console.log('All Tile Frontline tests passed successfully!');
 

@@ -836,7 +836,7 @@ export class Bot {
     if (!myGarrisons.length) return;
 
     const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-    const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
+    const enemyPoints = sim.map.capturePoints.filter((cp) => (sim.tileMap ? sim.tileMap.ownerOf(cellOf(cp.pos)[0], cellOf(cp.pos)[1]) : sim.side(cp.pos)) !== p.team);
 
     for (const u of myGarrisons) {
       const [cx, cy] = cellOf(u.pos);
@@ -849,7 +849,8 @@ export class Bot {
         const tgtCell: [number, number] = [cx + dx, cy + dy];
         const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
 
-        if (sim.side(tgtCenter) === p.team) continue;
+        const tgtOwner = sim.tileMap ? sim.tileMap.ownerOf(tgtCell[0], tgtCell[1]) : sim.side(tgtCenter);
+        if (tgtOwner === p.team) continue;
         if (!sim.isPlayableGround(tgtCenter) || sim.terrainAt(tgtCenter).id === 'water' || sim.foreign(tgtCenter)) continue;
 
         // Avoid double-assaulting the same cell
@@ -933,7 +934,7 @@ export class Bot {
     const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
     for (const u of stranded) {
       const [cx, cy] = cellOf(u.pos);
-      const hasEnemyBorder = dirs.some(([dx, dy]) => sim.side(cellCenter(cx + dx, cy + dy)) !== p.team);
+      const hasEnemyBorder = dirs.some(([dx, dy]) => (sim.tileMap ? sim.tileMap.ownerOf(cx + dx, cy + dy) : sim.side(cellCenter(cx + dx, cy + dy))) !== p.team);
       if (hasEnemyBorder) continue; // Actively on the front line, not stranded
 
       // Look for adjacent friendly tile that DOES have an enemy border and is not already relocating to
@@ -941,8 +942,9 @@ export class Bot {
       for (const [dx, dy] of dirs) {
         const nc: [number, number] = [cx + dx, cy + dy];
         const nPos = cellCenter(nc[0], nc[1]);
-        if (sim.side(nPos) !== p.team || !sim.isPlayableGround(nPos) || sim.foreign(nPos)) continue;
-        const neighborHasEnemy = dirs.some(([ndx, ndy]) => sim.side(cellCenter(nc[0] + ndx, nc[1] + ndy)) !== p.team);
+        const nOwner = sim.tileMap ? sim.tileMap.ownerOf(nc[0], nc[1]) : sim.side(nPos);
+        if (nOwner !== p.team || !sim.isPlayableGround(nPos) || sim.foreign(nPos)) continue;
+        const neighborHasEnemy = dirs.some(([ndx, ndy]) => (sim.tileMap ? sim.tileMap.ownerOf(nc[0] + ndx, nc[1] + ndy) : sim.side(cellCenter(nc[0] + ndx, nc[1] + ndy))) !== p.team);
         if (neighborHasEnemy) {
           bestTgt = nc;
           break;
