@@ -2116,6 +2116,7 @@ export class Sim {
 
           // Rebalance garrisons along the stretched front / rear garrisons
           this.rebalanceFrontlineGarrisonsAfterCapture(u.team, existingFriend ?? u, tgtCell);
+          this.rebalanceFrontlineGarrisonsAfterCapture((1 - u.team) as Team, null, tgtCell);
 
           // Flip capture points in target cell
           for (const cp of w.points) {
@@ -2148,7 +2149,7 @@ export class Sim {
    * 2. Friendly garrisons in the sector that lost orthogonal enemy contact redeploy to the nearest empty border tile,
    *    or stack with neighboring frontline garrisons if no empty border tiles exist.
    */
-  private rebalanceFrontlineGarrisonsAfterCapture(team: Team, attackingUnit: Unit, capturedCell: [number, number]) {
+  private rebalanceFrontlineGarrisonsAfterCapture(team: Team, attackingUnit: Unit | null, capturedCell: [number, number]) {
     const w = this.world;
     const oppTeam = (1 - team) as Team;
 
@@ -2257,7 +2258,7 @@ export class Sim {
       if (g.team !== team || g.hp <= 0 || g.embarkedIn || g.assault) return false;
       const isFront = g.def === 'frontline_infantry' || g.owner.startsWith('__front_') || g.frontPost !== undefined;
       if (!isFront) return false;
-      if (g.id === attackingUnit.id) return false;
+      if (attackingUnit && g.id === attackingUnit.id) return false;
       const [gx, gy] = cellOf(g.pos);
       if (Math.abs(gx - capturedCell[0]) > 10 || Math.abs(gy - capturedCell[1]) > 10) return false;
       return !hasOrthogonalEnemy(gx, gy, oppTeam);
@@ -4668,10 +4669,11 @@ export class Sim {
           continue;
         }
 
+        const threshold = this.tileMap ? 1.8 : 4.0;
         let covered = false;
         for (const g of activeGarrisons) {
-          const checkPos = g.frontStatus === 'marching' && g.marchTarget ? g.marchTarget : g.pos;
-          if (distKm(nodePt, checkPos) <= 4.0) {
+          const checkPos = g.frontStatus === 'marching' && g.marchTarget ? g.marchTarget : (g.assault ? g.assault.targetPos : g.pos);
+          if (distKm(nodePt, checkPos) <= threshold) {
             covered = true;
             break;
           }
@@ -4681,15 +4683,16 @@ export class Sim {
         // Gap found! Calculate target position in friendly ground
         const [nx, ny] = normalAt(w.front, i);
         const offsetDir = team === 0 ? -1 : 1;
-        const candPos: LngLat = offsetKm(nodePt, nx * offsetDir * 0.8, ny * offsetDir * 0.8);
-        if (!isDry(candPos) || this.side(candPos) !== team) continue;
+        const candRaw: LngLat = offsetKm(nodePt, nx * offsetDir * 0.8, ny * offsetDir * 0.8);
+        if (!isDry(candRaw) || this.side(candRaw) !== team) continue;
+        const candPos: LngLat = this.tileMap ? cellCenter(cellOf(candRaw)[0], cellOf(candRaw)[1]) : candRaw;
 
         // Find nearest capable donor garrison (strength > 1)
         let bestDonor: Unit | null = null;
         let bestScore = Infinity;
 
         for (const g of activeGarrisons) {
-          if ((g.strength ?? 1) <= 1 || g.frontStatus === 'marching' || (g.ammo ?? 0) <= 0 || donatedThisCycle.has(g.id)) continue;
+          if ((g.strength ?? 1) <= 1 || g.frontStatus === 'marching' || g.assault || (g.ammo ?? 0) <= 0 || donatedThisCycle.has(g.id)) continue;
           const dist = distKm(g.pos, candPos);
           if (dist > 40.0) continue;
           const score = dist - 2.0 * ((g.strength ?? 1) - 2);
@@ -4717,7 +4720,18 @@ export class Sim {
           newGarrison.post = [candPos[0], candPos[1]];
           newGarrison.donorId = bestDonor.id;
 
-          if (distKm(bestDonor.pos, candPos) > 0.3) {
+          if (this.tileMap) {
+            const candCell = cellOf(candPos);
+            newGarrison.assault = {
+              targetCell: candCell,
+              startPos: [bestDonor.pos[0], bestDonor.pos[1]],
+              targetPos: candPos,
+              elapsed: 0,
+              total: 60,
+              isRelocation: true,
+            };
+            newGarrison.frontStatus = 'advancing';
+          } else if (distKm(bestDonor.pos, candPos) > 0.3) {
             newGarrison.frontStatus = 'marching';
             newGarrison.marchTarget = candPos;
           } else {
@@ -5435,7 +5449,7 @@ export class Sim {
     const w = this.world;
     const r = this.ruleset.rules;
     for (let pass = 0; pass < 5; pass++) {
-      const hit = findPinch(w.front, r.pinchKm, 4);
+      const hit = findPinch(w.front, this.tileMap ? 0 : r.pinchKm, 4);
       if (!hit) break;
       const loop = w.front.slice(hit.from, hit.to + 1);
       const area = ringAreaKm2(loop);

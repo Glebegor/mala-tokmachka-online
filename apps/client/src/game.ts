@@ -14,7 +14,7 @@ import { FogOverlay } from './fog';
 import { renderUnitHud, type OrderStyle, type Pickers } from './unitHud';
 import { ALLY_COLOR, drawNato, drawNatoImage, echelonFor, NATION_COLOR, natoLayers, type Relation } from './nato';
 import { aircraftSprite } from './sprites';
-import { cellsToMultiPolygon, smoothPolyline } from './contours';
+import { cellsToMultiPolygon, smoothPolyline, smoothRing } from './contours';
 import { statsView } from './stats';
 import { openGuide } from './guide';
 import { uiScale, uiScaleControl } from './uiScale';
@@ -782,9 +782,22 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'trench-line', type: 'line', source: 'trenches', filter: ['!=', ['get', 'kind'], 'rail'], layout: { 'line-join': 'miter' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 2.5, 1.2], 10, ['case', isBridge, 5.5, 2.4]], 'line-opacity': ['get', 'o'] } });
       // railway: the classic dark line with white ties
       map.addLayer({ id: 'rail-ties', type: 'line', source: 'trenches', filter: ['==', ['get', 'kind'], 'rail'], paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 10, 2.4], 'line-dasharray': [2, 2], 'line-opacity': ['get', 'o'] } });
-      // cauldrons: yellow broken ring around the cut-off ground
-      map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.1 } });
-      map.addLayer({ id: 'pocket-line', type: 'line', source: 'pockets', paint: { 'line-color': '#ffd84a', 'line-width': 2.2, 'line-dasharray': [2, 1.5] } });
+      // cauldrons: encircled pocket ring with rounded corners, dark casing, and contact front line styling
+      map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': ['case', ['==', ['get', 'team'], 0], '#ff4d57', '#38bdf8'], 'fill-opacity': 0.15 } });
+      map.addLayer({
+        id: 'pocket-case', type: 'line', source: 'pockets',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.2, 10, 5.5], 'line-opacity': 0.85 }
+      });
+      map.addLayer({
+        id: 'pocket-line', type: 'line', source: 'pockets',
+        layout: { 'line-join': 'round', 'line-cap': 'round' },
+        paint: {
+          'line-color': ['case', ['==', ['get', 'team'], 0], '#ff4d57', '#38bdf8'],
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 10, 3],
+          'line-dasharray': [3, 2]
+        }
+      });
       // occupied ground also gets fine diagonal hatching, like on printed situation maps
       map.addImage('hatch', hatchImage(), { pixelRatio: 2 });
       map.addLayer({ id: 'occupied-hatch', type: 'fill', source: 'occupied', paint: { 'fill-pattern': 'hatch', 'fill-opacity': 0.5 } }, 'front-zone');
@@ -3000,13 +3013,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     const rawLine: LngLat[] = shown.map((n) => [n.lng, n.lat]);
     const line: LngLat[] = smoothPolyline(rawLine, 2);
     // cauldrons: rings of team 0 ground inside the occupied area are holes in it; rings of team 1 ground are extra patches
-    const ring = (k: SnapMsg['pockets'][number]): LngLat[] => [...k.nodes.map((n): LngLat => [n.lng, n.lat]), [k.nodes[0].lng, k.nodes[0].lat]];
-    const holes = snap.pockets.filter((k) => k.team === 0).map(ring);
+    const holes = snap.pockets.filter((k) => k.team === 0).map((k) => smoothRing(k.nodes));
     const mapHoles = init.map.occupiedHoles ?? []; // e.g. the Sea of Azov: not occupied, but not a front either
-    const patches = snap.pockets.filter((k) => k.team === 1).map(ring);
+    const patches = snap.pockets.filter((k) => k.team === 1).map((k) => smoothRing(k.nodes));
     (map.getSource('front') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'LineString', coordinates: line } } as any);
     (map.getSource('occupied') as GeoJSONSource).setData({ type: 'Feature', properties: {}, geometry: { type: 'MultiPolygon', coordinates: [[[...line, ...init.map.occupiedClosure, line[0]], ...holes, ...mapHoles], ...patches.map((p) => [p])] } } as any);
-    (map.getSource('pockets') as GeoJSONSource).setData({ type: 'FeatureCollection', features: snap.pockets.map((k) => ({ type: 'Feature', properties: {}, geometry: { type: 'Polygon', coordinates: [ring(k)] } })) } as any);
+    (map.getSource('pockets') as GeoJSONSource).setData({
+      type: 'FeatureCollection',
+      features: snap.pockets.map((k) => ({
+        type: 'Feature',
+        properties: { team: k.team },
+        geometry: { type: 'Polygon', coordinates: [smoothRing(k.nodes)] },
+      })),
+    } as any);
   }
   let frontDrawn = false;
   let lastUnitDraw = 0;

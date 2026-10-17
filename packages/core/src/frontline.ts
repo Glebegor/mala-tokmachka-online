@@ -299,6 +299,7 @@ export function findPinch(nodes: FrontNode[], maxKm: number, minGap = 4): { from
   }
 
   // 3. Check for pincer jaws within maxKm
+  if (maxKm <= 0) return null;
   let best: { from: number; to: number; d: number } | null = null;
   const latMargin = (maxKm * 1.5) / KM;
   for (let i = 0; i < nodes.length; i++) {

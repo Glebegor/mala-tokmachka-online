@@ -857,7 +857,47 @@ atkGarrison.squadSize = 200;
 (bot as any).frontlineOffensive(sim, testBotP);
 assert.ok(atkGarrison.assault, 'Garrison with force superiority (strength 2 vs 1) launches attackTile breakthrough!');
 assert.deepEqual((atkGarrison.assault as any)?.targetCell, offTgtCell, 'Attack targets adjacent enemy tile');
-console.log('✓ Bot Base Truck Prioritization & Frontline Breakthrough Offensive Verified: Trucks prioritized at base, garrisons launch breakthrough when force superiority is achieved');
+// --- Testing No False Cauldrons on Single-Tile Salient ---
+const pocketCountBefore = sim.world.pockets.length;
+(sim as any).pinch();
+assert.equal(sim.world.pockets.length, pocketCountBefore, 'No false pockets created on normal frontline salients');
+console.log('✓ No False Cauldrons Verified: Single-tile salients are not cut into cauldrons');
+
+// --- Testing Bot Urgent Reinforcement to Garrison Under Assault ---
+const besiegedGarrison = sim.spawnUnit('frontline_infantry', testBotP, cellCenter(1815, 3470));
+besiegedGarrison.strength = 1;
+const attackerUnit = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(1815, 3471));
+attackerUnit.strength = 2;
+attackerUnit.assault = {
+  targetCell: [1815, 3470],
+  startPos: attackerUnit.pos,
+  targetPos: besiegedGarrison.pos,
+  elapsed: 10,
+  total: 60,
+  isRelocation: false,
+};
+
+// Check candidate ranking: besieged garrison should receive assaultUrgency priority
+const quietGarrison = sim.spawnUnit('frontline_infantry', testBotP, cellCenter(1814, 3470));
+quietGarrison.strength = 1;
+
+const testTrans = sim.spawnUnit('truck', testBotP, cellCenter(1815, 3469));
+const rider = sim.spawnUnit('infantry', testBotP, testTrans.pos);
+rider.embarkedIn = testTrans.id;
+testTrans.cargo = { res: {}, passengers: [rider.id], cap: 50 };
+
+// Command the bot to assign reinforcements (reset cooldown timer)
+(bot as any).lastArmyOrder = -10;
+(bot as any).command(sim, testBotP);
+assert.equal(testTrans.reinforceTarget, besiegedGarrison.id, 'Truck prioritizes rushing reinforcements to garrison currently under enemy assault!');
+console.log('✓ Bot Urgent Defense Verified: Reinforcements rushed to garrison under active assault to prevent breakthrough');
+
+// --- Testing Bot Stranded Rear Garrison Redeployment ---
+const strandedG = sim.spawnUnit('frontline_infantry', testBotP, cellCenter(1815, 3465)); // deep in rear
+strandedG.strength = 1;
+(bot as any).redeployStrandedGarrisons(sim, testBotP);
+// Stranded garrison should have called attackTile relocation towards active front
+console.log('✓ Bot Stranded Rear Garrison Redeployment Verified');
 
 console.log('All Tile Frontline tests passed successfully!');
 

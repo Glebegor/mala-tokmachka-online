@@ -547,6 +547,8 @@ export class Bot {
 
     // Frontline offensive: garrisons with force superiority push into enemy territory and cities
     this.frontlineOffensive(sim, p);
+    // Redeploy rear garrisons to cover active frontline sectors
+    this.redeployStrandedGarrisons(sim, p);
 
     // 1. Board infantry into available transports (truck or humvee) to move them rapidly
     const transports = w.units.filter((u) =>
@@ -745,8 +747,20 @@ export class Bot {
             const cityBonusA = (cityDistA < 30 && myStrA < 4) ? 2 : 0;
             const cityBonusB = (cityDistB < 30 && myStrB < 4) ? 2 : 0;
 
-            const scoreA = deficitA + cityBonusA;
-            const scoreB = deficitB + cityBonusB;
+            // Urgent defense bonus: if garrison is under enemy assault right now ("подвозить пехоту на места где их пушат")
+            const [ax, ay] = cellOf(a.pos);
+            const [bx, by] = cellOf(b.pos);
+            const isAssaultedA = w.units.some(
+              (x) => x.team !== p.team && x.hp > 0 && x.assault && !x.assault.isRelocation && x.assault.targetCell[0] === ax && x.assault.targetCell[1] === ay
+            );
+            const isAssaultedB = w.units.some(
+              (x) => x.team !== p.team && x.hp > 0 && x.assault && !x.assault.isRelocation && x.assault.targetCell[0] === bx && x.assault.targetCell[1] === by
+            );
+            const assaultUrgencyA = isAssaultedA ? 50 : 0;
+            const assaultUrgencyB = isAssaultedB ? 50 : 0;
+
+            const scoreA = deficitA + cityBonusA + assaultUrgencyA;
+            const scoreB = deficitB + cityBonusB + assaultUrgencyB;
             if (scoreB !== scoreA) return scoreB - scoreA;
 
             // Then lower total friendly strength (distribute evenly)
@@ -882,6 +896,8 @@ export class Bot {
           } else if (myStrength > defStr) {
             score = 60 + (myStrength - defStr) * 25 + Math.max(0, 30 - distToCity);
             if (hasEnemyCity) score += 200;
+            // Proactive counter-assault: if defender is actively advancing out of this cell, disrupting them is high priority!
+            if (defender.assault && !defender.assault.isRelocation) score += 50;
           }
         }
 
@@ -896,6 +912,48 @@ export class Bot {
           type: 'attackTile',
           unitId: u.id,
           targetCell: bestTarget,
+        });
+      }
+    }
+  }
+
+  /** Stranded rear garrisons without enemy contact redeploy to the nearest active frontline tile */
+  private redeployStrandedGarrisons(sim: Sim, p: Player) {
+    const w = sim.world;
+    const stranded = w.units.filter((u) =>
+      u.team === p.team &&
+      u.hp > 0 &&
+      !u.embarkedIn &&
+      !u.assault &&
+      (!u.attackDebuffUntil || u.attackDebuffUntil <= w.time) &&
+      (u.def === 'frontline_infantry' || u.owner.startsWith('__front_'))
+    );
+    if (!stranded.length) return;
+
+    const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+    for (const u of stranded) {
+      const [cx, cy] = cellOf(u.pos);
+      const hasEnemyBorder = dirs.some(([dx, dy]) => sim.side(cellCenter(cx + dx, cy + dy)) !== p.team);
+      if (hasEnemyBorder) continue; // Actively on the front line, not stranded
+
+      // Look for adjacent friendly tile that DOES have an enemy border and is not already relocating to
+      let bestTgt: [number, number] | null = null;
+      for (const [dx, dy] of dirs) {
+        const nc: [number, number] = [cx + dx, cy + dy];
+        const nPos = cellCenter(nc[0], nc[1]);
+        if (sim.side(nPos) !== p.team || !sim.isPlayableGround(nPos) || sim.foreign(nPos)) continue;
+        const neighborHasEnemy = dirs.some(([ndx, ndy]) => sim.side(cellCenter(nc[0] + ndx, nc[1] + ndy)) !== p.team);
+        if (neighborHasEnemy) {
+          bestTgt = nc;
+          break;
+        }
+      }
+
+      if (bestTgt) {
+        sim.apply(p.id, {
+          type: 'attackTile',
+          unitId: u.id,
+          targetCell: bestTgt,
         });
       }
     }

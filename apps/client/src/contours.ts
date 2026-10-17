@@ -163,3 +163,20 @@ export function smoothPolyline(pts: Pt[], iterations = 2): Pt[] {
   return cur;
 }
 
+/**
+ * Smooth a closed ring (e.g. cauldron / pocket boundary) using Chaikin corner cutting.
+ * Eliminates sharp 90-degree tile edges, matching the front line and grey zone.
+ */
+export function smoothRing(nodes: { lng: number; lat: number }[], iterations = 2): Pt[] {
+  const pts: Pt[] = nodes.map((n) => [n.lng, n.lat]);
+  if (pts.length < 3) return pts;
+  const isClosed = Math.abs(pts[0][0] - pts[pts.length - 1][0]) < 1e-4 && Math.abs(pts[0][1] - pts[pts.length - 1][1]) < 1e-4;
+  const ring = isClosed ? pts.slice(0, -1) : pts;
+  let cur = removePolylineSpurs(ring);
+  if (cur.length < 3) return pts;
+  for (let it = 0; it < iterations; it++) {
+    cur = chaikin(cur);
+  }
+  return [...cur, cur[0]];
+}
+
