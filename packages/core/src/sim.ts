@@ -9,7 +9,7 @@ import { generateMatchDeposits, inDeposit, type ResourceDeposit } from './deposi
 import { generateCityHouses } from './housing';
 import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
-import { TileMap, cellOf, cellCenter, cellKey, isAdjacentCell, snapFrontToTileEdges, advanceFrontOverCell } from './tiles';
+import { TileMap, cellOf, cellCenter, cellKey, isAdjacentCell, snapFrontToTileEdges, advanceFrontOverCell, subdivideTileEdges, removeSpurs } from './tiles';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
@@ -2112,6 +2112,7 @@ export class Sim {
           // Update frontline polyline to wrap around captured cell
           w.front = advanceFrontOverCell(w.front, tgtCell, u.team);
           this.occ.tick = -1;
+          this.pinch();
 
           // Rebalance garrisons along the stretched front / rear garrisons
           this.rebalanceFrontlineGarrisonsAfterCapture(u.team, existingFriend ?? u, tgtCell);
@@ -2197,30 +2198,61 @@ export class Sim {
       return da - db;
     });
 
-    // 2. If the front stretched and attacking garrison has strength > 1, detach 1 squad to cover empty border tile
-    while (emptyBorderTiles.length > 0 && (attackingUnit.strength ?? 1) > 1) {
-      const emptyTile = emptyBorderTiles.shift()!;
-      const prevStr = attackingUnit.strength ?? 1;
-      attackingUnit.strength = prevStr - 1;
-      attackingUnit.squadSize = Math.max(100, (attackingUnit.squadSize ?? (prevStr * 100)) - 100);
-      attackingUnit.hp = Math.min(attackingUnit.strength * 5000, attackingUnit.hp);
+    // 2. Cover empty border tiles ONLY by taking troops from garrisons with strength >= 2.
+    // The squad leaves the donor garrison (donor strength falls by 1) and marches over 60s to the free tile.
+    for (const emptyTile of [...emptyBorderTiles]) {
+      let bestDonor: Unit | null = null;
+      let minD = Infinity;
 
-      const spawnPos = cellCenter(emptyTile[0], emptyTile[1]);
-      const newG = this.spawnFrontlineUnit(w, team, spawnPos);
-      newG.owner = attackingUnit.owner;
-      newG.strength = 1;
-      newG.squadSize = 100;
-      newG.hp = 5000;
-      newG.ammo = Math.min(100, attackingUnit.ammo ?? 100);
-      newG.frontStatus = 'holding';
-      newG.post = [spawnPos[0], spawnPos[1]];
+      for (const g of w.units) {
+        if (g.team !== team || g.hp <= 0 || g.embarkedIn || g.assault) continue;
+        const isFront = g.def === 'frontline_infantry' || g.owner.startsWith('__front_') || g.frontPost !== undefined;
+        if (!isFront) continue;
+        if ((g.strength ?? 1) < 2) continue; // ONLY strength 2 and higher!
 
-      this.hooks?.emit('toast', {
-        text: `Линия фронта растянулась: выделен гарнизон для прикрытия тайла [${emptyTile[0]}, ${emptyTile[1]}]`,
-      });
+        const gPos = cellOf(g.pos);
+        const d = Math.hypot(gPos[0] - emptyTile[0], gPos[1] - emptyTile[1]);
+        if (d <= 15 && d < minD) {
+          minD = d;
+          bestDonor = g;
+        }
+      }
+
+      if (bestDonor) {
+        const prevStr = bestDonor.strength ?? 2;
+        bestDonor.strength = prevStr - 1;
+        bestDonor.squadSize = Math.max(100, (bestDonor.squadSize ?? (prevStr * 100)) - 100);
+        bestDonor.hp = Math.min(bestDonor.strength * 5000, bestDonor.hp);
+
+        const spawnPos: LngLat = [bestDonor.pos[0], bestDonor.pos[1]];
+        const newG = this.spawnFrontlineUnit(w, team, spawnPos);
+        newG.owner = bestDonor.owner;
+        newG.strength = 1;
+        newG.squadSize = 100;
+        newG.hp = 5000;
+        newG.ammo = Math.min(100, bestDonor.ammo ?? 100);
+        newG.post = cellCenter(emptyTile[0], emptyTile[1]);
+
+        newG.assault = {
+          targetCell: emptyTile,
+          startPos: [spawnPos[0], spawnPos[1]],
+          targetPos: cellCenter(emptyTile[0], emptyTile[1]),
+          elapsed: 0,
+          total: 60,
+          isRelocation: true,
+        };
+        newG.frontStatus = 'advancing';
+
+        this.hooks?.emit('toast', {
+          text: `Выделен гарнизон для прикрытия тайла [${emptyTile[0]}, ${emptyTile[1]}] (выдвинулся из [${cellOf(bestDonor.pos)[0]}, ${cellOf(bestDonor.pos)[1]}], сила донора: ${bestDonor.strength})`,
+        });
+
+        const idx = emptyBorderTiles.indexOf(emptyTile);
+        if (idx >= 0) emptyBorderTiles.splice(idx, 1);
+      }
     }
 
-    // 3. Find friendly garrisons in the sector that lost their orthogonal enemy border
+    // 3. Find friendly rear garrisons in the sector that lost their orthogonal enemy border
     const strandedGarrisons = w.units.filter((g) => {
       if (g.team !== team || g.hp <= 0 || g.embarkedIn || g.assault) return false;
       const isFront = g.def === 'frontline_infantry' || g.owner.startsWith('__front_') || g.frontPost !== undefined;
@@ -2232,62 +2264,35 @@ export class Sim {
     });
 
     for (const g of strandedGarrisons) {
-      if (emptyBorderTiles.length > 0) {
-        // Nearest empty border tile
-        let bestIdx = 0;
-        let bestDist = Infinity;
-        const gCell = cellOf(g.pos);
-        for (let i = 0; i < emptyBorderTiles.length; i++) {
-          const d = Math.hypot(emptyBorderTiles[i][0] - gCell[0], emptyBorderTiles[i][1] - gCell[1]);
-          if (d < bestDist) {
-            bestDist = d;
-            bestIdx = i;
+      // Rear garrison without enemy borders: stack with nearest frontline garrison
+      let nearestFg: Unit | null = null;
+      let minD = Infinity;
+      for (const fg of w.units) {
+        if (fg.team === team && fg.id !== g.id && fg.hp > 0 && !fg.embarkedIn && !fg.assault) {
+          const [fgx, fgy] = cellOf(fg.pos);
+          if (hasOrthogonalEnemy(fgx, fgy, oppTeam)) {
+            const d = distKm(g.pos, fg.pos);
+            if (d < minD) {
+              minD = d;
+              nearestFg = fg;
+            }
           }
         }
-        const targetEmpty = emptyBorderTiles.splice(bestIdx, 1)[0];
+      }
+      if (nearestFg) {
+        const tgt = cellOf(nearestFg.pos);
         g.assault = {
-          targetCell: targetEmpty,
+          targetCell: tgt,
           startPos: [g.pos[0], g.pos[1]],
-          targetPos: cellCenter(targetEmpty[0], targetEmpty[1]),
+          targetPos: [nearestFg.pos[0], nearestFg.pos[1]],
           elapsed: 0,
           total: 60,
           isRelocation: true,
         };
         g.frontStatus = 'advancing';
         this.hooks?.emit('toast', {
-          text: `Гарнизон выдвигается на прикрытие свободного сектора фронта [${targetEmpty[0]}, ${targetEmpty[1]}]`,
+          text: `Гарнизон переходит для усиления позиции [${tgt[0]}, ${tgt[1]}]`,
         });
-      } else {
-        // No empty border tiles: stack with nearest frontline garrison
-        let nearestFg: Unit | null = null;
-        let minD = Infinity;
-        for (const fg of w.units) {
-          if (fg.team === team && fg.id !== g.id && fg.hp > 0 && !fg.embarkedIn) {
-            const [fgx, fgy] = cellOf(fg.pos);
-            if (hasOrthogonalEnemy(fgx, fgy, oppTeam)) {
-              const d = distKm(g.pos, fg.pos);
-              if (d < minD) {
-                minD = d;
-                nearestFg = fg;
-              }
-            }
-          }
-        }
-        if (nearestFg) {
-          const tgt = cellOf(nearestFg.pos);
-          g.assault = {
-            targetCell: tgt,
-            startPos: [g.pos[0], g.pos[1]],
-            targetPos: cellCenter(tgt[0], tgt[1]),
-            elapsed: 0,
-            total: 60,
-            isRelocation: true,
-          };
-          g.frontStatus = 'advancing';
-          this.hooks?.emit('toast', {
-            text: `Гарнизон переходит для усиления позиции [${tgt[0]}, ${tgt[1]}]`,
-          });
-        }
       }
     }
   }
@@ -5425,33 +5430,52 @@ export class Sim {
     return this.garrisonCache.list;
   }
 
-  /** When the jaws of a pincer meet, the loop of front between them is cut off and becomes a cauldron. */
+  /** When the jaws of a pincer meet or an encirclement forms, the loop of front is cut off and becomes a cauldron. */
   private pinch() {
     const w = this.world;
     const r = this.ruleset.rules;
-    const hit = findPinch(w.front, r.pinchKm, 16);
-    if (!hit) return;
-    const loop = w.front.slice(hit.from, hit.to + 1);
-    const area = ringAreaKm2(loop);
-    // too small to matter: do not cut the front line
-    if (Math.abs(area) < r.pocketMinAreaKm2 || loop.length < 8 || w.pockets.length >= 8) return;
-    w.front = [...w.front.slice(0, hit.from), ...w.front.slice(hit.to + 1)];
-    // the loop keeps the line's direction, so team 0 is still on its left: counter-clockwise means team 0 is inside
-    const team: Team = area > 0 ? 0 : 1;
-    const closedNodes = loop.map((n) => ({ ...n, v: 0 }));
-    if (closedNodes.length > 2 && distKm([closedNodes[0].lng, closedNodes[0].lat], [closedNodes[closedNodes.length - 1].lng, closedNodes[closedNodes.length - 1].lat]) > 0.05) {
-      closedNodes.push({ ...closedNodes[0] });
-    }
-    const pocket: Pocket = { id: w.nextId++, team, nodes: closedNodes };
-    w.pockets.push(pocket);
-    // Immediately mark trapped units inside the cauldron as encircled
-    for (const u of w.units) {
-      if (pointInRing(pocket.nodes, u.pos)) {
-        u.encircled = true;
+    for (let pass = 0; pass < 5; pass++) {
+      const hit = findPinch(w.front, r.pinchKm, 4);
+      if (!hit) break;
+      const loop = w.front.slice(hit.from, hit.to + 1);
+      const area = ringAreaKm2(loop);
+      // too small to matter: do not cut the front line
+      if (Math.abs(area) < r.pocketMinAreaKm2 || loop.length < 4 || w.pockets.length >= 16) break;
+
+      const isSharedVertex =
+        hit.from < w.front.length &&
+        hit.to < w.front.length &&
+        Math.abs(w.front[hit.from].lng - w.front[hit.to].lng) < 1e-4 &&
+        Math.abs(w.front[hit.from].lat - w.front[hit.to].lat) < 1e-4;
+      const afterSlice = isSharedVertex ? hit.to : hit.to + 1;
+      w.front = subdivideTileEdges(removeSpurs([...w.front.slice(0, hit.from), ...w.front.slice(afterSlice)]));
+
+      const closedNodes = loop.map((n) => ({ ...n, v: 0 }));
+      if (
+        closedNodes.length > 2 &&
+        distKm([closedNodes[0].lng, closedNodes[0].lat], [closedNodes[closedNodes.length - 1].lng, closedNodes[closedNodes.length - 1].lat]) > 0.05
+      ) {
+        closedNodes.push({ ...closedNodes[0] });
       }
+
+      let team: Team = area > 0 ? 0 : 1;
+      const hasRu = w.units.some((u) => u.team === 1 && u.hp > 0 && pointInRing(closedNodes, u.pos));
+      const hasUa = w.units.some((u) => u.team === 0 && u.hp > 0 && pointInRing(closedNodes, u.pos));
+      if (hasRu && !hasUa) team = 1;
+      else if (hasUa && !hasRu) team = 0;
+
+      const pocket: Pocket = { id: w.nextId++, team, nodes: closedNodes };
+      w.pockets.push(pocket);
+      // Immediately mark trapped units inside the cauldron as encircled
+      for (const u of w.units) {
+        if (pointInRing(pocket.nodes, u.pos)) {
+          u.encircled = true;
+        }
+      }
+      const trapped = w.units.filter((u) => u.team === team && pointInRing(pocket.nodes, u.pos)).length;
+      this.hooks.emit('cauldronFormed', { id: pocket.id, team, units: trapped, areaKm2: Math.round(Math.abs(area)) });
+      this.hooks.emit('toast', { text: `Образован котёл! В окружении оказалось ${trapped} гарнизон(ов) противника.` });
     }
-    const trapped = w.units.filter((u) => u.team === team && pointInRing(pocket.nodes, u.pos)).length;
-    this.hooks.emit('cauldronFormed', { id: pocket.id, team, units: trapped, areaKm2: Math.round(Math.abs(area)) });
   }
 
   /** A cauldron squeezed too small (or emptied of defenders) collapses: whoever is still inside is lost. */
@@ -5459,8 +5483,8 @@ export class Sim {
     const w = this.world;
     const r = this.ruleset.rules;
     for (const pocket of [...w.pockets]) {
-      const inside = w.units.filter((u) => u.team === pocket.team && this.defs.u.get(u.def)!.kind !== 'air' && pointInRing(pocket.nodes, u.pos));
-      const holds = w.buildings.some((b) => b.team === pocket.team && pointInRing(pocket.nodes, b.pos));
+      const inside = w.units.filter((u) => u.team === pocket.team && u.hp > 0 && this.defs.u.get(u.def)!.kind !== 'air' && pointInRing(pocket.nodes, u.pos));
+      const holds = w.buildings.some((b) => b.team === pocket.team && b.hp > 0 && pointInRing(pocket.nodes, b.pos));
       const area = Math.abs(ringAreaKm2(pocket.nodes));
       if (area >= r.pocketMinAreaKm2 && pocket.nodes.length >= 4 && (inside.length || holds)) continue;
       w.pockets = w.pockets.filter((p) => p !== pocket);

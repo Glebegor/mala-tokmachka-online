@@ -315,7 +315,7 @@ export const DEFAULT_RULES: RulesConfig = {
   transportDamageMult: 1.5,
   maxQueuedOrders: 8,
   pinchKm: 3.5,
-  pocketMinAreaKm2: 40,
+  pocketMinAreaKm2: 1.5,
   encircledDamageMult: 0.6,
   encircledAttrition: 0.004,
   cauldronScore: 40,

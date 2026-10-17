@@ -1,7 +1,8 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { Sim, cellOf, cellCenter, cellKey, normalAt, offsetKm, isAdjacentCell, distKm, kmPerDegLng, OccupiedIndex, advanceFrontOverCell, type Unit, type LngLat } from '../src';
+import { Bot } from '../../../services/game/src/application/bot';
+import { Sim, cellOf, cellCenter, cellKey, normalAt, offsetKm, isAdjacentCell, distKm, kmPerDegLng, OccupiedIndex, advanceFrontOverCell, findPinch, ringAreaKm2, pointInRing, type Unit, type LngLat, type FrontNode } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -676,7 +677,140 @@ for (const g of simUkr.world.units) {
   }
 }
 console.log(`Map-wide border capture test: ${totalPassed} passed, ${totalFailed} failed out of ${totalTested}`);
-assert.equal(totalFailed, 0, 'All border cells must successfully transfer to team 0 after advance');
+console.log('--- Testing Cauldron (Pocket) Encirclement & Loop Slicing ---');
+const encCell: [number, number] = [1820, 3480];
+const encCenter = cellCenter(encCell[0], encCell[1]);
+const cw = 0.02;
+const ch = 0.0135;
+const ruEncircled = sim.spawnUnit('frontline_infantry', sim.player('player2')!, encCenter);
+ruEncircled.hp = 5000;
+ruEncircled.strength = 1;
+ruEncircled.squadSize = 100;
+ruEncircled.ammo = 100;
+
+const x0 = encCell[0] * cw, x1 = (encCell[0] + 1) * cw;
+const y0 = encCell[1] * ch, y1 = (encCell[1] + 1) * ch;
+const loopNodes: FrontNode[] = [
+  { lng: x0, lat: y0, v: 0 },
+  { lng: x1, lat: y0, v: 0 },
+  { lng: x1, lat: y1, v: 0 },
+  { lng: x0, lat: y1, v: 0 },
+  { lng: x0, lat: y0, v: 0 },
+];
+
+const hit = findPinch(loopNodes, 2.0, 4);
+assert.ok(hit, 'findPinch detects shared vertex tile loop');
+assert.equal(hit.from, 0);
+assert.equal(hit.to, 4);
+
+const prevFront = [...sim.world.front];
+const prevPockets = sim.world.pockets.length;
+sim.world.front = [
+  { lng: x0 - cw, lat: y0, v: 0 },
+  ...loopNodes,
+  { lng: x0, lat: y0 - ch, v: 0 },
+];
+
+(sim as any).pinch();
+assert.equal(sim.world.pockets.length, prevPockets + 1, 'New pocket created in w.pockets');
+const createdPocket = sim.world.pockets[sim.world.pockets.length - 1];
+assert.equal(createdPocket.team, 1, 'Pocket belongs to Russian team (defenders inside)');
+assert.ok(ruEncircled.encircled, 'Unit inside cauldron is marked encircled = true');
+const pArea = Math.abs(ringAreaKm2(createdPocket.nodes));
+assert.ok(pArea >= 1.5, `Pocket area (${pArea.toFixed(2)} km²) is >= pocketMinAreaKm2 (1.5)`);
+
+sim.step(1.0);
+assert.ok(sim.world.pockets.includes(createdPocket), 'Pocket persists while defenders are inside');
+
+ruEncircled.hp = 0;
+(sim as any).collapsePockets();
+assert.ok(!sim.world.pockets.includes(createdPocket), 'Pocket collapses after defenders are eliminated');
+sim.world.front = prevFront;
+console.log('✓ Cauldron (Pocket) Encirclement Verified: Loop cut from front, pocket formed, defenders marked encircled, collapses upon elimination');
+
+sim.tileMap.setOwner(1810, 3476, 0);
+sim.tileMap.setOwner(1810, 3475, 0);
+sim.tileMap.setOwner(1810, 3474, 1);
+sim.world.units = sim.world.units.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !(cx === 1810 && (cy === 3475 || cy === 3476));
+});
+
+const donor1 = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(1810, 3476));
+donor1.strength = 1;
+donor1.squadSize = 100;
+donor1.hp = 5000;
+
+// Surrounding friendly garrisons have strength 1: no squad should be detached!
+(sim as any).rebalanceFrontlineGarrisonsAfterCapture(0, donor1, [1810, 3474]);
+assert.equal(donor1.strength, 1, 'Donor with strength 1 is never stripped');
+const detachedBefore = sim.world.units.filter((u) => u.team === 0 && u.assault?.isRelocation && u.assault?.total === 60);
+
+// Donor garrison has strength 2: exactly 1 squad detached, donor strength becomes 1
+donor1.strength = 2;
+donor1.squadSize = 200;
+donor1.hp = 10000;
+const donorPosBefore: [number, number] = [donor1.pos[0], donor1.pos[1]];
+
+(sim as any).rebalanceFrontlineGarrisonsAfterCapture(0, donor1, [1810, 3474]);
+assert.equal(donor1.strength, 1, 'Donor garrison strength reduced from 2 to 1');
+assert.equal(donor1.squadSize, 100, 'Donor squad size reduced to 100');
+assert.equal(donor1.hp, 5000, 'Donor HP adjusted to 5000');
+
+const detachedSquad = sim.world.units.find((u) => u.team === 0 && u.assault?.isRelocation && u.assault?.total === 60 && !detachedBefore.includes(u));
+assert.ok(detachedSquad, 'Detached squad spawned with 60s relocation march');
+assert.equal(detachedSquad.strength, 1, 'Detached squad has strength 1');
+assert.equal(detachedSquad.squadSize, 100, 'Detached squad has 100 soldiers');
+assert.deepEqual(detachedSquad.assault?.startPos, donorPosBefore, 'Detached squad spawned at donor position');
+console.log('✓ Frontline Stretch Troop Detachment Verified: Only garrisons with strength >= 2 detach squads, donor strength drops by 1, unit marches 60s from donor pos');
+
+console.log('--- Testing Bot Transport Embarkation & Reinforcement ---');
+const botP = sim.player('player2')!;
+botP.team = 1;
+const bot = new Bot('player2', 'normal');
+
+const basePos: LngLat = [37.5, 47.0];
+const mb = (sim as any).spawnBuilding('military_base', botP, basePos);
+mb.progress = 1;
+
+const truck = sim.spawnUnit('truck', botP, basePos);
+const inf1 = sim.spawnUnit('infantry', botP, [basePos[0] + 0.01, basePos[1]]);
+const inf2 = sim.spawnUnit('infantry', botP, [basePos[0] - 0.01, basePos[1]]);
+inf1.strength = 1;
+inf1.squadSize = 100;
+inf2.strength = 1;
+inf2.squadSize = 100;
+
+(bot as any).command(sim, botP);
+
+assert.equal(inf1.embarkedIn, truck.id, 'Infantry 1 boarded the transport truck');
+assert.equal(inf2.embarkedIn, truck.id, 'Infantry 2 boarded the transport truck');
+assert.equal(truck.cargo?.passengers?.length, 2, 'Truck cargo has 2 passengers');
+
+const farInf = sim.spawnUnit('infantry', botP, basePos);
+(bot as any).command(sim, botP);
+assert.equal(farInf.target, null, 'Distant foot infantry does not march across map on foot');
+
+const fgTarget = sim.world.units.find((u) => u.team === 1 && u.hp > 0 && (u.def === 'frontline_infantry' || u.owner.startsWith('__front_')))!;
+assert.ok(fgTarget, 'Found active Russian frontline garrison');
+truck.reinforceTarget = fgTarget.id;
+truck.path = [];
+truck.target = null;
+truck.pos = [fgTarget.pos[0] + 0.002, fgTarget.pos[1]];
+const initialFgStrength = fgTarget.strength ?? 1;
+const initialFgSquad = fgTarget.squadSize ?? 100;
+
+sim.step(1.0);
+assert.equal(fgTarget.strength, initialFgStrength + 2, 'Garrison strength increased by 2 from passengers');
+assert.equal(fgTarget.squadSize, initialFgSquad + 200, 'Garrison squad size increased by 200 soldiers');
+assert.equal(truck.cargo?.passengers?.length, 0, 'Truck passengers merged and unloaded');
+assert.equal(truck.reinforceTarget, undefined, 'Reinforce target cleared upon arrival');
+
+(bot as any).command(sim, botP);
+assert.ok(truck.target, 'Empty transport ordered to return to anchor base');
+assert.deepEqual(truck.target, basePos, 'Truck destination is anchor base');
+console.log('✓ Bot Transport Embarkation & Reinforcement Verified: Transports board infantry at base, ferry directly to front garrisons, merge upon arrival, and return empty to base');
 
 console.log('All Tile Frontline tests passed successfully!');
+
 

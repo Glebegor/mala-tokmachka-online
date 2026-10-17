@@ -261,12 +261,35 @@ function segmentsIntersect(
  * or crossed each other (self-intersection forming an encirclement).
  * Returns the node range [from, to] that would be cut off as a loop, or null. `minGap` ignores neighbours.
  */
-export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { from: number; to: number } | null {
-  // 1. Check for crossing / self-intersecting segments first
+export function findPinch(nodes: FrontNode[], maxKm: number, minGap = 4): { from: number; to: number } | null {
+  // 1. Check for shared vertices or touching points (same coordinate with gap >= minGap)
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const a = nodes[i];
+    for (let j = i + minGap; j < nodes.length; j++) {
+      const b = nodes[j];
+      if (Math.abs(a.lng - b.lng) < 1e-4 && Math.abs(a.lat - b.lat) < 1e-4) {
+        // Strip common stem if the lines run parallel into the neck
+        let from = i;
+        let to = j;
+        while (
+          from + 1 < to - 1 &&
+          Math.abs(nodes[from + 1].lng - nodes[to - 1].lng) < 1e-4 &&
+          Math.abs(nodes[from + 1].lat - nodes[to - 1].lat) < 1e-4 &&
+          to - 1 - (from + 1) >= 4
+        ) {
+          from++;
+          to--;
+        }
+        return { from, to };
+      }
+    }
+  }
+
+  // 2. Check for crossing / self-intersecting segments
   for (let i = 0; i < nodes.length - 1; i++) {
     const a1 = nodes[i];
     const a2 = nodes[i + 1];
-    for (let j = i + Math.max(12, minGap); j < nodes.length - 1; j++) {
+    for (let j = i + minGap; j < nodes.length - 1; j++) {
       const b1 = nodes[j];
       const b2 = nodes[j + 1];
       if (segmentsIntersect(a1.lng, a1.lat, a2.lng, a2.lat, b1.lng, b1.lat, b2.lng, b2.lat)) {
@@ -275,7 +298,7 @@ export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { 
     }
   }
 
-  // 2. Check for pincer jaws within maxKm
+  // 3. Check for pincer jaws within maxKm
   let best: { from: number; to: number; d: number } | null = null;
   const latMargin = (maxKm * 1.5) / KM;
   for (let i = 0; i < nodes.length; i++) {
@@ -294,6 +317,6 @@ export function findPinch(nodes: FrontNode[], maxKm: number, minGap: number): { 
       if (d <= maxKm && (!best || d < best.d)) best = { from: i + 1, to: t < 0.5 ? j : j + 1, d };
     }
   }
-  return best && best.to - best.from >= 3 ? { from: best.from, to: best.to } : null;
+  return best && best.to - best.from >= minGap ? { from: best.from, to: best.to } : null;
 }
 
