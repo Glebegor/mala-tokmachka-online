@@ -782,20 +782,20 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       map.addLayer({ id: 'trench-line', type: 'line', source: 'trenches', filter: ['!=', ['get', 'kind'], 'rail'], layout: { 'line-join': 'miter' }, paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, ['case', isBridge, 2.5, 1.2], 10, ['case', isBridge, 5.5, 2.4]], 'line-opacity': ['get', 'o'] } });
       // railway: the classic dark line with white ties
       map.addLayer({ id: 'rail-ties', type: 'line', source: 'trenches', filter: ['==', ['get', 'kind'], 'rail'], paint: { 'line-color': ['get', 'color'], 'line-width': ['interpolate', ['linear'], ['zoom'], 6, 1.2, 10, 2.4], 'line-dasharray': [2, 2], 'line-opacity': ['get', 'o'] } });
-      // cauldrons: encircled pocket ring with rounded corners, dark casing, and contact front line styling
-      map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': ['case', ['==', ['get', 'team'], 0], '#ff4d57', '#38bdf8'], 'fill-opacity': 0.15 } });
+      // cauldrons: encircled pocket ring with yellow dashed line and rounded corners
+      map.addLayer({ id: 'pocket-fill', type: 'fill', source: 'pockets', paint: { 'fill-color': '#ffd84a', 'fill-opacity': 0.12 } });
       map.addLayer({
         id: 'pocket-case', type: 'line', source: 'pockets',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
-        paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.2, 10, 5.5], 'line-opacity': 0.85 }
+        paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 5.8], 'line-opacity': 0.85 }
       });
       map.addLayer({
         id: 'pocket-line', type: 'line', source: 'pockets',
         layout: { 'line-join': 'round', 'line-cap': 'round' },
         paint: {
-          'line-color': ['case', ['==', ['get', 'team'], 0], '#ff4d57', '#38bdf8'],
-          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.8, 10, 3],
-          'line-dasharray': [3, 2]
+          'line-color': '#ffd84a',
+          'line-width': ['interpolate', ['linear'], ['zoom'], 5, 2.0, 10, 3.2],
+          'line-dasharray': [4, 3]
         }
       });
       // occupied ground also gets fine diagonal hatching, like on printed situation maps

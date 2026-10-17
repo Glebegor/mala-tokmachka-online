@@ -53,7 +53,14 @@ export class TileMap {
 
   ownerOf(ix: number, iy: number): Team | undefined {
     let t = this.tiles.get(cellKey(ix, iy));
-    if (t === undefined && this.occIndex) {
+    if (t !== undefined) return t;
+    if (this.occIndex) {
+      if (
+        (this.minIx !== 0 || this.maxIx !== 0) &&
+        (ix < this.minIx || ix > this.maxIx || iy < this.minIy || iy > this.maxIy)
+      ) {
+        return undefined;
+      }
       t = this.occIndex.contains(cellCenter(ix, iy)) ? 1 : 0;
       this.tiles.set(cellKey(ix, iy), t);
     }
@@ -453,3 +460,195 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
 
   return cleanFront;
 }
+
+/**
+ * Traces the perimeter of a set of 4-connected grid cells into a closed polygon ring.
+ * The resulting ring traverses the outer boundary counter-clockwise.
+ */
+export function cellsToRing(cells: [number, number][]): FrontNode[] {
+  if (!cells.length) return [];
+  const cw = TILE_CW;
+  const ch = TILE_CH;
+  const set = new Set<number>();
+  for (const [ix, iy] of cells) set.add(cellKey(ix, iy));
+
+  type Pt = [number, number];
+  const edges = new Map<string, Pt[]>();
+  const addEdge = (ax: number, ay: number, bx: number, by: number) => {
+    const k = `${ax.toFixed(6)},${ay.toFixed(6)}`;
+    const list = edges.get(k);
+    if (list) list.push([bx, by]);
+    else edges.set(k, [[bx, by]]);
+  };
+
+  for (const [ix, iy] of cells) {
+    const x0 = ix * cw, x1 = (ix + 1) * cw;
+    const y0 = iy * ch, y1 = (iy + 1) * ch;
+
+    // South (bottom) edge: goes West -> East
+    if (!set.has(cellKey(ix, iy - 1))) addEdge(x0, y0, x1, y0);
+    // East (right) edge: goes South -> North
+    if (!set.has(cellKey(ix + 1, iy))) addEdge(x1, y0, x1, y1);
+    // North (top) edge: goes East -> West
+    if (!set.has(cellKey(ix, iy + 1))) addEdge(x1, y1, x0, y1);
+    // West (left) edge: goes North -> South
+    if (!set.has(cellKey(ix - 1, iy))) addEdge(x0, y1, x0, y0);
+  }
+
+  if (edges.size === 0) return [];
+
+  // Pick lowest x (westernmost) as start point
+  let startPt: Pt | null = null;
+  let minX = Infinity;
+  for (const k of edges.keys()) {
+    const [sx, sy] = k.split(',').map(Number);
+    if (sx < minX) {
+      minX = sx;
+      startPt = [sx, sy];
+    }
+  }
+
+  if (!startPt) return [];
+
+  const ring: FrontNode[] = [{ lng: startPt[0], lat: startPt[1], v: 0 }];
+  let cur = startPt;
+  const visited = new Set<string>();
+
+  for (let step = 0; step < 2000; step++) {
+    const k = `${cur[0].toFixed(6)},${cur[1].toFixed(6)}`;
+    const outgoing = edges.get(k);
+    if (!outgoing || !outgoing.length) break;
+
+    let next: Pt | null = null;
+    for (const cand of outgoing) {
+      const eKey = `${cur[0].toFixed(6)},${cur[1].toFixed(6)}->${cand[0].toFixed(6)},${cand[1].toFixed(6)}`;
+      if (!visited.has(eKey)) {
+        visited.add(eKey);
+        next = cand;
+        break;
+      }
+    }
+    if (!next) break;
+
+    ring.push({ lng: next[0], lat: next[1], v: 0 });
+    cur = next;
+    if (Math.abs(cur[0] - startPt[0]) < 1e-4 && Math.abs(cur[1] - startPt[1]) < 1e-4) {
+      break;
+    }
+  }
+
+  return subdivideTileEdges(removeSpurs(ring));
+}
+
+/**
+ * Checks if a grid cell of a team is encircled in a cauldron.
+ * Explores 4-orthogonal friendly neighbors (NO DIAGONALS).
+ * If all paths are blocked by enemy/water tiles and cannot reach deep friendly rear (>= 8 tiles)
+ * or a friendly base, it returns all cells in the enclosed cauldron.
+ */
+export function findEncircledCauldron(
+  startCell: [number, number],
+  team: Team,
+  tileMap: TileMap,
+  isBaseOrDeepRear: (cell: [number, number], team: Team) => boolean,
+  maxCells = 30
+): [number, number][] | null {
+  const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+  const visited = new Set<number>();
+  const queue: [number, number][] = [startCell];
+  visited.add(cellKey(startCell[0], startCell[1]));
+
+  let head = 0;
+  while (head < queue.length) {
+    const [cx, cy] = queue[head++];
+
+    // If we reached a friendly base or deep rear corridor, we are NOT encircled!
+    if (isBaseOrDeepRear([cx, cy], team)) {
+      return null;
+    }
+
+    // If the component is too large (> maxCells), it's part of the main territory
+    if (visited.size > maxCells) {
+      return null;
+    }
+
+    for (const [dx, dy] of dirs) {
+      const nx = cx + dx, ny = cy + dy;
+      const nk = cellKey(nx, ny);
+      if (visited.has(nk)) continue;
+
+      if (tileMap.ownerOf(nx, ny) === team) {
+        visited.add(nk);
+        queue.push([nx, ny]);
+      }
+    }
+  }
+
+  // The queue emptied and we visited <= maxCells: all 4 outer directions lead to non-friendly tiles!
+  // This group of cells is an encircled cauldron!
+  return queue;
+}
+
+/**
+ * Detects encircled cauldrons (pockets) on the tile map.
+ * Any group of cells of team T that cannot reach home territory / HQ / rear edge
+ * via 4-orthogonal friendly neighbors (NO DIAGONALS) is considered a cauldron.
+ */
+export function detectTileCauldrons(
+  tileMap: TileMap,
+  garrisons: { team: Team; pos: LngLat }[],
+  bases: { team: Team; pos: LngLat }[] = []
+): { team: Team; cells: [number, number][]; nodes: FrontNode[] }[] {
+  const cauldrons: { team: Team; cells: [number, number][]; nodes: FrontNode[] }[] = [];
+  const processedCells = new Set<number>();
+
+  const baseCellsByTeam = new Map<Team, Set<number>>();
+  baseCellsByTeam.set(0, new Set<number>());
+  baseCellsByTeam.set(1, new Set<number>());
+  if (bases) {
+    for (const b of bases) {
+      baseCellsByTeam.get(b.team)?.add(cellKey(cellOf(b.pos)[0], cellOf(b.pos)[1]));
+    }
+  }
+
+  for (const g of garrisons) {
+    const startCell = cellOf(g.pos);
+    const sk = cellKey(startCell[0], startCell[1]);
+    if (processedCells.has(sk)) continue;
+
+    // Check if tileMap owner matches garrison team
+    if (tileMap.ownerOf(startCell[0], startCell[1]) !== g.team) continue;
+
+    const pocketCells = findEncircledCauldron(
+      startCell,
+      g.team,
+      tileMap,
+      (c, team) => {
+        if (baseCellsByTeam.get(team)?.has(cellKey(c[0], c[1]))) return true;
+        if (tileMap.maxIy && tileMap.minIy) {
+          if (team === 0 && c[1] >= tileMap.maxIy - 1) return true;
+          if (team === 1 && c[1] <= tileMap.minIy + 1) return true;
+        }
+        return false;
+      },
+      30
+    );
+
+    if (pocketCells && pocketCells.length > 0) {
+      for (const c of pocketCells) {
+        processedCells.add(cellKey(c[0], c[1]));
+      }
+      const ring = cellsToRing(pocketCells);
+      if (ring.length >= 4) {
+        cauldrons.push({
+          team: g.team,
+          cells: pocketCells,
+          nodes: ring,
+        });
+      }
+    }
+  }
+
+  return cauldrons;
+}
+

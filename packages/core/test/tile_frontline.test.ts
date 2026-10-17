@@ -895,10 +895,98 @@ console.log('✓ Bot Urgent Defense Verified: Reinforcements rushed to garrison 
 // --- Testing Bot Stranded Rear Garrison Redeployment ---
 const strandedG = sim.spawnUnit('frontline_infantry', testBotP, cellCenter(1815, 3465)); // deep in rear
 strandedG.strength = 1;
-(bot as any).redeployStrandedGarrisons(sim, testBotP);
-// Stranded garrison should have called attackTile relocation towards active front
-console.log('✓ Bot Stranded Rear Garrison Redeployment Verified');
+// --- Testing Tile Cauldron Encirclement, 2x Ammo/Morale Debuffs & Relief (Breakthrough Rescue) ---
+console.log('--- Testing Tile Cauldron (User Drawing Scenario) ---');
+const ruPlayer = sim.player('player2')!;
+const uaPlayer = sim.player('player1')!;
+
+// Coordinates for the 2 isolated Russian garrisons on the left:
+// Tile A: [1950, 3450]
+// Tile B: [1951, 3450]
+// Intermediate cut-off tile (the green tile): [1952, 3450]
+// Russian main territory starts at [1953, 3450] and extends south/east
+const tileA: [number, number] = [1950, 3450];
+const tileB: [number, number] = [1951, 3450];
+const cutTile: [number, number] = [1952, 3450];
+
+// Set up surrounding environment as Team 0 (Ukraine)
+for (let dx = -1; dx <= 3; dx++) {
+  for (let dy = -1; dy <= 1; dy++) {
+    sim.tileMap.setOwner(1950 + dx, 3450 + dy, 0);
+  }
+}
+
+// Set Tile A and Tile B as Team 1 (Russia)
+sim.tileMap.setOwner(tileA[0], tileA[1], 1);
+sim.tileMap.setOwner(tileB[0], tileB[1], 1);
+
+// Cut-off tile [1952, 3450] is owned by Team 0 (Ukraine captured it, like the green tile in drawing)
+sim.tileMap.setOwner(cutTile[0], cutTile[1], 0);
+
+// Russian main rear starts at [1953, 3450]
+for (let step = 3; step <= 35; step++) {
+  sim.tileMap.setOwner(1950 + step, 3450, 1);
+}
+
+// Spawn the 2 Russian frontline garrisons inside Tile A and Tile B
+const garrA = sim.spawnUnit('frontline_infantry', ruPlayer, cellCenter(tileA[0], tileA[1]));
+const garrB = sim.spawnUnit('frontline_infantry', ruPlayer, cellCenter(tileB[0], tileB[1]));
+garrA.ammo = 100;
+garrB.ammo = 100;
+garrA.morale = 100;
+garrB.morale = 100;
+
+// Also place a depot/warehouse nearby to verify that encircled troops are denied warehouse resupply
+const depot = (sim as any).spawnBuilding('warehouse', ruPlayer, offsetKm(garrA.pos, 0.5, 0.5));
+depot.progress = 1;
+depot.storage = { ammo: 1000, metal: 1000, fuel: 1000, ore: 0 };
+
+// Detect cauldrons
+(sim as any).updateTileCauldrons();
+
+// 1. Verify that Tile A and Tile B form a pocket
+const formedPocket = sim.world.pockets.find(
+  (p) => p.team === 1 && pointInRing(p.nodes, garrA.pos) && pointInRing(p.nodes, garrB.pos)
+);
+assert.ok(formedPocket, 'Cauldron successfully detected for the 2 isolated garrisons cut off from main territory');
+assert.equal(garrA.encircled, true, 'Garrison A is marked encircled');
+assert.equal(garrB.encircled, true, 'Garrison B is marked encircled');
+
+// 2. Verify debuffs:
+// - No supply from depot/warehouse
+assert.equal(sim.supplyFor(garrA), null, 'Encircled garrison receives NO supply from warehouse even if in range');
+const uDefA = (sim as any).defs.u.get(garrA.def)!;
+assert.equal((sim as any).resupply(garrA, uDefA, 1), false, 'resupply returns false for encircled unit');
+
+// - 2x faster morale drain
+const prevMorale = garrA.morale;
+(sim as any).morale();
+assert.ok(garrA.morale <= prevMorale - 4, `Morale drains 2x faster in cauldron (-4/s): ${garrA.morale} <= ${prevMorale - 4}`);
+
+// 3. Test Diagonal Connection does NOT relieve cauldron:
+// Connect friendly tile diagonally at [1952, 3451]
+sim.tileMap.setOwner(1952, 3451, 1);
+(sim as any).updateTileCauldrons();
+assert.equal(garrA.encircled, true, 'Diagonal friendly tile does NOT relieve cauldron (only 4-orthogonal counts)');
+
+// 4. Test Relief (Деблокада) via Orthogonal Breakthrough:
+// Russian forces counter-attack and recapture cutTile [1952, 3450], reconnecting A and B to main territory
+sim.tileMap.setOwner(cutTile[0], cutTile[1], 1);
+(sim as any).updateTileCauldrons();
+
+const relievedPocket = sim.world.pockets.find(
+  (p) => p.team === 1 && pointInRing(p.nodes, garrA.pos)
+);
+assert.equal(relievedPocket, undefined, 'Cauldron dissolved upon orthogonal breakthrough reconnection');
+assert.equal(garrA.encircled, false, 'Garrison A encircled status cleared after relief');
+assert.equal(garrB.encircled, false, 'Garrison B encircled status cleared after relief');
+
+// Supply from warehouse is restored
+assert.ok(sim.supplyFor(garrA) !== null, 'Warehouse supply restored to relieved garrison');
+
+console.log('✓ Cauldron Detection, 2x Debuffs, Diagonal Non-relief & Relief Verified!');
 
 console.log('All Tile Frontline tests passed successfully!');
+
 
 

@@ -9,7 +9,7 @@ import { generateMatchDeposits, inDeposit, type ResourceDeposit } from './deposi
 import { generateCityHouses } from './housing';
 import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
-import { TileMap, cellOf, cellCenter, cellKey, isAdjacentCell, snapFrontToTileEdges, advanceFrontOverCell, subdivideTileEdges, removeSpurs } from './tiles';
+import { TileMap, cellOf, cellCenter, cellKey, isAdjacentCell, snapFrontToTileEdges, advanceFrontOverCell, subdivideTileEdges, removeSpurs, detectTileCauldrons, cellsToRing } from './tiles';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
@@ -604,6 +604,7 @@ export class Sim {
   private depots: { tick: number; list: Building[] } = { tick: -1, list: [] };
   /** The stocked ammo point this unit can refill at, if one is in range. */
   supplyFor(u: Unit): Building | null {
+    if (u.encircled) return null; // Garrisons in a cauldron do not receive ammo from warehouses/depots
     if (this.depots.tick !== this.world.tick) {
       this.depots = { tick: this.world.tick, list: this.world.buildings.filter((b) => b.progress >= 1 && this.defs.b.get(b.def)!.supply && (b.storage?.ammo ?? 0) > 0) };
     }
@@ -2112,6 +2113,7 @@ export class Sim {
           // Update frontline polyline to wrap around captured cell
           w.front = advanceFrontOverCell(w.front, tgtCell, u.team);
           this.occ.tick = -1;
+          this.updateTileCauldrons();
           this.pinch();
 
           // Rebalance garrisons along the stretched front / rear garrisons
@@ -3408,8 +3410,8 @@ export class Sim {
             const ang = Math.random() * Math.PI * 2;
             const spread = Math.random() * 0.4;
             const impact = offsetKm(u.bombardTarget, spread * Math.cos(ang), spread * Math.sin(ang));
-            this.shots.push({ def: u.def, team: u.team, from: u.pos, to: impact });
-            if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
+            const effectivePerShot = perShot * (u.encircled ? 2 : 1);
+            if (d.maxAmmo) u.ammo = Math.max(0, (u.ammo ?? 0) - effectivePerShot);
             const dealt = this.blast(u, impact, 1, d.damage * rank.damage, false);
             u.xp += dealt * r.xpPerDamage;
             this.stat(u.owner).damage += dealt;
@@ -3488,7 +3490,8 @@ export class Sim {
       const aimingNow = !!(tu || tb) && !!d.aimTime && this.aiming(u, d, tu ? `u:${(tu as Unit).id}` : `b:${(tb as Building).id}`, dt);
       if ((tu || tb) && !aimingNow && u.cooldown === 0) {
         u.cooldown = d.minRange ? 2 : 1; // guns fire every 2 s, everything else once a second
-        if (d.maxAmmo) u.ammo = (u.ammo ?? 0) - perShot;
+        const effectivePerShot = perShot * (u.encircled ? 2 : 1);
+        if (d.maxAmmo) u.ammo = Math.max(0, (u.ammo ?? 0) - effectivePerShot);
         const base = d.damage * rank.damage * (u.encircled ? r.encircledDamageMult : 1) * this.moraleMult(u) * this.crowdDealt(u);
         let dealt: number;
         if (tu) {
@@ -3615,7 +3618,7 @@ export class Sim {
         this.near(this.unitGrid, u.pos, 0.8, (g) => {
           if (distKm(u.pos, g.pos) > 0.8) return;
           const maxGarrisonAmmo = Math.max(1, g.strength ?? 1) * 100;
-          if (g.team === u.team && g.hp > 0 && (g.def === 'frontline_infantry' || g.owner.startsWith('__front_')) && (g.ammo ?? 0) < maxGarrisonAmmo) {
+          if (g.team === u.team && g.hp > 0 && !g.encircled && (g.def === 'frontline_infantry' || g.owner.startsWith('__front_')) && (g.ammo ?? 0) < maxGarrisonAmmo) {
             const needed = maxGarrisonAmmo - (g.ammo ?? 0);
             if (u.cargo?.res?.ammo && u.cargo.res.ammo > 0) {
               const transfer = Math.min(needed, u.cargo.res.ammo);
@@ -3674,7 +3677,8 @@ export class Sim {
                 if (u.skirmishCount >= 6) {
                   u.skirmishCount = 0;
                   const str = Math.max(1, u.strength ?? 1);
-                  const ammoDrain = 1 * (1 + (str - 1) * 0.05);
+                  const ammoMult = u.encircled ? 2.0 : 1.0;
+                  const ammoDrain = 1 * (1 + (str - 1) * 0.05) * ammoMult;
                   u.ammo = Math.max(0, (u.ammo ?? 0) - ammoDrain);
                 }
               }
@@ -3711,7 +3715,8 @@ export class Sim {
           if (!tgt) continue;
           const target: Unit = tgt;
           g.cooldown = 1;
-          if (gd.maxAmmo) g.ammo = (g.ammo ?? 0) - (gd.ammoPerShot ?? 1);
+          const effectivePerShot = (gd.ammoPerShot ?? 1) * (g.encircled ? 2 : 1);
+          if (gd.maxAmmo) g.ammo = Math.max(0, (g.ammo ?? 0) - effectivePerShot);
           const dealt = this.hitUnit(g, target, gd.damage * this.ranks[g.rank].damage * this.moraleMult(g));
           g.xp += dealt * r.xpPerDamage;
           this.stat(g.owner).damage += dealt;
@@ -3946,7 +3951,7 @@ export class Sim {
       if (u.morale === undefined || u.embarkedIn) continue;
       const d = this.defs.u.get(u.def)!;
       let delta = 0;
-      if (u.encircled) delta -= 2;
+      if (u.encircled) delta -= 4; // 2x faster morale loss in cauldron (was 2)
       if (d.maxAmmo && (u.ammo ?? 0) < (d.ammoPerShot ?? 1)) delta -= 0.5;
       if (!delta && w.time - (u.lastHit ?? -1e9) >= 10) delta = havens.some((b) => b.team === u.team && distKm(b.pos, u.pos) <= 8) ? 3 : 1;
       u.morale = clamp(u.morale + delta, 0, 100);
@@ -5378,7 +5383,10 @@ export class Sim {
       move(pocket.nodes, true, base);
     }
 
-    if (w.tick % 5 === 0) this.pinch();
+    if (w.tick % 5 === 0) {
+      this.updateTileCauldrons();
+      this.pinch();
+    }
     if (w.tick % 10 === 0) this.collapsePockets();
     if (w.tick % 20 === 0) {
       w.front = respace(w.front, r.frontNodeSpacingKm);
@@ -5397,44 +5405,6 @@ export class Sim {
    */
   private breakthrough(): boolean {
     return false;
-    const w = this.world;
-    const f = w.front;
-    if (f.length < 5) return false;
-    const moved = new Set<number>();
-    for (const u of w.units) {
-      if (u.embarkedIn || this.defs.u.get(u.def)!.kind === 'air' || u.hp <= 0) continue;
-      if (u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined) continue;
-      if (w.pockets.some((p) => pointInRing(p.nodes, u.pos))) continue; // cauldrons have their own line
-      const signed = distToFrontKm(f, u.pos) * (u.team === 0 ? 1 : -1); // < 0: beyond its line
-      if (signed >= 0 || signed < -4) continue;
-      let opposed = false;
-      this.near(this.unitGrid, u.pos, 2, (e) => {
-        if (!opposed && e.team !== u.team && !e.embarkedIn && this.defs.u.get(e.def)!.kind !== 'air' && distKm(e.pos, u.pos) <= 2) opposed = true;
-      });
-      if (opposed) continue;
-      const i = nearestNode(f, u.pos);
-      if (i <= 0 || i >= f.length - 1 || moved.has(i)) continue;
-      // push the node (and, less, its neighbours) along the normal past the unit; between two nodes the line gives
-      // less, so keep pushing (a few times at most) until the unit stands on its own side
-      const dir = u.team === 0 ? 1 : -1; // the normal points into team 1's ground
-      const touched: number[] = [];
-      for (let round = 0, beyond = -signed; round < 4 && beyond > 0; round++) {
-        const push = beyond + 0.5;
-        for (const [k, share] of [[0, 1], [-1, 0.6], [1, 0.6], [-2, 0.3], [2, 0.3]] as const) {
-          const j = i + k;
-          if (j <= 0 || j >= f.length - 1 || (moved.has(j) && !touched.includes(j))) continue;
-          const [nx, ny] = normalOf(f[j - 1], f[j], f[j + 1]);
-          const lng = f[j].lng + (nx * dir * push * share) / kmPerDegLng(f[j].lat);
-          const lat = f[j].lat + (ny * dir * push * share) / 111.32;
-          if (this.terrain?.isBarrier([lng, lat]) && !this.terrain?.isBarrier([f[j].lng, f[j].lat])) continue; // not across a river
-          (f[j].lng = lng), (f[j].lat = lat);
-          touched.push(j);
-        }
-        beyond = -distToFrontKm(f, u.pos) * (u.team === 0 ? 1 : -1);
-      }
-      for (const j of touched) moved.add(j);
-    }
-    return moved.size > 0;
   }
 
   private garrisonCache: { tick: number; list: Building[] } = { tick: -1, list: [] };
@@ -5442,6 +5412,65 @@ export class Sim {
   private garrisons(): Building[] {
     if (this.garrisonCache.tick !== this.world.tick) this.garrisonCache = { tick: this.world.tick, list: this.world.buildings.filter((b) => b.inside.length && this.defs.b.get(b.def)!.garrison) };
     return this.garrisonCache.list;
+  }
+
+  /**
+   * Detects tile-based cauldrons:
+   * When tiles are surrounded on all 4 orthogonal sides (no diagonal connection) and cut off from home territory,
+   * they become a cauldron, detached from the main front line with yellow dashed outline.
+   * If reconnected to friendly territory via a breakthrough, the cauldron dissolves.
+   */
+  updateTileCauldrons() {
+    if (!this.tileMap) return;
+    const w = this.world;
+
+    const garrisons = w.units.filter(
+      (u) =>
+        u.hp > 0 &&
+        this.defs.u.get(u.def)?.kind !== 'air'
+    );
+    const bases = w.buildings.filter(
+      (b) => b.hp > 0 && (b.def === 'hq' || b.def === 'military_base')
+    );
+
+    const detected = detectTileCauldrons(this.tileMap, garrisons, bases);
+    const existingPockets = [...w.pockets];
+    const newPockets: Pocket[] = [];
+
+    for (const d of detected) {
+      const match = existingPockets.find(
+        (p) => p.team === d.team && d.cells.some(([cx, cy]) => pointInRing(p.nodes, cellCenter(cx, cy)))
+      );
+      if (match) {
+        match.nodes = d.nodes;
+        newPockets.push(match);
+      } else {
+        const newPocket: Pocket = {
+          id: w.nextId++,
+          team: d.team,
+          nodes: d.nodes,
+        };
+        newPockets.push(newPocket);
+        const trapped = w.units.filter((u) => u.team === d.team && u.hp > 0 && pointInRing(newPocket.nodes, u.pos)).length;
+        this.hooks?.emit('cauldronFormed', { id: newPocket.id, team: d.team, units: trapped });
+        this.hooks?.emit('toast', { text: `Образован котёл! Отрезано ${trapped} гарнизон(ов) от основных сил.` });
+      }
+    }
+
+    // Check for relieved pockets (rescued by breakthrough reconnecting 4-way path to friendly ground)
+    for (const p of existingPockets) {
+      if (!newPockets.includes(p)) {
+        this.hooks?.emit('toast', { text: `Кольцо окружения прорвано! Войска деблокированы и соединились с основными силами.` });
+      }
+    }
+
+    w.pockets = newPockets;
+
+    // Immediately update encircled flag on all units
+    for (const u of w.units) {
+      if (this.defs.u.get(u.def)!.kind === 'air') continue;
+      u.encircled = w.pockets.some((p) => p.team === u.team && pointInRing(p.nodes, u.pos));
+    }
   }
 
   /** When the jaws of a pincer meet or an encirclement forms, the loop of front is cut off and becomes a cauldron. */
@@ -5478,17 +5507,22 @@ export class Sim {
       if (hasRu && !hasUa) team = 1;
       else if (hasUa && !hasRu) team = 0;
 
-      const pocket: Pocket = { id: w.nextId++, team, nodes: closedNodes };
-      w.pockets.push(pocket);
-      // Immediately mark trapped units inside the cauldron as encircled
-      for (const u of w.units) {
-        if (pointInRing(pocket.nodes, u.pos)) {
-          u.encircled = true;
+      const existing = w.pockets.find(
+        (p) => p.team === team && p.nodes.some((pn) => closedNodes.some((cn) => Math.abs(pn.lng - cn.lng) < 1e-4 && Math.abs(pn.lat - cn.lat) < 1e-4))
+      );
+      if (!existing) {
+        const pocket: Pocket = { id: w.nextId++, team, nodes: closedNodes };
+        w.pockets.push(pocket);
+        // Immediately mark trapped units inside the cauldron as encircled
+        for (const u of w.units) {
+          if (pointInRing(pocket.nodes, u.pos)) {
+            u.encircled = true;
+          }
         }
+        const trapped = w.units.filter((u) => u.team === team && pointInRing(pocket.nodes, u.pos)).length;
+        this.hooks.emit('cauldronFormed', { id: pocket.id, team, units: trapped, areaKm2: Math.round(Math.abs(area)) });
+        this.hooks.emit('toast', { text: `Образован котёл! В окружении оказалось ${trapped} гарнизон(ов) противника.` });
       }
-      const trapped = w.units.filter((u) => u.team === team && pointInRing(pocket.nodes, u.pos)).length;
-      this.hooks.emit('cauldronFormed', { id: pocket.id, team, units: trapped, areaKm2: Math.round(Math.abs(area)) });
-      this.hooks.emit('toast', { text: `Образован котёл! В окружении оказалось ${trapped} гарнизон(ов) противника.` });
     }
   }
 
