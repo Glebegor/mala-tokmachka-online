@@ -1140,7 +1140,7 @@ garrisonTarget.morale = 100;
 
 const truckTarget = sim.spawnUnit('truck', sim.player('player2')!, testPos);
 truckTarget.pos = [testPos[0], testPos[1]];
-truckTarget.hp = 600;
+truckTarget.hp = 50;
 
 const strikeDrone = sim.spawnUnit('drone_fire_point', sim.player('player1')!, testPos);
 strikeDrone.pos = [testPos[0], testPos[1]];
@@ -1153,9 +1153,8 @@ assert.equal(strikeDrone.fuel, firePointDef.maxFuel, 'Drone spawns with full fue
 assert.equal(garrisonTarget.hp, 25000, 'Frontline garrison takes NO HP damage from strike drone');
 assert.equal(garrisonTarget.morale, 85, 'Frontline garrison morale reduced by 15 points (100 -> 85)');
 
-// Normal vehicle (truck): takes HP damage
-assert.ok(truckTarget.hp < 600, `Normal vehicle takes damage (hp: ${truckTarget.hp})`);
-assert.ok(truckTarget.hp <= 550, `Normal vehicle took blast damage (hp: ${truckTarget.hp})`);
+// Normal vehicle (truck): destroyed or takes heavy lethal blast damage
+assert.ok(truckTarget.hp <= 0, `Normal vehicle takes lethal damage (hp: ${truckTarget.hp})`);
 
 console.log('✓ 4 Faction Drones TTX & Frontline Garrison Blast Immunity Verified!');
 
@@ -1246,6 +1245,38 @@ const dispatchRes = sim.apply(p1.id, { type: 'dispatchDrones', building: dFactor
 assert.ok(dispatchRes.ok, 'dispatchDrones command succeeded');
 
 console.log('✓ Drone Truck Logistics (5 Drones per Truck) Verified!');
+
+// --- Testing 50 HP for all trucks and cars ---
+assert.equal(sim.defs.u.get('humvee')!.hp, 50, 'Humvee has 50 HP');
+assert.equal(sim.defs.u.get('humvee_mg')!.hp, 50, 'Humvee MG (MVG) has 50 HP');
+assert.equal(sim.defs.u.get('truck')!.hp, 50, 'Truck has 50 HP');
+assert.equal(sim.defs.u.get('logistics_truck')!.hp, 50, 'Logistics truck has 50 HP');
+console.log('✓ All Trucks and Cars Verified at 50 HP!');
+
+// --- Testing Garrison vs Humvee MG (MVG) Drone Targeting ---
+const pUA = sim.player('player1')!;
+const pRU = sim.player('player2')!;
+
+// 1. Frontline garrison does NOT shoot at drones
+const garrisonUA = sim.spawnUnit('frontline_infantry', pUA, [35.0, 47.0]);
+garrisonUA.ammo = 100;
+garrisonUA.cooldown = 0;
+const droneRU = sim.spawnUnit('drone_pd2', pRU, [35.005, 47.0]); // ~0.4 km away, well within 1.5 km range
+droneRU.hp = 90;
+
+sim.step(0.5);
+
+assert.equal(droneRU.hp, 90, 'Frontline garrison does NOT shoot at drones (drone HP untouched at 90)');
+
+// 2. Only Humvee with MG (MVG) shoots at drones
+const mvgUA = sim.spawnUnit('humvee_mg', pUA, [35.002, 47.0]);
+mvgUA.ammo = 100;
+mvgUA.cooldown = 0;
+
+sim.step(1.0);
+
+assert.ok(droneRU.hp < 90, `Humvee with MG (MVG) shoots at drone (drone HP: ${droneRU.hp})`);
+console.log('✓ Garrisons Do Not Shoot At Drones, Only Humvee MG (MVG) Shoots At Drones Verified!');
 
 console.log('All Tile Frontline tests passed successfully!');
 

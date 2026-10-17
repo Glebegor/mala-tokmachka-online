@@ -3643,12 +3643,12 @@ export class Sim {
       let tb: Building | null = null;
       // reloading: look for targets only now and then (the last answer stands meanwhile)
       const lookNow = u.cooldown <= dt * 1.5 || (u.id + w.tick) % (d.minRange ? 10 : 4) === 0;
+      const isFrontline = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
       if (canFire && !barrage && lookNow) {
-        const airDamage = d.airDamage ?? r.airDamageDefault;
+        const airDamage = isFrontline || d.targets === 'ground' ? 0 : (d.airDamage ?? r.airDamageDefault);
         const dLat = range / 111;
         if (!d.minRange) {
           let best = range;
-          const isFrontline = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
           if (isFrontline && u.pairId) {
             const p = this.unitById.get(u.pairId);
             if (p && p.hp > 0 && p.team !== u.team && distKm(u.pos, p.pos) <= range) {
@@ -3664,8 +3664,8 @@ export class Sim {
                 if (ep && ep.hp > 0) return; // e belongs to another pair: do not target
               }
               const air = this.defs.u.get(e.def)!.kind === 'air';
-              // only anti-aircraft weapons engage drones and missiles; anti-aircraft teams engage nothing else
-              if (air ? airDamage <= 0 : d.targets === 'air') return;
+              // only anti-aircraft weapons (humvee_mg) engage drones and missiles; frontline garrisons never engage air
+              if (air ? (isFrontline || airDamage <= 0 || d.targets !== 'air') : d.targets === 'air') return;
               const dist = distKm(u.pos, e.pos);
               if (dist <= best) (best = dist), (tu = e);
             });
@@ -3745,12 +3745,13 @@ export class Sim {
         } else if ((u.id + w.tick) % 4 === 0) {
           chase = null;
           let near = d.vision * 0.7;
-          const airDamage = d.airDamage ?? r.airDamageDefault;
+          const isFrontline = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+          const airDamage = isFrontline || d.targets === 'ground' ? 0 : (d.airDamage ?? r.airDamageDefault);
           this.near(this.unitGrid, u.pos, near, (e) => {
             if (e.team === u.team || e.embarkedIn) return;
             if (r.frontPosts && e.targetPost !== undefined) return;
             // only close with what it can actually hit
-            if (this.defs.u.get(e.def)!.kind === 'air' ? airDamage <= 0 : d.targets === 'air') return;
+            if (this.defs.u.get(e.def)!.kind === 'air' ? (isFrontline || airDamage <= 0 || d.targets !== 'air') : d.targets === 'air') return;
             if (distKm(e.pos, post) > leash) return;
             const dist = distKm(u.pos, e.pos);
             if (dist < near) (near = dist), (chase = e.pos);
