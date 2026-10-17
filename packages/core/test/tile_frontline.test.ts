@@ -198,7 +198,7 @@ defendingRu.ammo = 0; // Out of ammo!
 gUA.ammo = 80; // Reset UA ammo
 gUA.hp = 5000;
 
-// Place a rear friendly Russian unit to receive the retreating squad (merge/stack test)
+// Place a rear friendly Russian unit to receive the retreating squad (merge/stack test when NO free sectors exist)
 const rearTile: [number, number] = [adjEnemyCell[0], adjEnemyCell[1] - 1];
 let rearFriend = sim.world.units.find((u) => u.team === 1 && cellOf(u.pos)[0] === rearTile[0] && cellOf(u.pos)[1] === rearTile[1]);
 if (!rearFriend) {
@@ -207,6 +207,23 @@ if (!rearFriend) {
 rearFriend.strength = 1;
 rearFriend.squadSize = 100;
 rearFriend.hp = 5000;
+
+// Fill any other adjacent friendly cells with troops so there are NO free sectors (forcing stack into rearFriend)
+const adjDirs = [
+  [-1, -1], [0, -1], [1, -1],
+  [-1, 0],           [1, 0],
+  [-1, 1],  [0, 1],  [1, 1]
+];
+for (const [dx, dy] of adjDirs) {
+  const nb: [number, number] = [adjEnemyCell[0] + dx, adjEnemyCell[1] + dy];
+  if (nb[0] === curUaCell[0] && nb[1] === curUaCell[1]) continue;
+  if (sim.side(cellCenter(nb[0], nb[1])) === 1) {
+    const hasU = sim.world.units.some(u => u.team === 1 && cellOf(u.pos)[0] === nb[0] && cellOf(u.pos)[1] === nb[1]);
+    if (!hasU) {
+      sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(nb[0], nb[1]));
+    }
+  }
+}
 
 const winAmmoOrder = sim.apply('player1', {
   type: 'attackTile',
@@ -396,6 +413,233 @@ const failSplit = sim.apply('player1', {
   unitId: existingGarrison.id,
 });
 assert.equal(failSplit.ok, false, 'Cannot split garrison with strength 1');
-console.log('✓ Garrison Splitting Verified: Stacked garrison split into 2 separate units (strength 1 each), strength 1 cannot be split');
+// 8. Test Defense of Advancing Garrison's Home Tile & Attack Disruption (Counter-attack):
+console.log('--- Testing Advancing Garrison Home Tile Defense & Counter-attack Disruption ---');
+const homeCell: [number, number] = [1770, 3470];
+const targetEnemyCell: [number, number] = [1770, 3469];
+const flankEnemyCell: [number, number] = [1769, 3470];
+
+sim.tileMap.setOwner(homeCell[0], homeCell[1], 0);
+sim.tileMap.setOwner(targetEnemyCell[0], targetEnemyCell[1], 1);
+sim.tileMap.setOwner(flankEnemyCell[0], flankEnemyCell[1], 1);
+
+// Remove existing units in these test cells
+sim.world.units = sim.world.units.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !(cx === homeCell[0] && cy === homeCell[1]) &&
+         !(cx === targetEnemyCell[0] && cy === targetEnemyCell[1]) &&
+         !(cx === flankEnemyCell[0] && cy === flankEnemyCell[1]);
+});
+
+// Spawn attacking UA garrison with strength 2 (200 soldiers) at homeCell
+const testUaAttacker = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(homeCell[0], homeCell[1]));
+testUaAttacker.strength = 2;
+testUaAttacker.squadSize = 200;
+testUaAttacker.hp = 10000;
+testUaAttacker.ammo = 100;
+
+// Spawn enemy garrison at targetEnemyCell
+const targetRuDefender = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(targetEnemyCell[0], targetEnemyCell[1]));
+targetRuDefender.strength = 1;
+targetRuDefender.squadSize = 100;
+
+// Spawn flanking enemy garrison at flankEnemyCell with strength 1 (100 soldiers, WEAKER than testUaAttacker)
+const weakFlankRu = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(flankEnemyCell[0], flankEnemyCell[1]));
+weakFlankRu.strength = 1;
+weakFlankRu.squadSize = 100;
+
+// UA launches attack on targetEnemyCell
+const uaAttackOrder = sim.apply('player1', {
+  type: 'attackTile',
+  unitId: testUaAttacker.id,
+  targetCell: targetEnemyCell,
+});
+assert.equal(uaAttackOrder.ok, true, 'UA attack order accepted');
+assert.ok(testUaAttacker.assault, 'UA garrison is advancing');
+
+// Flanking enemy with WEAKER force (100 soldiers vs 200) tries to attack UA homeCell:
+const weakCounterAttack = sim.apply('player2', {
+  type: 'attackTile',
+  unitId: weakFlankRu.id,
+  targetCell: homeCell,
+});
+assert.equal(weakCounterAttack.ok, false, 'Enemy with equal/less force CANNOT attack home tile of advancing garrison with superior strength');
+assert.ok(testUaAttacker.assault, 'UA assault continues uninterrupted');
+
+// Now give flanking enemy SUPERIOR force (strength 3 = 300 soldiers)
+weakFlankRu.strength = 3;
+weakFlankRu.squadSize = 300;
+weakFlankRu.hp = 15000;
+
+const strongCounterAttack = sim.apply('player2', {
+  type: 'attackTile',
+  unitId: weakFlankRu.id,
+  targetCell: homeCell,
+});
+assert.equal(strongCounterAttack.ok, true, 'Enemy with superior force disrupts advancing UA garrison and launches counter-attack');
+assert.equal(testUaAttacker.assault, undefined, 'UA assault disrupted and cancelled');
+assert.deepEqual(cellOf(testUaAttacker.pos), homeCell, 'UA garrison returned back to home tile to defend');
+assert.ok(weakFlankRu.assault, 'Superior enemy assault started against homeCell');
+console.log('✓ Advancing Garrison Defense & Disruption Verified: Weaker enemy denied, superior enemy knocks advancing unit back to home tile');
+
+// Cancel weakFlankRu assault for next test
+weakFlankRu.assault = undefined;
+weakFlankRu.hp = 0;
+sim.world.units = sim.world.units.filter((u) => u.id !== weakFlankRu.id);
+
+// 9. Test Diagonal Free Sector Retreat:
+// Defender attacked, directly behind is occupied, but diagonal sector is FREE -> retreats diagonally without stacking!
+console.log('--- Testing Diagonal Free Sector Retreat ---');
+const defTile: [number, number] = [1775, 3470];
+const attTile: [number, number] = [1775, 3471]; // Attacking from South to North
+const behindBlocked: [number, number] = [1775, 3469]; // Directly behind, occupied
+const diagFree: [number, number] = [1776, 3469]; // Diagonal rear, FREE!
+
+sim.tileMap.setOwner(attTile[0], attTile[1], 0);
+sim.tileMap.setOwner(defTile[0], defTile[1], 1);
+sim.tileMap.setOwner(behindBlocked[0], behindBlocked[1], 1);
+sim.tileMap.setOwner(diagFree[0], diagFree[1], 1);
+
+// Clear units in these cells
+sim.world.units = sim.world.units.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !(cx === defTile[0] && cy === defTile[1]) &&
+         !(cx === attTile[0] && cy === attTile[1]) &&
+         !(cx === behindBlocked[0] && cy === behindBlocked[1]) &&
+         !(cx === diagFree[0] && cy === diagFree[1]);
+});
+
+const attacker9 = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(attTile[0], attTile[1]));
+attacker9.strength = 1;
+attacker9.squadSize = 300;
+attacker9.hp = 15000;
+
+const defender9 = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(defTile[0], defTile[1]));
+defender9.strength = 1;
+defender9.squadSize = 100;
+defender9.ammo = 0; // Out of ammo so breakthrough succeeds
+
+// Occupy behindBlocked with a friendly Russian garrison
+const blockFriend = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(behindBlocked[0], behindBlocked[1]));
+blockFriend.strength = 1;
+blockFriend.squadSize = 100;
+
+// diagFree remains empty!
+const order9 = sim.apply('player1', {
+  type: 'attackTile',
+  unitId: attacker9.id,
+  targetCell: defTile,
+});
+assert.equal(order9.ok, true, 'Attack order accepted');
+for (let i = 0; i < 60; i++) sim.step(1.0);
+
+assert.equal(sim.side(cellCenter(defTile[0], defTile[1])), 0, 'Target tile captured');
+// Verify: defender retreated into diagFree, did NOT stack into blockFriend!
+assert.ok(defender9.hp > 0, 'Defender survived and retreated to diagonal free sector');
+assert.deepEqual(cellOf(defender9.pos), diagFree, 'Defender chose diagonal free sector over occupied rear tile');
+assert.equal(defender9.strength, 1, 'Defender did not stack (strength 1)');
+assert.equal(blockFriend.strength, 1, 'Blocked friend did not absorb defender because free diagonal sector was available');
+console.log('✓ Diagonal Free Sector Retreat Verified: Defender retreats to free diagonal sector without stacking when direct rear is occupied');
+
+// 10. Test Frontline Stretching & Detaching Squad from Attacking Garrison (Requirement 4):
+console.log('--- Testing Frontline Stretching & Detaching Squad ---');
+// Attacker with strength 2 captures a tile, leaving empty border tile -> 1 strength detached to hold empty tile!
+const stretchStart: [number, number] = [1780, 3470];
+const stretchTarget: [number, number] = [1780, 3469];
+
+sim.tileMap.setOwner(stretchStart[0], stretchStart[1], 0);
+sim.tileMap.setOwner(stretchTarget[0], stretchTarget[1], 1);
+// Ensure stretchStart still borders enemy on the west: [1779, 3470] = enemy
+sim.tileMap.setOwner(1779, 3470, 1);
+
+// Clear units
+sim.world.units = sim.world.units.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !(cx === stretchStart[0] && cy === stretchStart[1]) &&
+         !(cx === stretchTarget[0] && cy === stretchTarget[1]);
+});
+
+const attacker10 = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(stretchStart[0], stretchStart[1]));
+attacker10.strength = 2; // Strength 2!
+attacker10.squadSize = 200;
+attacker10.hp = 10000;
+attacker10.ammo = 100;
+
+const defender10 = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(stretchTarget[0], stretchTarget[1]));
+defender10.strength = 1;
+defender10.squadSize = 100;
+defender10.ammo = 0; // Out of ammo
+
+const order10 = sim.apply('player1', {
+  type: 'attackTile',
+  unitId: attacker10.id,
+  targetCell: stretchTarget,
+});
+assert.equal(order10.ok, true);
+for (let i = 0; i < 60; i++) sim.step(1.0);
+
+assert.equal(sim.side(cellCenter(stretchTarget[0], stretchTarget[1])), 0, 'Target captured');
+assert.equal(attacker10.strength, 1, 'Attacker strength reduced from 2 to 1 (detached squad to cover stretched front)');
+const startGarrison = sim.world.units.find((u) => u.team === 0 && u.hp > 0 && cellOf(u.pos)[0] === stretchStart[0] && cellOf(u.pos)[1] === stretchStart[1]);
+assert.ok(startGarrison, 'Detached squad spawned at empty border tile [1780, 3470] to cover stretched frontline');
+assert.equal(startGarrison.strength, 1, 'Detached squad has strength 1');
+console.log('✓ Frontline Stretching & Detachment Verified: Attacker detached 1 squad to cover empty border tile');
+
+// 11. Test Stranded Rear Garrison Redeployment & Stacking (Requirement 3):
+console.log('--- Testing Stranded Rear Garrison Redeployment & Stacking ---');
+const rearPosCell: [number, number] = [1790, 3470];
+const captured11Cell: [number, number] = [1790, 3469];
+const emptyFrontCell: [number, number] = [1791, 3469];
+
+sim.tileMap.setOwner(rearPosCell[0], rearPosCell[1], 0);
+sim.tileMap.setOwner(captured11Cell[0], captured11Cell[1], 1);
+sim.tileMap.setOwner(emptyFrontCell[0], emptyFrontCell[1], 0);
+
+// Set enemy north of emptyFrontCell so emptyFrontCell is an active border tile
+sim.tileMap.setOwner(emptyFrontCell[0], emptyFrontCell[1] - 1, 1);
+// Make sure rearPosCell has NO enemy neighbors around it (all surrounding cells are friendly 0)
+for (let dx = -1; dx <= 1; dx++) {
+  for (let dy = -1; dy <= 1; dy++) {
+    sim.tileMap.setOwner(rearPosCell[0] + dx, rearPosCell[1] + dy, 0);
+  }
+}
+sim.tileMap.setOwner(captured11Cell[0], captured11Cell[1], 1); // target starts as enemy
+
+// Clear units in these test cells
+sim.world.units = sim.world.units.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !(cx === rearPosCell[0] && cy === rearPosCell[1]) &&
+         !(cx === captured11Cell[0] && cy === captured11Cell[1]) &&
+         !(cx === emptyFrontCell[0] && cy === emptyFrontCell[1]);
+});
+
+// Spawn stranded garrison at rearPosCell (strength 1)
+const strandedGarrison = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(rearPosCell[0], rearPosCell[1]));
+strandedGarrison.strength = 1;
+strandedGarrison.squadSize = 100;
+
+// Spawn attacker11 at another adjacent friendly cell [1789, 3469]
+sim.tileMap.setOwner(1789, 3469, 0);
+const attacker11 = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(1789, 3469));
+attacker11.strength = 1;
+attacker11.squadSize = 300;
+attacker11.hp = 15000;
+
+const defender11 = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(captured11Cell[0], captured11Cell[1]));
+defender11.ammo = 0;
+
+const order11 = sim.apply('player1', {
+  type: 'attackTile',
+  unitId: attacker11.id,
+  targetCell: captured11Cell,
+});
+assert.equal(order11.ok, true);
+for (let i = 0; i < 60; i++) sim.step(1.0);
+
+assert.equal(sim.side(cellCenter(captured11Cell[0], captured11Cell[1])), 0, 'Cell captured');
+// Now rearPosCell has NO enemy borders at all. Stranded garrison should have started redeployment!
+assert.ok(strandedGarrison.assault, 'Stranded garrison without enemy border initiated redeployment to front line');
+assert.equal(strandedGarrison.assault?.isRelocation, true, 'Marked as friendly relocation');
+console.log('✓ Stranded Rear Garrison Redeployment Verified: Garrison without enemy border automatically redeploys to cover front');
 
 console.log('All Tile Frontline tests passed successfully!');

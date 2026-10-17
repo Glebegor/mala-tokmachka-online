@@ -1083,6 +1083,38 @@ export class Sim {
         }
 
         // Offense against enemy tile (60s assault):
+        // Check if there is an advancing enemy garrison originating from tgtCell
+        const advancingEnemy = w.units.find(
+          (x) =>
+            x.team !== u.team &&
+            x.hp > 0 &&
+            !x.embarkedIn &&
+            x.assault &&
+            !x.assault.isRelocation &&
+            cellOf(x.assault.startPos)[0] === tgtCell[0] &&
+            cellOf(x.assault.startPos)[1] === tgtCell[1]
+        );
+
+        if (advancingEnemy) {
+          const myTroops = u.squadSize ?? ((u.strength ?? 1) * 100);
+          const advTroops = advancingEnemy.squadSize ?? ((advancingEnemy.strength ?? 1) * 100);
+
+          if (advTroops >= myTroops) {
+            return fail('Нельзя занять клетку: гарнизон проводит наступление и превосходит вас силами');
+          } else {
+            // Attacker has superior strength: knock advancing enemy back to tgtCell and disrupt their assault!
+            const returnPos = advancingEnemy.assault!.startPos;
+            advancingEnemy.assault = undefined;
+            advancingEnemy.frontStatus = 'holding';
+            advancingEnemy.pos = [returnPos[0], returnPos[1]];
+            advancingEnemy.morale = Math.max(10, (advancingEnemy.morale ?? 100) - 20);
+            advancingEnemy.attackDebuffUntil = w.time + 60;
+            this.hooks?.emit('toast', {
+              text: `Атака противника из тайла [${tgtCell[0]}, ${tgtCell[1]}] сбита превосходящими силами! Гарнизон возвращен на исходную позицию.`,
+            });
+          }
+        }
+
         u.assault = {
           targetCell: tgtCell,
           startPos: [u.pos[0], u.pos[1]],
@@ -1539,40 +1571,35 @@ export class Sim {
         (u) => u.team === team && u.hp > 0 && !u.embarkedIn && cellOf(u.pos)[0] === cx && cellOf(u.pos)[1] === cy
       );
 
+    const orderedCandidates: [number, number][] = [];
+    const seen = new Set<number>();
+    if (fromCell) {
+      seen.add(cellKey(fromCell[0], fromCell[1]));
+    }
+    seen.add(cellKey(cell[0], cell[1]));
+
+    const addCand = (cx: number, cy: number) => {
+      const k = cellKey(cx, cy);
+      if (!seen.has(k)) {
+        seen.add(k);
+        orderedCandidates.push([cx, cy]);
+      }
+    };
+
     if (fromCell) {
       const dx = cell[0] - fromCell[0];
       const dy = cell[1] - fromCell[1];
-      const behind: [number, number] = [cell[0] + dx, cell[1] + dy];
-
-      // 1. If cell directly behind is friendly, retreat there!
-      // (If it's empty, unit occupies it without stacking; if someone is already there, unit stacks with them)
-      if (isValidFriendly(behind[0], behind[1])) {
-        return behind;
-      }
-
-      // If directly behind is blocked, check flanking / diagonal backward escape tiles
-      const candidates: [number, number][] = [
-        [cell[0] + dx - dy, cell[1] + dy - dx],
-        [cell[0] + dx + dy, cell[1] + dy + dx],
-        [cell[0] - dy, cell[1] - dx],
-        [cell[0] + dy, cell[1] + dx],
-      ];
-
-      // Prefer empty friendly tiles first (so unit retreats without stacking)
-      for (const [cx, cy] of candidates) {
-        if (isValidFriendly(cx, cy) && !hasFriendlyTroops(cx, cy)) {
-          return [cx, cy];
-        }
-      }
-      // Then friendly tiles with friendly troops (stacking)
-      for (const [cx, cy] of candidates) {
-        if (isValidFriendly(cx, cy)) {
-          return [cx, cy];
-        }
-      }
+      // 1. Directly behind
+      addCand(cell[0] + dx, cell[1] + dy);
+      // 2. Diagonal backwards
+      addCand(cell[0] + dx - dy, cell[1] + dy - dx);
+      addCand(cell[0] + dx + dy, cell[1] + dy + dx);
+      // 3. Flanks
+      addCand(cell[0] - dy, cell[1] - dx);
+      addCand(cell[0] + dy, cell[1] + dx);
     }
 
-    // Fallback: any adjacent friendly tile (excluding fromCell if specified)
+    // 4. Any remaining 8-neighbors (orthogonal and diagonal)
     const allNeighbors: [number, number][] = [
       [cell[0], cell[1] - 1],
       [cell[0], cell[1] + 1],
@@ -1583,18 +1610,21 @@ export class Sim {
       [cell[0] - 1, cell[1] + 1],
       [cell[0] + 1, cell[1] + 1],
     ];
-    const neighbors = allNeighbors.filter(([nx, ny]) => !fromCell || nx !== fromCell[0] || ny !== fromCell[1]);
+    for (const [nx, ny] of allNeighbors) {
+      addCand(nx, ny);
+    }
 
-    // First check empty friendly tiles
-    for (const [nx, ny] of neighbors) {
-      if (isValidFriendly(nx, ny) && !hasFriendlyTroops(nx, ny)) {
-        return [nx, ny];
+    // Pass 1: ANY free/empty friendly sector (including diagonals and behind)
+    for (const [cx, cy] of orderedCandidates) {
+      if (isValidFriendly(cx, cy) && !hasFriendlyTroops(cx, cy)) {
+        return [cx, cy];
       }
     }
-    // Then occupied friendly tiles
-    for (const [nx, ny] of neighbors) {
-      if (isValidFriendly(nx, ny)) {
-        return [nx, ny];
+
+    // Pass 2: ONLY if no free sectors exist anywhere, stack with friendly troops
+    for (const [cx, cy] of orderedCandidates) {
+      if (isValidFriendly(cx, cy)) {
+        return [cx, cy];
       }
     }
 
@@ -2004,12 +2034,31 @@ export class Sim {
         }
 
         // Enemy tile assault resolution
-        const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
+        // Also check if an advancing defender originated from tgtCell
+        const advDefender = w.units.find(
+          (x) =>
+            x.team !== u.team &&
+            x.hp > 0 &&
+            !x.embarkedIn &&
+            x.assault &&
+            !x.assault.isRelocation &&
+            cellOf(x.assault.startPos)[0] === tgtCell[0] &&
+            cellOf(x.assault.startPos)[1] === tgtCell[1]
+        );
+        const defender = opp ?? advDefender;
+
+        const oppAmmo = defender ? (defender.ammo ?? 0) : 0;
         const myTroops = u.squadSize ?? Math.round(u.hp / 50);
-        const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
-        const canAdvance = !opp || oppAmmo <= 0 || myTroops > oppTroops;
+        const oppTroops = defender ? (defender.squadSize ?? Math.round(defender.hp / 50)) : 0;
+        const canAdvance = !defender || oppAmmo <= 0 || myTroops > oppTroops;
 
         if (canAdvance) {
+          // If defender was advancing, cancel its assault and place in tgtCell to resolve retreat
+          if (advDefender) {
+            advDefender.assault = undefined;
+            advDefender.pos = [a.targetPos[0], a.targetPos[1]];
+          }
+
           // Success! Breakthrough into target tile
           const existingFriend = w.units.find(
             (x) => x.team === u.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === tgtCell[0] && cellOf(x.pos)[1] === tgtCell[1] && x.id !== u.id
@@ -2028,32 +2077,32 @@ export class Sim {
             u.frontStatus = 'holding';
           }
 
-          if (opp) {
+          if (defender) {
             const fromCell = cellOf(a.startPos);
-            const retreatTile = this.findRetreatTile(tgtCell, opp.team, fromCell);
+            const retreatTile = this.findRetreatTile(tgtCell, defender.team, fromCell);
             if (retreatTile) {
               const friend = w.units.find(
-                (x) => x.team === opp.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === retreatTile[0] && cellOf(x.pos)[1] === retreatTile[1] && x.id !== opp.id
+                (x) => x.team === defender.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === retreatTile[0] && cellOf(x.pos)[1] === retreatTile[1] && x.id !== defender.id
               );
               if (friend) {
                 // Merge/stack with friendly troops in that tile
-                friend.strength = (friend.strength ?? 1) + (opp.strength ?? 1);
-                friend.squadSize = (friend.squadSize ?? 100) + (opp.squadSize ?? 100);
-                friend.hp = Math.min((friend.strength ?? 1) * 5000, friend.hp + opp.hp);
-                friend.ammo = Math.min((friend.strength ?? 1) * 100, (friend.ammo ?? 0) + Math.max(0, (opp.ammo ?? 0) - 20));
+                friend.strength = (friend.strength ?? 1) + (defender.strength ?? 1);
+                friend.squadSize = (friend.squadSize ?? 100) + (defender.squadSize ?? 100);
+                friend.hp = Math.min((friend.strength ?? 1) * 5000, friend.hp + defender.hp);
+                friend.ammo = Math.min((friend.strength ?? 1) * 100, (friend.ammo ?? 0) + Math.max(0, (defender.ammo ?? 0) - 20));
                 friend.attackDebuffUntil = w.time + 300; // 5 minutes attack debuff
                 friend.morale = Math.max(10, (friend.morale ?? 100) - 20);
-                opp.hp = 0; // Merged into existing squad
-                w.units = w.units.filter((x) => x.id !== opp.id);
+                defender.hp = 0; // Merged into existing squad
+                w.units = w.units.filter((x) => x.id !== defender.id);
               } else {
-                opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
-                opp.ammo = Math.max(0, (opp.ammo ?? 0) - 20);
-                opp.morale = Math.max(10, (opp.morale ?? 100) - 30);
-                opp.attackDebuffUntil = w.time + 300; // 5 minutes attack debuff
+                defender.pos = cellCenter(retreatTile[0], retreatTile[1]);
+                defender.ammo = Math.max(0, (defender.ammo ?? 0) - 20);
+                defender.morale = Math.max(10, (defender.morale ?? 100) - 30);
+                defender.attackDebuffUntil = w.time + 300; // 5 minutes attack debuff
               }
             } else {
-              opp.hp = 0; // Encircled / destroyed
-              w.units = w.units.filter((x) => x.id !== opp.id);
+              defender.hp = 0; // Encircled / destroyed
+              w.units = w.units.filter((x) => x.id !== defender.id);
             }
           }
 
@@ -2063,6 +2112,9 @@ export class Sim {
           // Update frontline polyline to wrap around captured cell
           w.front = advanceFrontOverCell(w.front, tgtCell, u.team);
           this.occ.tick = -1;
+
+          // Rebalance garrisons along the stretched front / rear garrisons
+          this.rebalanceFrontlineGarrisonsAfterCapture(u.team, existingFriend ?? u, tgtCell);
 
           // Flip capture points in target cell
           for (const cp of w.points) {
@@ -2084,6 +2136,157 @@ export class Sim {
           u.ammo = Math.max(0, (u.ammo ?? 100) - 15);
           u.hp = Math.max(500, u.hp - 1000);
           this.hooks?.emit('toast', { text: 'Атака отбита: у противника превосходство в силах и есть боеприпасы' });
+        }
+      }
+    }
+  }
+
+  /**
+   * Rebalances frontline garrisons after a tile is captured:
+   * 1. If frontline stretched leaving empty border tiles, split 1 strength from attacking unit (if strength > 1) to cover it.
+   * 2. Friendly garrisons in the sector that lost orthogonal enemy contact redeploy to the nearest empty border tile,
+   *    or stack with neighboring frontline garrisons if no empty border tiles exist.
+   */
+  private rebalanceFrontlineGarrisonsAfterCapture(team: Team, attackingUnit: Unit, capturedCell: [number, number]) {
+    const w = this.world;
+    const oppTeam = (1 - team) as Team;
+
+    const hasOrthogonalEnemy = (cx: number, cy: number, opp: Team) => {
+      const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      return dirs.some(([dx, dy]) => this.side(cellCenter(cx + dx, cy + dy)) === opp);
+    };
+
+    const isBorderTile = (cx: number, cy: number) => {
+      const pos = cellCenter(cx, cy);
+      if (pos[0] < 35.35 && pos[1] < 47.7) return false; // Dnipro
+      return (
+        this.side(pos) === team &&
+        this.isPlayableGround(pos) &&
+        this.terrainAt(pos).id !== 'water' &&
+        !this.foreign(pos) &&
+        hasOrthogonalEnemy(cx, cy, oppTeam)
+      );
+    };
+
+    const hasStationedGarrison = (cx: number, cy: number) =>
+      w.units.some(
+        (x) =>
+          x.team === team &&
+          x.hp > 0 &&
+          !x.embarkedIn &&
+          ((!x.assault && cellOf(x.pos)[0] === cx && cellOf(x.pos)[1] === cy) ||
+           (x.assault && x.assault.targetCell[0] === cx && x.assault.targetCell[1] === cy))
+      );
+
+    // 1. Find all empty border tiles in the active sector (within 10 tiles of capturedCell)
+    const emptyBorderTiles: [number, number][] = [];
+    for (let dx = -10; dx <= 10; dx++) {
+      for (let dy = -10; dy <= 10; dy++) {
+        const cx = capturedCell[0] + dx;
+        const cy = capturedCell[1] + dy;
+        if (isBorderTile(cx, cy) && !hasStationedGarrison(cx, cy)) {
+          emptyBorderTiles.push([cx, cy]);
+        }
+      }
+    }
+
+    // Sort empty border tiles by distance to capturedCell
+    emptyBorderTiles.sort((a, b) => {
+      const da = Math.hypot(a[0] - capturedCell[0], a[1] - capturedCell[1]);
+      const db = Math.hypot(b[0] - capturedCell[0], b[1] - capturedCell[1]);
+      return da - db;
+    });
+
+    // 2. If the front stretched and attacking garrison has strength > 1, detach 1 squad to cover empty border tile
+    while (emptyBorderTiles.length > 0 && (attackingUnit.strength ?? 1) > 1) {
+      const emptyTile = emptyBorderTiles.shift()!;
+      const prevStr = attackingUnit.strength ?? 1;
+      attackingUnit.strength = prevStr - 1;
+      attackingUnit.squadSize = Math.max(100, (attackingUnit.squadSize ?? (prevStr * 100)) - 100);
+      attackingUnit.hp = Math.min(attackingUnit.strength * 5000, attackingUnit.hp);
+
+      const spawnPos = cellCenter(emptyTile[0], emptyTile[1]);
+      const newG = this.spawnFrontlineUnit(w, team, spawnPos);
+      newG.owner = attackingUnit.owner;
+      newG.strength = 1;
+      newG.squadSize = 100;
+      newG.hp = 5000;
+      newG.ammo = Math.min(100, attackingUnit.ammo ?? 100);
+      newG.frontStatus = 'holding';
+      newG.post = [spawnPos[0], spawnPos[1]];
+
+      this.hooks?.emit('toast', {
+        text: `Линия фронта растянулась: выделен гарнизон для прикрытия тайла [${emptyTile[0]}, ${emptyTile[1]}]`,
+      });
+    }
+
+    // 3. Find friendly garrisons in the sector that lost their orthogonal enemy border
+    const strandedGarrisons = w.units.filter((g) => {
+      if (g.team !== team || g.hp <= 0 || g.embarkedIn || g.assault) return false;
+      const isFront = g.def === 'frontline_infantry' || g.owner.startsWith('__front_') || g.frontPost !== undefined;
+      if (!isFront) return false;
+      if (g.id === attackingUnit.id) return false;
+      const [gx, gy] = cellOf(g.pos);
+      if (Math.abs(gx - capturedCell[0]) > 10 || Math.abs(gy - capturedCell[1]) > 10) return false;
+      return !hasOrthogonalEnemy(gx, gy, oppTeam);
+    });
+
+    for (const g of strandedGarrisons) {
+      if (emptyBorderTiles.length > 0) {
+        // Nearest empty border tile
+        let bestIdx = 0;
+        let bestDist = Infinity;
+        const gCell = cellOf(g.pos);
+        for (let i = 0; i < emptyBorderTiles.length; i++) {
+          const d = Math.hypot(emptyBorderTiles[i][0] - gCell[0], emptyBorderTiles[i][1] - gCell[1]);
+          if (d < bestDist) {
+            bestDist = d;
+            bestIdx = i;
+          }
+        }
+        const targetEmpty = emptyBorderTiles.splice(bestIdx, 1)[0];
+        g.assault = {
+          targetCell: targetEmpty,
+          startPos: [g.pos[0], g.pos[1]],
+          targetPos: cellCenter(targetEmpty[0], targetEmpty[1]),
+          elapsed: 0,
+          total: 60,
+          isRelocation: true,
+        };
+        g.frontStatus = 'advancing';
+        this.hooks?.emit('toast', {
+          text: `Гарнизон выдвигается на прикрытие свободного сектора фронта [${targetEmpty[0]}, ${targetEmpty[1]}]`,
+        });
+      } else {
+        // No empty border tiles: stack with nearest frontline garrison
+        let nearestFg: Unit | null = null;
+        let minD = Infinity;
+        for (const fg of w.units) {
+          if (fg.team === team && fg.id !== g.id && fg.hp > 0 && !fg.embarkedIn) {
+            const [fgx, fgy] = cellOf(fg.pos);
+            if (hasOrthogonalEnemy(fgx, fgy, oppTeam)) {
+              const d = distKm(g.pos, fg.pos);
+              if (d < minD) {
+                minD = d;
+                nearestFg = fg;
+              }
+            }
+          }
+        }
+        if (nearestFg) {
+          const tgt = cellOf(nearestFg.pos);
+          g.assault = {
+            targetCell: tgt,
+            startPos: [g.pos[0], g.pos[1]],
+            targetPos: cellCenter(tgt[0], tgt[1]),
+            elapsed: 0,
+            total: 60,
+            isRelocation: true,
+          };
+          g.frontStatus = 'advancing';
+          this.hooks?.emit('toast', {
+            text: `Гарнизон переходит для усиления позиции [${tgt[0]}, ${tgt[1]}]`,
+          });
         }
       }
     }
