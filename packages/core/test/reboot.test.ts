@@ -924,8 +924,9 @@ console.log('✓ Out-of-Ammo Retreat: Garrison with strength 6 retreats when amm
 
 // 33. Set Garrison Plan (Advance & Retreat Routes)
 const planGarrison = sim.world.units.find((u) => u.owner === '__front_0' && u.hp > 0 && u.id !== testRetreatGarrison.id)!;
-planGarrison.ammo = 100;
-planGarrison.strength = 5;
+planGarrison.ammo = 500;
+planGarrison.strength = 8;
+planGarrison.squadSize = 800;
 const advPt1 = offsetKm(planGarrison.pos, 0.4, 0.4);
 const advPt2 = offsetKm(planGarrison.pos, 0.8, 0.8);
 const retPt1 = offsetKm(planGarrison.pos, -0.4, -0.4);
@@ -1361,6 +1362,12 @@ assert.ok(testUa, 'Found valid UA frontline garrison with pair');
 const testRuPair = (sim as any).unitById.get(testUa.pairId!)!;
 testUa.ammo = 500;
 testRuPair.ammo = 500;
+testUa.frontStatus = 'holding';
+testRuPair.frontStatus = 'holding';
+testUa.pushedDir = undefined;
+testRuPair.pushedDir = undefined;
+testUa.advancePath = undefined;
+testRuPair.advancePath = undefined;
 
 // Spawn an unrelated third enemy garrison much closer to testUa (closer than testRuPair)
 const pairDist = distKm(testUa.pos, testRuPair.pos);
@@ -1436,8 +1443,8 @@ g2.hp = 0;
 const strandedNodeIdx = nearestNode(sim.world.front, testUa.pos);
 const strandedNode = sim.world.front[strandedNodeIdx];
 const [stNx, stNy] = normalAt(sim.world.front, strandedNodeIdx);
-// Place testUa 2.5 km in the deep rear behind the front line
-testUa.pos = offsetKm([strandedNode.lng, strandedNode.lat], -stNx * 2.5, -stNy * 2.5);
+// Place testUa 3.5 km in the deep rear behind the front line
+testUa.pos = offsetKm([strandedNode.lng, strandedNode.lat], -stNx * 3.5, -stNy * 3.5);
 testUa.frontStatus = 'holding';
 testUa.advancePath = undefined;
 testUa.retreatPath = undefined;

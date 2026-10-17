@@ -4456,29 +4456,6 @@ export class Sim {
             }
           }
 
-          // 2. If unit has no alive pair and has an explicit advancePath, search along advance corridor
-          if (!oppGarrison && u.advancePath && u.advancePath.length > 0) {
-            for (let wpIdx = 0; wpIdx < Math.min(4, u.advancePath.length); wpIdx++) {
-              const wp = u.advancePath[wpIdx];
-              this.near(this.unitGrid, wp, 6.0, (e) => {
-                if (e.team !== u.team && e.hp > 0 && !e.embarkedIn && e.frontStatus !== 'marching') {
-                  const isGarrison = e.def === 'frontline_infantry' || e.owner.startsWith('__front_') || e.frontPost !== undefined;
-                  if (isGarrison && (!e.pairId || (this.unitById.get(e.pairId)?.hp ?? 0) <= 0)) {
-                    const d = distKm(u.pos, e.pos);
-                    if (d < oppDist) {
-                      oppDist = d;
-                      oppGarrison = e;
-                    }
-                  }
-                }
-              });
-            }
-            const oppFound: any = oppGarrison;
-            if (oppFound) {
-              u.pairId = oppFound.id;
-              oppFound.pairId = u.id;
-            }
-          }
 
           if (!oppGarrison) {
             // Search around u.pos (within 10 km) for unassigned enemy
@@ -4513,12 +4490,16 @@ export class Sim {
           const isAdvancing = hasAdvancePath
             ? (hasCombatSuperiority && myAmmo > 0)
             : (!isHoldingAssault && (oppRetreating || (u.team === 0 ? v > 0.0005 : v < -0.0005)) && (oppRetreating || hasCombatSuperiority) && myAmmo > 0);
-          const isRetreating = !hasAdvancePath && (hasRetreatPath || myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)) || u.pushedDir !== undefined);
+          const oppAdvancing = oppGarrison && (oppGarrison as Unit).frontStatus === 'advancing';
+          if (!hasRetreatPath && (u.ammo ?? 0) > 0 && !oppSuperiority) {
+            u.pushedDir = undefined;
+          }
+          const isRetreating = !hasAdvancePath && (hasRetreatPath || myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)) || (oppSuperiority && oppAdvancing && u.pushedDir !== undefined));
 
           const opp: any = oppGarrison;
           if (isAdvancing) {
             u.frontStatus = 'advancing';
-            if (opp && opp.frontStatus !== 'marching' && (hasCombatSuperiority || opp.frontStatus === 'retreating')) {
+            if (opp && opp.frontStatus !== 'marching' && distKm(u.pos, opp.pos) <= 2.2 && (hasCombatSuperiority || opp.frontStatus === 'retreating')) {
               opp.frontStatus = 'retreating';
             }
             // Waypoint following for advance:
@@ -4595,10 +4576,10 @@ export class Sim {
                 n[i].v = u.team === 0 ? 0.024 : -0.024;
                 this.occ.tick = -1; // front moved: invalidate occupied index
 
-                // Smooth cosine propagation across immediate neighbor nodes (spread = 2, ~3 km)
-                const spread = 2;
+                // Gentle neighbor hinge relaxation (immediate neighbor only, spread = 1)
+                const spread = 1;
                 for (let j = 1; j <= spread; j++) {
-                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.65;
+                  const w = 0.35;
                   if (i - j >= 0) {
                     const pLng = n[i - j].lng + shiftLng * w;
                     const pLat = n[i - j].lat + shiftLat * w;
@@ -4624,8 +4605,8 @@ export class Sim {
             const toFrontY = (n[i].lat - u.pos[1]) * 111.32;
             const projAlongDir = toFrontX * dir[0] + toFrontY * dir[1];
 
-            if (projAlongDir < 0.35) {
-              const pushAheadKm = 0.4 - projAlongDir;
+            if (projAlongDir < 0.45) {
+              const pushAheadKm = 0.5 - projAlongDir;
               const shiftLng = (dir[0] * pushAheadKm) / ukx;
               const shiftLat = (dir[1] * pushAheadKm) / 111.32;
               const nextFrontPos: LngLat = [n[i].lng + shiftLng, n[i].lat + shiftLat];
@@ -4635,9 +4616,10 @@ export class Sim {
                 n[i].v = u.team === 0 ? 0.024 : -0.024;
                 this.occ.tick = -1;
 
-                const spread = 2;
+                // Gentle neighbor hinge relaxation (immediate neighbor only, spread = 1)
+                const spread = 1;
                 for (let j = 1; j <= spread; j++) {
-                  const w = Math.cos((j / (spread + 1)) * Math.PI * 0.5) * 0.65;
+                  const w = 0.35;
                   if (i - j >= 0) {
                     const pLng = n[i - j].lng + shiftLng * w;
                     const pLat = n[i - j].lat + shiftLat * w;
@@ -4701,23 +4683,23 @@ export class Sim {
               const dyKm = (targetPt[1] - u.pos[1]) * 111.32;
               const dLen = Math.hypot(dxKm, dyKm) || 1;
               dir = [dxKm / dLen, dyKm / dLen];
-            } else if (u.pushedDir) {
-              dir = [u.pushedDir[0], u.pushedDir[1]];
-            } else if (opp) {
-              // Direct retreat away from opposing counterpart
-              const dxKm = (u.pos[0] - opp.pos[0]) * ukx;
-              const dyKm = (u.pos[1] - opp.pos[1]) * 111.32;
-              const dLen = Math.hypot(dxKm, dyKm) || 1;
-              dir = [dxKm / dLen, dyKm / dLen];
             } else {
-              dir = u.team === 0 ? [-nx, -ny] : [nx, ny];
+              const rearDir: [number, number] = u.team === 0 ? [-nx, -ny] : [nx, ny];
+              if (u.pushedDir) {
+                const pLen = Math.hypot(u.pushedDir[0], u.pushedDir[1]) || 1;
+                const pDir: [number, number] = [u.pushedDir[0] / pLen, u.pushedDir[1] / pLen];
+                const dot = pDir[0] * rearDir[0] + pDir[1] * rearDir[1];
+                dir = dot > 0.4 ? pDir : rearDir;
+              } else {
+                dir = rearDir;
+              }
             }
 
             const distToNode = distKm(u.pos, nodePos);
             const distToEnemy = opp ? distKm(u.pos, opp.pos) : distToNode;
 
-            // Defender stops retreating when out of engagement range (> 2.5 km)
-            if (!u.retreatPath && distToEnemy > 2.5 && (u.ammo ?? 0) > 0) {
+            // Defender stops retreating when out of engagement range (> 2.2 km) or when not facing superior enemy
+            if (!u.retreatPath && (u.ammo ?? 0) > 0 && (distToEnemy > 2.2 || !oppSuperiority)) {
               u.retreatBoost = false;
               u.pushedDir = undefined;
               u.frontStatus = 'holding';
@@ -4740,7 +4722,7 @@ export class Sim {
             const toNodeX = (n[i].lng - u.pos[0]) * ukx;
             const toNodeY = (n[i].lat - u.pos[1]) * 111.32;
             const projBehind = u.team === 0 ? (toNodeX * nx + toNodeY * ny) : -(toNodeX * nx + toNodeY * ny);
-            if (projBehind > 1.5) {
+            if (projBehind > 2.0) {
               const catchUpKm = Math.min(0.015 * dt * 2.0, projBehind - 1.0);
               if (catchUpKm > 0) {
                 const stepDir = u.team === 0 ? [nx, ny] : [-nx, -ny];
@@ -4809,10 +4791,10 @@ export class Sim {
       const len2 = Math.hypot(v2x, v2y);
       if (len1 > 0 && len2 > 0) {
         const dot = (v1x * v2x + v1y * v2y) / (len1 * len2);
-        if (dot < 0.2) {
+        if (dot < 0.20) {
           const midLng = (p.lng + n.lng) / 2;
           const midLat = (p.lat + n.lat) / 2;
-          const k = 0.25;
+          const k = dot < -0.1 ? 0.45 : 0.25;
           const newLng = (1 - k) * cur.lng + k * midLng;
           const newLat = (1 - k) * cur.lat + k * midLat;
           if (
