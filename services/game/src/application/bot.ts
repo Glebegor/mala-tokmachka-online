@@ -396,12 +396,26 @@ export class Bot {
         if (anchor) {
           for (let attempt = 0; attempt < 16; attempt++) {
             const angle = (attempt / 16) * 2 * Math.PI + 0.5;
-            const dist = 5 + (attempt % 4) * 4;
+            const dist = 31 + (attempt % 8) * 3;
             const spot = offsetKm(anchor.pos, Math.cos(angle) * dist, Math.sin(angle) * dist);
             if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
               const res = sim.apply(p.id, { type: 'build', def: 'drone_factory', pos: spot });
               if (res.ok) break;
             }
+          }
+        }
+      }
+
+      // 11. Launch site: 1 per team if we have a drone factory and spare funds
+      if (mine.some((b) => b.def === 'drone_factory') && !mine.some((b) => b.def === 'launch_site') && (p.res.money ?? 0) >= 1000) {
+        const factory = mine.find((b) => b.def === 'drone_factory')!;
+        for (let attempt = 0; attempt < 16; attempt++) {
+          const angle = (attempt / 16) * 2 * Math.PI + 0.25;
+          const dist = 31 + (attempt % 8) * 3;
+          const spot = offsetKm(factory.pos, Math.cos(angle) * dist, Math.sin(angle) * dist);
+          if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+            const res = sim.apply(p.id, { type: 'build', def: 'launch_site', pos: spot });
+            if (res.ok) break;
           }
         }
       }

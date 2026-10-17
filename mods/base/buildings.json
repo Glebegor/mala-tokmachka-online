@@ -166,5 +166,23 @@
       "drone_orion",
       "drone_shahed"
     ]
+  },
+  {
+    "id": "launch_site",
+    "name": "Площадка запуска дронов",
+    "category": "military",
+    "icon": "🚀",
+    "description": "Площадка запуска разведывательных и ударных БПЛА. Дроны доставляются с завода грузовиками по 5 штук. Радиус запрета до других построек: 30 км.",
+    "cost": {
+      "money": 1000
+    },
+    "buildTime": 30,
+    "hp": 2500,
+    "vision": 8,
+    "sameKindKm": 30,
+    "launches": [
+      "recon",
+      "strike"
+    ]
   }
 ]

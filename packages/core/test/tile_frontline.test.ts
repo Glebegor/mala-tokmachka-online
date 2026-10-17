@@ -55,7 +55,7 @@ for (let i = 0; i < simUkr.world.front.length - 1; i++) {
   for (let s = 0; s < numSteps; s++) {
     const t = (s + 0.5) / numSteps;
     const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
-    if (pt[0] < 35.35 && pt[1] < 47.7) continue; // Dnipro
+    if (pt[0] < 35.32 && pt[1] < 47.7) continue; // Dnipro
 
     const uaPos = cellCenter(...cellOf(offsetKm(pt, -nx * 0.75, -ny * 0.75)));
     const ruPos = cellCenter(...cellOf(offsetKm(pt, nx * 0.75, ny * 0.75)));
@@ -1158,6 +1158,94 @@ assert.ok(truckTarget.hp < 600, `Normal vehicle takes damage (hp: ${truckTarget.
 assert.ok(truckTarget.hp <= 550, `Normal vehicle took blast damage (hp: ${truckTarget.hp})`);
 
 console.log('✓ 4 Faction Drones TTX & Frontline Garrison Blast Immunity Verified!');
+
+// --- Testing Launch Site, 30 km Exclusion Radius & Drone Truck Logistics ---
+const launchSiteDef = sim.defs.b.get('launch_site');
+assert.ok(launchSiteDef, 'launch_site building definition exists');
+assert.equal(launchSiteDef.cost.money, 1000, 'launch_site cost is 1000 money');
+assert.equal(launchSiteDef.buildTime, 30, 'launch_site buildTime is 30 seconds');
+assert.deepEqual(launchSiteDef.launches, ['recon', 'strike'], 'launch_site can launch recon and strike drones');
+
+const droneFactoryDef = sim.defs.b.get('drone_factory')!;
+const milBaseDef = sim.defs.b.get('military_base')!;
+const warehouseDef = sim.defs.b.get('warehouse')!;
+const housingDef = sim.defs.b.get('housing')!;
+
+// 30 km exclusion radius checks
+assert.equal(sim.spacingBetween(droneFactoryDef, 'military_base'), 30, 'Drone factory requires 30 km exclusion from military base');
+assert.equal(sim.spacingBetween(droneFactoryDef, 'warehouse'), 30, 'Drone factory requires 30 km exclusion from warehouse');
+assert.equal(sim.spacingBetween(droneFactoryDef, 'launch_site'), 30, 'Drone factory requires 30 km exclusion from launch site');
+assert.equal(sim.spacingBetween(droneFactoryDef, 'drone_factory'), 30, 'Drone factory requires 30 km exclusion from another drone factory');
+assert.equal(sim.spacingBetween(launchSiteDef, 'military_base'), 30, 'Launch site requires 30 km exclusion from military base');
+assert.equal(sim.spacingBetween(launchSiteDef, 'warehouse'), 30, 'Launch site requires 30 km exclusion from warehouse');
+assert.equal(sim.spacingBetween(launchSiteDef, 'launch_site'), 30, 'Launch site requires 30 km exclusion from another launch site');
+assert.equal(sim.spacingBetween(milBaseDef, 'drone_factory'), 30, 'Military base requires 30 km exclusion from drone factory');
+assert.equal(sim.spacingBetween(milBaseDef, 'launch_site'), 30, 'Military base requires 30 km exclusion from launch site');
+
+// Housing blocks are exempted!
+assert.notEqual(sim.spacingBetween(droneFactoryDef, 'housing'), 30, 'Housing is exempt from 30 km exclusion with drone factory');
+assert.notEqual(sim.spacingBetween(launchSiteDef, 'housing'), 30, 'Housing is exempt from 30 km exclusion with launch site');
+console.log('✓ 30 km Exclusion Radius Verified (Drone Factory & Launch Site vs All Buildings except Housing)');
+
+// Truck droneCap checks
+const truckDef = sim.defs.u.get('truck')!;
+const logTruckDef = sim.defs.u.get('logistics_truck')!;
+assert.equal(truckDef.droneCap, 5, 'Truck droneCap is 5');
+assert.equal(logTruckDef.droneCap, 5, 'Logistics truck droneCap is 5');
+
+// Drone logistics test: truck hauling 5 drones from drone_factory to launch_site
+const p1 = sim.player('player1')!;
+const dFactory = (sim as any).spawnBuilding('drone_factory', p1, [34.0, 48.0], true);
+const lSite = (sim as any).spawnBuilding('launch_site', p1, [34.5, 48.0], true);
+
+// Spawn 5 drones parked at drone_factory
+const testDrones = [];
+for (let i = 0; i < 5; i++) {
+  const d = sim.spawnUnit('drone_pd2', p1, dFactory.pos);
+  d.parkedAt = dFactory.id;
+  testDrones.push(d);
+}
+assert.equal(sim.world.units.filter((u) => u.parkedAt === dFactory.id).length, 5, '5 drones parked at drone factory');
+
+// Spawn logistics truck servicing drone factory
+const logTruck = sim.spawnLogisticsTruck(dFactory, lSite.id)!;
+assert.ok(logTruck, 'Logistics truck spawned for drone factory');
+assert.equal(logTruck.serviceBuilding, dFactory.id, 'Truck services drone factory');
+assert.equal(logTruck.haul?.resType, 'drones', 'Truck haul resType is drones');
+assert.equal(logTruck.haul?.minLoad, 5, 'Truck minLoad is 5 drones');
+
+// Simulate loading at drone factory
+logTruck.pos = [dFactory.pos[0], dFactory.pos[1]];
+logTruck.haul!.state = 'loading';
+logTruck.haul!.timer = 0;
+(sim as any).haulStep(logTruck, logTruckDef, 1);
+
+assert.equal(logTruck.cargo?.drones?.length, 5, 'Truck loaded all 5 drones');
+assert.equal(sim.world.units.filter((u) => u.parkedAt === dFactory.id).length, 0, 'No drones left parked at factory');
+for (const d of testDrones) {
+  assert.equal(d.embarkedIn, logTruck.id, 'Drone embarked in truck');
+}
+
+// Simulate unloading at launch site
+logTruck.pos = [lSite.pos[0], lSite.pos[1]];
+logTruck.haul!.state = 'unloading';
+logTruck.haul!.timer = 0;
+(sim as any).haulStep(logTruck, logTruckDef, 1);
+
+assert.equal(logTruck.cargo?.drones?.length, 0, 'Truck unloaded all drones');
+assert.equal(sim.world.units.filter((u) => u.parkedAt === lSite.id).length, 5, 'All 5 drones successfully delivered and parked at launch site');
+for (const d of testDrones) {
+  assert.equal(d.embarkedIn, undefined, 'Drone disembarked');
+  assert.equal(d.parkedAt, lSite.id, 'Drone parked at launch site');
+}
+
+// Test dispatchDrones command
+const strikeD = sim.spawnUnit('drone_fire_point', p1, dFactory.pos);
+strikeD.parkedAt = dFactory.id;
+const dispatchRes = sim.apply(p1.id, { type: 'dispatchDrones', building: dFactory.id });
+assert.ok(dispatchRes.ok, 'dispatchDrones command succeeded');
+
+console.log('✓ Drone Truck Logistics (5 Drones per Truck) Verified!');
 
 console.log('All Tile Frontline tests passed successfully!');
 

@@ -499,9 +499,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
   const spacingBetween = (d: BuildingDef, other: string, inZone: boolean) => {
     const r = init!.ruleset.rules;
     const o = defB.get(other);
-    if (o && !inZone) {
-      if ((d.id === 'steel_mill' && o.id === 'mine') || (d.id === 'mine' && o.id === 'steel_mill')) return 50;
-      if ((d.id === 'ammo_factory' && o.id === 'steel_mill') || (d.id === 'steel_mill' && o.id === 'ammo_factory')) return 50;
+    const isDroneBld = (id: string) => id === 'drone_factory' || id === 'launch_site';
+    if (o) {
+      if ((isDroneBld(d.id) && o.id !== 'housing') || (isDroneBld(o.id) && d.id !== 'housing')) return 30;
+      if (!inZone) {
+        if ((d.id === 'steel_mill' && o.id === 'mine') || (d.id === 'mine' && o.id === 'steel_mill')) return 50;
+        if ((d.id === 'ammo_factory' && o.id === 'steel_mill') || (d.id === 'steel_mill' && o.id === 'ammo_factory')) return 50;
+      }
     }
     if (o && chained(d, o) && !inZone) return r.minBuildSpacing || 50;
     if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
@@ -1604,6 +1608,13 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!init || !snap) return 'not ready';
     const currentInit = init;
     if (!Object.entries(def.cost).every(([k, v]) => (snap!.res[k] ?? 0) >= v)) return 'Недостаточно денег';
+    if (def.id !== 'housing') {
+      const droneClash = snap.buildings.find((b) => (b.def === 'drone_factory' || b.def === 'launch_site') && distKm(b.pos, p) < 30);
+      if (droneClash && def.id !== 'drone_factory' && def.id !== 'launch_site') {
+        const other = defB.get(droneClash.def);
+        return `Слишком близко к объекту ${other?.name ?? droneClash.def} (радиус запрета 30 км, кроме жилых кварталов)`;
+      }
+    }
     if (def.id === 'hq') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       if (foreignAt(p) || nearForeignAt(p, 15)) return 'Нельзя строить ближе 15 км к границе с нейтральным государством';
@@ -1623,14 +1634,17 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       if (clash) return 'Слишком близко к другой военной базе (минимум 20 км)';
       return null;
     }
-    if (def.id === 'drone_factory') {
+    if (def.id === 'drone_factory' || def.id === 'launch_site') {
       if (terrain?.at(p) === 'water') return 'Нельзя строить на воде';
       if (sideAt(p) !== init.team) return 'Нельзя строить на территории противника';
       if (foreignAt(p)) return 'Нельзя строить на территории соседних государств';
       const myHq = snap.buildings.some((b) => b.owner === me && b.def === 'hq');
       if (!myHq) return 'Сначала необходимо построить Военный штаб';
-      const clash = snap.buildings.find((b) => b.def === 'drone_factory' && distKm(b.pos, p) < 1);
-      if (clash) return 'Место занято другим заводом';
+      const clash = snap.buildings.find((b) => b.def !== 'housing' && distKm(b.pos, p) < 30);
+      if (clash) {
+        const other = defB.get(clash.def);
+        return `Слишком близко к объекту ${other?.name ?? clash.def} (радиус запрета 30 км, кроме жилых кварталов)`;
+      }
       return null;
     }
     if (def.id === 'warehouse') {
@@ -2023,18 +2037,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               return h('div', { class: 'storage-item' }, ico, h('span', {}, res?.name ?? k), h('b', {}, Math.floor(v).toLocaleString('en-US')));
             }))));
         }
-        if ((b.def === 'mine' || b.def === 'steel_mill' || b.def === 'ammo_factory') && b.progress >= 1 && !locked) {
-          const targetDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
-          const targetLabel = b.def === 'mine' ? 'Сталелитейные заводы' : b.def === 'steel_mill' ? 'Заводы боеприпасов' : 'Склады';
-          const resLabel = b.def === 'mine' ? 'руды' : b.def === 'steel_mill' ? 'стали' : 'боеприпасов';
-          const targets = snap.buildings.filter((x) => x.team === b.team && x.progress >= 1 && x.def === targetDef);
+        if ((b.def === 'mine' || b.def === 'steel_mill' || b.def === 'ammo_factory' || b.def === 'drone_factory') && b.progress >= 1 && !locked) {
+          const targetDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : b.def === 'drone_factory' ? 'launch_site' : 'warehouse';
+          const targetLabel = b.def === 'mine' ? 'Сталелитейные заводы' : b.def === 'steel_mill' ? 'Заводы боеприпасов' : b.def === 'drone_factory' ? 'Площадки запуска дронов' : 'Склады';
+          const resLabel = b.def === 'mine' ? 'руды' : b.def === 'steel_mill' ? 'стали' : b.def === 'drone_factory' ? 'дронов' : 'боеприпасов';
+          const batchDesc = b.def === 'drone_factory' ? 'возит по 5 дронов' : `возит по 500 ${resLabel}`;
+          const targets = snap.buildings.filter((x) => x.team === b.team && x.progress >= 1 && (x.def === targetDef || (b.def === 'drone_factory' && defB.get(x.def)?.launches?.length)));
           const currentTargets = new Set(b.serviceTargets ?? []);
           const myTrucks = snap.units.filter((u) => u.serviceBuilding === b.id && u.hp > 0);
 
           const logBox = h('div', { class: 'storage-box', style: { marginTop: '10px' } });
           logBox.append(
             h('b', { style: { display: 'flex', alignItems: 'center', gap: '6px' } }, `🚚 Снабжение (${resLabel})`),
-            h('div', { class: 'stat' }, `Грузовиков на маршруте: ${myTrucks.length} (возит по 500 ${resLabel})`),
+            h('div', { class: 'stat' }, `Грузовиков на маршруте: ${myTrucks.length} (${batchDesc})`),
           );
 
           if (b.owner === me) {
@@ -2058,7 +2073,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               const td = defB.get(tgt.def);
               const dist = Math.round(distKm(b.pos, tgt.pos) * 10) / 10;
               const isChecked = currentTargets.has(tgt.id);
-              const stockVal = Math.floor(tgt.storage?.[b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo'] ?? 0);
+              const stockVal = b.def === 'drone_factory'
+                ? snap.units.filter((u) => u.parkedAt === tgt.id).length
+                : Math.floor(tgt.storage?.[b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo'] ?? 0);
+              const stockText = b.def === 'drone_factory' ? `${stockVal} шт.` : `${stockVal}/5000`;
               const tgtRow = h('div', {
                 class: 'row',
                 style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '4px 0', borderBottom: '1px solid rgba(255,255,255,0.06)', cursor: b.owner === me ? 'pointer' : 'default' },
@@ -2077,7 +2095,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
                   b.owner === me ? h('input', { type: 'checkbox', checked: isChecked, style: { cursor: 'pointer' } }) : null,
                   h('span', {}, `${td?.icon ?? '🏢'} ${td?.name ?? 'Объект'} (${dist} км)`),
                 ),
-                h('small', { class: 'muted' }, `${stockVal}/5000`)
+                h('small', { class: 'muted' }, stockText)
               );
               logBox.append(tgtRow);
             }
@@ -2088,7 +2106,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
         // drones and missiles waiting here
         const waiting = stored.filter((x) => x.parkedAt === b.id && x.owner === me);
         if (waiting.length) {
-          const box = h('div', { class: 'storage-box' }, h('b', {}, d.launches?.length ? 'Ready to launch' : 'Waiting for a launcher (Airfield for recon, Launch Site for strike)'));
+          const box = h('div', { class: 'storage-box' }, h('b', {}, d.launches?.length ? 'Готовы к запуску' : 'Ожидают доставки на площадку запуска (грузовиком по 5 шт.)'));
           const byDef = new Map<string, UnitView[]>();
           for (const x of waiting) byDef.set(x.def, [...(byDef.get(x.def) ?? []), x]);
           for (const [def, list] of byDef) {
@@ -2099,10 +2117,10 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               can && list.length > 1 ? h('button', { class: 'hud-btn sm', onClick: () => ((pick.launchFrom = { building: b.id, units: list.map((x) => x.id) }), toast('Click the target'), render()) }, 'Launch all at…') : null));
           }
           if (!d.launches?.length) {
-            box.append(h('button', { class: 'hud-btn sm', title: 'Fly waiting drones to the nearest launch site or airfield', onClick: () => {
+            box.append(h('button', { class: 'hud-btn sm', title: 'Отправить грузовик с дронами на ближайшую площадку запуска', onClick: () => {
               send({ type: 'dispatchDrones', building: b.id });
-              toast('Drones dispatched to launcher');
-            } }, 'Відправити на майданчик (Dispatch to launcher)'));
+              toast('Грузовик с дронами отправлен на площадку');
+            } }, '🚚 Отправить на площадку запуска'));
           }
           side.append(box);
         }

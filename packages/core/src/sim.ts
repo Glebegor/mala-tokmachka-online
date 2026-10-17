@@ -247,8 +247,8 @@ export class Sim {
         const t = (s + 0.5) / numSteps;
         const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
 
-        // Exclude Dnipro river / reservoir front line (from Black Sea up to Stepnohirsk at ~35.35°E)
-        if (pt[0] < 35.35 && pt[1] < 47.7) continue;
+        // Exclude Dnipro river / reservoir front line (from Black Sea up to Stepnohirsk at ~35.32°E)
+        if (pt[0] < 35.32 && pt[1] < 47.7) continue;
 
         // Team 0 (left: -nx, -ny)
         const uaRawPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
@@ -706,9 +706,13 @@ export class Sim {
   spacingBetween(d: BuildingDef, other: string, inZone = false): number {
     const r = this.ruleset.rules;
     const o = this.defs.b.get(other);
-    if (o && !inZone) {
-      if ((d.id === 'steel_mill' && o.id === 'mine') || (d.id === 'mine' && o.id === 'steel_mill')) return 50;
-      if ((d.id === 'ammo_factory' && o.id === 'steel_mill') || (d.id === 'steel_mill' && o.id === 'ammo_factory')) return 50;
+    const isDroneBld = (id: string) => id === 'drone_factory' || id === 'launch_site';
+    if (o) {
+      if ((isDroneBld(d.id) && o.id !== 'housing') || (isDroneBld(o.id) && d.id !== 'housing')) return 30;
+      if (!inZone) {
+        if ((d.id === 'steel_mill' && o.id === 'mine') || (d.id === 'mine' && o.id === 'steel_mill')) return 50;
+        if ((d.id === 'ammo_factory' && o.id === 'steel_mill') || (d.id === 'steel_mill' && o.id === 'ammo_factory')) return 50;
+      }
     }
     if (o && this.chained(d, o) && !inZone) return r.minBuildSpacing || 50;
     if (o && o.id === d.id && d.sameKindKm && !inZone) return d.sameKindKm;
@@ -1264,17 +1268,27 @@ export class Sim {
         const at = (st: HaulStop) => w.buildings.find((x) => x.id === st.building)!;
         const nameOf = (b: Building) => this.defs.b.get(b.def)!.name;
         const keeps = (b: Building) => this.storageFor(this.defs.b.get(b.def)!);
-        for (const st of [...loads, ...unloads]) if (!keeps(at(st)).length) return fail(`the ${nameOf(at(st))} keeps no goods`);
-        if (want && !loads.some((l) => keeps(at(l)).includes(want))) return fail(`nowhere on this route to load ${want}`);
-        for (const st of unloads) {
-          const to = at(st);
-          if (want && !keeps(to).includes(want)) return fail(`the ${nameOf(to)} does not take ${want}`);
-          if (!want && !loads.some((l) => this.haulKinds(at(l), to, ud).length)) return fail(`nothing on this route is wanted at the ${nameOf(to)}`);
+        if (want === 'drones') {
+          if (!loads.some((l) => at(l).def === 'drone_factory')) return fail('nowhere on this route to load drones');
+          for (const st of unloads) {
+            const to = at(st);
+            if (!this.defs.b.get(to.def)!.launches?.length) return fail(`the ${nameOf(to)} does not launch drones`);
+          }
+        } else {
+          for (const st of [...loads, ...unloads]) if (!keeps(at(st)).length) return fail(`the ${nameOf(at(st))} keeps no goods`);
+          if (want && !loads.some((l) => keeps(at(l)).includes(want))) return fail(`nowhere on this route to load ${want}`);
+          for (const st of unloads) {
+            const to = at(st);
+            if (want && !keeps(to).includes(want)) return fail(`the ${nameOf(to)} does not take ${want}`);
+            if (!want && !loads.some((l) => this.haulKinds(at(l), to, ud).length)) return fail(`nothing on this route is wanted at the ${nameOf(to)}`);
+          }
         }
         // goods already on board must have somewhere on the route to go (unloaded, or handed back at a loading stop)
         const onBoard = Object.entries(u.cargo?.res ?? {}).filter(([, v]) => v > 0.5).map(([k]) => k);
         const stray = onBoard.filter((k) => !stops.some((st) => st.action !== 'via' && keeps(at(st)).includes(k)));
-        const minLoad = Math.max(1, Math.min(ud.cargoCap, Math.round(Number(cmd.minLoad) || 1)));
+        const minLoad = want === 'drones'
+          ? Math.max(1, Math.min(ud.droneCap ?? 5, Math.round(Number(cmd.minLoad) || 5)))
+          : Math.max(1, Math.min(ud.cargoCap, Math.round(Number(cmd.minLoad) || 1)));
         // already carrying something an unloading stop takes: start there
         const firstUnload = stops.findIndex((x) => x.action === 'unload' && onBoard.some((k) => keeps(at(x)).includes(k)));
         let idx = firstUnload >= 0 ? firstUnload : 0;
@@ -1300,7 +1314,7 @@ export class Sim {
         const ud = this.defs.u.get(u.def)!;
         if (ud.kind === 'air') {
           // small drones ride on a vehicle's launcher, logistics trucks can carry any drone
-          if (!ud.launchable && t.def !== 'truck') return fail('only small drones can be carried');
+          if (!ud.launchable && t.def !== 'truck' && t.def !== 'logistics_truck') return fail('only small drones can be carried');
           if (!td.droneCap) return fail('that vehicle has no drone launcher');
           t.cargo ??= { res: {}, cap: td.cargoCap ?? 0, passengers: [] };
           t.cargo.drones ??= [];
@@ -1488,22 +1502,53 @@ export class Sim {
         if (!b) return fail('building not found');
         const waiting = w.units.filter((u) => u.parkedAt === b.id && u.owner === p.id);
         if (!waiting.length) return fail('no drones waiting at this building');
-        for (const u of waiting) {
-          const kind = this.launchKind(this.defs.u.get(u.def)!);
-          let targetB: Building | null = null;
-          if (cmd.targetLauncher) {
-            targetB = w.buildings.find((x) => x.id === cmd.targetLauncher && x.team === u.team && (x.progress ?? 1) >= 1 && this.defs.b.get(x.def)!.launches?.includes(kind)) ?? null;
+        let targetB: Building | null = null;
+        if (cmd.targetLauncher) {
+          targetB = w.buildings.find((x) => x.id === cmd.targetLauncher && x.team === b.team && (x.progress ?? 1) >= 1 && this.defs.b.get(x.def)!.launches?.length) ?? null;
+        }
+        if (!targetB) {
+          for (const ob of w.buildings) {
+            if (ob.team !== b.team || (ob.progress ?? 1) < 1 || !this.defs.b.get(ob.def)!.launches?.length || !this.usable(ob, p.id)) continue;
+            if (!targetB || distKm(ob.pos, b.pos) < distKm(targetB.pos, b.pos)) targetB = ob;
           }
-          if (!targetB) {
-            for (const ob of w.buildings) {
-              if (ob.team !== u.team || (ob.progress ?? 1) < 1 || !this.defs.b.get(ob.def)!.launches?.includes(kind) || !this.usable(ob, u.owner)) continue;
-              if (!targetB || distKm(ob.pos, b.pos) < distKm(targetB.pos, b.pos)) targetB = ob;
-            }
-          }
-          if (targetB) {
+        }
+        if (!targetB) return fail('no launch site available');
+
+        // Transport drones by truck (up to 5 per truck)
+        let truck: Unit | null | undefined = w.units.find((u) => u.serviceBuilding === b.id && u.hp > 0 && distKm(u.pos, b.pos) <= 5);
+        if (!truck) {
+          truck = this.spawnLogisticsTruck(b, targetB.id);
+        }
+        if (truck) {
+          truck.cargo ??= { res: {}, cap: 500, passengers: [] };
+          truck.cargo.drones ??= [];
+          const cap = this.defs.u.get(truck.def)!.droneCap ?? 5;
+          const space = Math.max(0, cap - truck.cargo.drones.length);
+          const toLoad = waiting.slice(0, space);
+          for (const u of toLoad) {
             u.parkedAt = undefined;
-            u.pos = [b.pos[0], b.pos[1]];
-            this.orderMove([u], targetB.pos, false, false, false);
+            u.embarkedIn = truck.id;
+            u.pos = [truck.pos[0], truck.pos[1]];
+            u.path = [];
+            u.target = null;
+            u.isLoitering = false;
+            u.loiterCenter = undefined;
+            truck.cargo.drones.push(u.id);
+          }
+          if (truck.haul) {
+            truck.haul.state = 'moving';
+            const unloadIdx = truck.haul.stops.findIndex((s) => s.action === 'unload' && s.building === targetB!.id);
+            if (unloadIdx >= 0) truck.haul.idx = unloadIdx;
+            this.haulGo(truck);
+          } else {
+            this.apply(b.owner, {
+              type: 'setRoute',
+              unit: truck.id,
+              fromBuilding: b.id,
+              toBuilding: targetB.id,
+              resType: 'drones',
+              minLoad: 5,
+            });
           }
         }
         return ok();
@@ -1512,7 +1557,7 @@ export class Sim {
         const b = w.buildings.find((x) => x.id === cmd.building && x.owner === p.id);
         if (!b) return fail('building not found');
         if (b.progress < 1) return fail('building under construction');
-        if (b.def !== 'mine' && b.def !== 'steel_mill' && b.def !== 'ammo_factory') {
+        if (b.def !== 'mine' && b.def !== 'steel_mill' && b.def !== 'ammo_factory' && b.def !== 'drone_factory') {
           return fail('not a logistics production building');
         }
         const cost = { money: 125 };
@@ -1524,9 +1569,10 @@ export class Sim {
       case 'setServiceTargets': {
         const b = w.buildings.find((x) => x.id === cmd.building && x.owner === p.id);
         if (!b) return fail('building not found');
-        const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
-        const resType = b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo';
-        const valid = cmd.targets.filter((id) => w.buildings.some((x) => x.id === id && x.team === b.team && x.def === allowedDef));
+        const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : b.def === 'drone_factory' ? 'launch_site' : 'warehouse';
+        const resType = b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : b.def === 'drone_factory' ? 'drones' : 'ammo';
+        const minLoad = b.def === 'drone_factory' ? 5 : 500;
+        const valid = cmd.targets.filter((id) => w.buildings.some((x) => x.id === id && x.team === b.team && (x.def === allowedDef || (b.def === 'drone_factory' && this.defs.b.get(x.def)!.launches?.length))));
         b.serviceTargets = valid;
 
         // Reassign existing logistics trucks servicing this building
@@ -1542,7 +1588,7 @@ export class Sim {
                 fromBuilding: b.id,
                 toBuilding: tgtB.id,
                 resType,
-                minLoad: 500,
+                minLoad,
               });
             }
           }
@@ -2193,7 +2239,7 @@ export class Sim {
 
     const isBorderTile = (cx: number, cy: number) => {
       const pos = cellCenter(cx, cy);
-      if (pos[0] < 35.35 && pos[1] < 47.7) return false; // Dnipro
+      if (pos[0] < 35.32 && pos[1] < 47.7) return false; // Dnipro
       const owner = this.tileMap ? this.tileMap.ownerOf(cx, cy) : this.side(pos);
       return (
         owner === team &&
@@ -2359,7 +2405,7 @@ export class Sim {
 
       for (const [cx, cy] of borderTiles) {
         const pos = cellCenter(cx, cy);
-        if (pos[0] < 35.35 && pos[1] < 47.7) continue; // Dnipro river
+        if (pos[0] < 35.32 && pos[1] < 47.7) continue; // Dnipro river
         if (!this.isPlayableGround(pos) || this.terrainAt(pos).id === 'water' || this.foreign(pos) || this.terrain?.isBarrier(pos)) continue;
         if (isCoveredByNearbyGarrison(cx, cy)) continue;
 
@@ -2776,14 +2822,23 @@ export class Sim {
     const truck = this.spawnUnit('logistics_truck', player, [b.pos[0], b.pos[1]]);
     truck.serviceBuilding = b.id;
 
-    const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
-    const resType = b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : 'ammo';
+    const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : b.def === 'drone_factory' ? 'launch_site' : 'warehouse';
+    const resType = b.def === 'mine' ? 'ore' : b.def === 'steel_mill' ? 'steel' : b.def === 'drone_factory' ? 'drones' : 'ammo';
+    const minLoad = b.def === 'drone_factory' ? 5 : 500;
 
     let targetId = specificTargetId;
     if (!targetId && b.serviceTargets && b.serviceTargets.length > 0) {
       const valid = b.serviceTargets.map((id) => w.buildings.find((x) => x.id === id && x.team === b.team && x.progress >= 1)).filter((x): x is Building => !!x);
       if (valid.length > 0) {
-        valid.sort((a, bld) => (a.storage?.[resType] ?? 0) - (bld.storage?.[resType] ?? 0));
+        if (b.def === 'drone_factory') {
+          valid.sort((a, bld) => {
+            const countA = w.units.filter((u) => u.parkedAt === a.id).length;
+            const countB = w.units.filter((u) => u.parkedAt === bld.id).length;
+            return countA - countB;
+          });
+        } else {
+          valid.sort((a, bld) => (a.storage?.[resType] ?? 0) - (bld.storage?.[resType] ?? 0));
+        }
         targetId = valid[0].id;
       }
     }
@@ -2791,7 +2846,7 @@ export class Sim {
       let bestD = Infinity;
       let bestB: Building | null = null;
       for (const cand of w.buildings) {
-        if (cand.team === b.team && cand.progress >= 1 && cand.def === allowedDef && cand.id !== b.id) {
+        if (cand.team === b.team && cand.progress >= 1 && (cand.def === allowedDef || (b.def === 'drone_factory' && this.defs.b.get(cand.def)!.launches?.length)) && cand.id !== b.id) {
           const d = distKm(b.pos, cand.pos);
           if (d < bestD) {
             bestD = d;
@@ -2814,7 +2869,7 @@ export class Sim {
           fromBuilding: b.id,
           toBuilding: targetB.id,
           resType,
-          minLoad: 500,
+          minLoad,
         });
       }
     }
@@ -2822,23 +2877,23 @@ export class Sim {
     return truck;
   }
 
-  /** Checks industrial buildings (mine, steel_mill, ammo_factory) and automatically launches initial logistics trucks. */
+  /** Checks industrial buildings (mine, steel_mill, ammo_factory, drone_factory) and automatically launches initial logistics trucks. */
   private updateBuildingLogistics() {
     const w = this.world;
     for (const b of w.buildings) {
       if (b.progress < 1) continue;
-      if (b.def !== 'mine' && b.def !== 'steel_mill' && b.def !== 'ammo_factory') continue;
-      const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : 'warehouse';
+      if (b.def !== 'mine' && b.def !== 'steel_mill' && b.def !== 'ammo_factory' && b.def !== 'drone_factory') continue;
+      const allowedDef = b.def === 'mine' ? 'steel_mill' : b.def === 'steel_mill' ? 'ammo_factory' : b.def === 'drone_factory' ? 'launch_site' : 'warehouse';
 
       if (b.serviceTargets) {
-        b.serviceTargets = b.serviceTargets.filter((id) => w.buildings.some((x) => x.id === id && x.team === b.team && x.progress >= 1 && x.def === allowedDef));
+        b.serviceTargets = b.serviceTargets.filter((id) => w.buildings.some((x) => x.id === id && x.team === b.team && x.progress >= 1 && (x.def === allowedDef || (b.def === 'drone_factory' && this.defs.b.get(x.def)!.launches?.length))));
       }
 
       if (!b.serviceTargets || b.serviceTargets.length === 0) {
         let bestD = Infinity;
         let bestB: Building | null = null;
         for (const cand of w.buildings) {
-          if (cand.team === b.team && cand.progress >= 1 && cand.def === allowedDef && cand.id !== b.id) {
+          if (cand.team === b.team && cand.progress >= 1 && (cand.def === allowedDef || (b.def === 'drone_factory' && this.defs.b.get(cand.def)!.launches?.length)) && cand.id !== b.id) {
             const d = distKm(b.pos, cand.pos);
             if (d < bestD) {
               bestD = d;
@@ -3404,6 +3459,33 @@ export class Sim {
       }
       case 'loading': {
         if ((h.timer = (h.timer ?? 5) - dt) > 0) break;
+        if (h.resType === 'drones') {
+          u.cargo ??= { res: {}, cap: d.cargoCap ?? 0, passengers: [] };
+          u.cargo.drones ??= [];
+          const cap = d.droneCap ?? 5;
+          const space = Math.max(0, cap - u.cargo.drones.length);
+          if (space > 0) {
+            const waiting = w.units.filter((x) => x.parkedAt === b!.id && x.team === u.team && x.hp > 0 && this.defs.u.get(x.def)?.kind === 'air');
+            const toTake = waiting.slice(0, space);
+            for (const x of toTake) {
+              x.parkedAt = undefined;
+              x.embarkedIn = u.id;
+              x.pos = [u.pos[0], u.pos[1]];
+              x.path = [];
+              x.target = null;
+              x.isLoitering = false;
+              x.loiterCenter = undefined;
+              u.cargo.drones.push(x.id);
+            }
+          }
+          const minRequired = Math.min(h.minLoad ?? cap, cap);
+          if (u.cargo.drones.length < minRequired) {
+            (h.timer = 5), (h.waiting = true);
+            break;
+          }
+          next();
+          break;
+        }
         b!.storage ??= {};
         // what to take: what the next unloading stop wants
         let dest: Building | undefined;
@@ -3445,6 +3527,20 @@ export class Sim {
       }
       case 'unloading': {
         if ((h.timer = (h.timer ?? 4) - dt) > 0) break;
+        if (h.resType === 'drones') {
+          if (u.cargo?.drones?.length) {
+            for (const droneId of u.cargo.drones) {
+              const dUnit = w.units.find((x) => x.id === droneId);
+              if (dUnit && dUnit.hp > 0) {
+                dUnit.embarkedIn = undefined;
+                this.park(dUnit, b!);
+              }
+            }
+            u.cargo.drones = [];
+          }
+          next();
+          break;
+        }
         b!.storage ??= {};
         const accepts = keeps(b!);
         const cap = this.storageCap(b!);
