@@ -92,6 +92,7 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
       })),
     units: w.units
       .filter((u) => {
+        if (u.hp <= 0) return false;
         if (u.embarkedIn && u.team !== team) return false; // riders are inside their vehicle
         if (u.parkedAt !== undefined && u.team !== team) return false; // grounded at a launcher
         if (u.team === team) return true;

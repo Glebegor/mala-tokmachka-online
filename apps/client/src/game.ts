@@ -1027,8 +1027,15 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
       const isFriendly = sideAt(tgtCenter) === myTeam;
+      const hasFriendlyGarrison = isFriendly && s.units.some(
+        (x) => x.team === myTeam && (x.owner.startsWith('__front_') || x.def === 'frontline_infantry') && cellOf(posOf(x))[0] === tgtCell[0] && cellOf(posOf(x))[1] === tgtCell[1]
+      );
       send({ type: 'attackTile', unitId: myFrontGarrison.id, targetCell: tgtCell });
-      toast(isFriendly ? 'Передислокация гарнизона на рубеже...' : 'Приказ гарнизону: штурм тайла!');
+      toast(
+        isFriendly
+          ? (hasFriendlyGarrison ? 'Передислокация: объединение с гарнизоном (60 с)...' : 'Передислокация гарнизона на рубеже (60 с)...')
+          : 'Приказ гарнизону: штурм тайла!'
+      );
       return;
     }
 
@@ -2569,43 +2576,41 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
           geometry: { type: 'Polygon', coordinates: [tilePoly(curCell[0], curCell[1])] },
         });
 
-        // 8 adjacent neighbor tiles (Red for enemy assault targets, Blue for friendly repositioning)
-        for (let dx = -1; dx <= 1; dx++) {
-          for (let dy = -1; dy <= 1; dy++) {
-            if (dx === 0 && dy === 0) continue;
-            const nx = curCell[0] + dx;
-            const ny = curCell[1] + dy;
-            const nCenter = cellCenter(nx, ny);
-            const nSide = sideAt(nCenter);
+        // 4 orthogonal neighbor tiles (Red for enemy assault targets, Blue for friendly repositioning)
+        const directions: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+        for (const [dx, dy] of directions) {
+          const nx = curCell[0] + dx;
+          const ny = curCell[1] + dy;
+          const nCenter = cellCenter(nx, ny);
+          const nSide = sideAt(nCenter);
 
-            if (nSide !== myTeam) {
-              // Enemy tile: target for assault
-              const opp = snap.units.find(
-                (e) => e.team !== myTeam && !e.embarkedIn && cellOf(posOf(e))[0] === nx && cellOf(posOf(e))[1] === ny,
-              );
-              const myTroops = u.squadSize ?? Math.round(u.hp / 50);
-              const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
-              const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
-              const canTake = !opp || oppAmmo <= 0 || myTroops > oppTroops;
+          if (nSide !== myTeam) {
+            // Enemy tile: target for assault
+            const opp = snap.units.find(
+              (e) => e.team !== myTeam && !e.embarkedIn && cellOf(posOf(e))[0] === nx && cellOf(posOf(e))[1] === ny,
+            );
+            const myTroops = u.squadSize ?? Math.round(u.hp / 50);
+            const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
+            const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
+            const canTake = !opp || oppAmmo <= 0 || myTroops > oppTroops;
 
-              rings.push({
-                type: 'Feature',
-                properties: {
-                  color: canTake ? '#ef4444' : '#991b1b',
-                  sel: true,
-                  w: canTake ? 2.5 : 1.5,
-                  o: 0.85,
-                },
-                geometry: { type: 'Polygon', coordinates: [tilePoly(nx, ny)] },
-              });
-            } else {
-              // Friendly tile: repositioning / movement
-              rings.push({
-                type: 'Feature',
-                properties: { color: '#3b82f6', sel: false, w: 1.5, o: 0.5 },
-                geometry: { type: 'Polygon', coordinates: [tilePoly(nx, ny)] },
-              });
-            }
+            rings.push({
+              type: 'Feature',
+              properties: {
+                color: canTake ? '#ef4444' : '#991b1b',
+                sel: true,
+                w: canTake ? 2.5 : 1.5,
+                o: 0.85,
+              },
+              geometry: { type: 'Polygon', coordinates: [tilePoly(nx, ny)] },
+            });
+          } else {
+            // Friendly tile: repositioning / movement
+            rings.push({
+              type: 'Feature',
+              properties: { color: '#3b82f6', sel: false, w: 1.5, o: 0.5 },
+              geometry: { type: 'Polygon', coordinates: [tilePoly(nx, ny)] },
+            });
           }
         }
       }

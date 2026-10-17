@@ -228,6 +228,11 @@ export class Sim {
       const [nx, ny] = normalAt(front, seg);
       const offset = 0.75;
 
+      const hasOrthogonalEnemy = (cx: number, cy: number, oppTeam: Team) => {
+        const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+        return dirs.some(([dx, dy]) => this.side(cellCenter(cx + dx, cy + dy)) === oppTeam);
+      };
+
       // Ukraine (team 0)
       const uaRawPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
       const [uax, uay] = cellOf(uaRawPos);
@@ -239,7 +244,8 @@ export class Sim {
         this.isPlayableGround(uaPos) &&
         this.terrainAt(uaPos).id !== 'water' &&
         !this.foreign(uaPos) &&
-        this.side(uaPos) === 0
+        this.side(uaPos) === 0 &&
+        hasOrthogonalEnemy(uax, uay, 1)
       ) {
         uaCells.add(uaKey);
         uaUnit = this.spawnFrontlineUnit(w, 0, uaPos);
@@ -256,7 +262,8 @@ export class Sim {
         this.isPlayableGround(ruPos) &&
         this.terrainAt(ruPos).id !== 'water' &&
         !this.foreign(ruPos) &&
-        this.side(ruPos) === 1
+        this.side(ruPos) === 1 &&
+        hasOrthogonalEnemy(rux, ruy, 0)
       ) {
         ruCells.add(ruKey);
         ruUnit = this.spawnFrontlineUnit(w, 1, ruPos);
@@ -1895,10 +1902,27 @@ export class Sim {
       // Assault completed (60 seconds elapsed)
       if (a.elapsed >= a.total) {
         if (a.isRelocation) {
-          u.pos = [a.targetPos[0], a.targetPos[1]];
-          u.assault = undefined;
-          u.frontStatus = 'holding';
-          this.hooks?.emit('toast', { text: 'Гарнизон передислоцирован на новую позицию' });
+          const friend = w.units.find(
+            (x) => x.team === u.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === tgtCell[0] && cellOf(x.pos)[1] === tgtCell[1] && x.id !== u.id
+          );
+          if (friend) {
+            friend.strength = (friend.strength ?? 1) + (u.strength ?? 1);
+            friend.squadSize = (friend.squadSize ?? 100) + (u.squadSize ?? 100);
+            friend.hp = Math.min((friend.strength ?? 1) * 5000, friend.hp + u.hp);
+            friend.ammo = Math.min((friend.strength ?? 1) * 100, (friend.ammo ?? 0) + (u.ammo ?? 0));
+            if (u.attackDebuffUntil && (!friend.attackDebuffUntil || u.attackDebuffUntil > friend.attackDebuffUntil)) {
+              friend.attackDebuffUntil = u.attackDebuffUntil;
+            }
+            u.hp = 0;
+            u.assault = undefined;
+            w.units = w.units.filter((x) => x.id !== u.id);
+            this.hooks?.emit('toast', { text: `Гарнизон объединен с позицией [${tgtCell[0]}, ${tgtCell[1]}]. Новая сила: ${friend.strength} (${friend.squadSize} бойцов)` });
+          } else {
+            u.pos = [a.targetPos[0], a.targetPos[1]];
+            u.assault = undefined;
+            u.frontStatus = 'holding';
+            this.hooks?.emit('toast', { text: 'Гарнизон передислоцирован на новую позицию' });
+          }
           continue;
         }
 
@@ -1910,9 +1934,22 @@ export class Sim {
 
         if (canAdvance) {
           // Success! Breakthrough into target tile
-          u.pos = [a.targetPos[0], a.targetPos[1]];
-          u.assault = undefined;
-          u.frontStatus = 'holding';
+          const existingFriend = w.units.find(
+            (x) => x.team === u.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === tgtCell[0] && cellOf(x.pos)[1] === tgtCell[1] && x.id !== u.id
+          );
+          if (existingFriend) {
+            existingFriend.strength = (existingFriend.strength ?? 1) + (u.strength ?? 1);
+            existingFriend.squadSize = (existingFriend.squadSize ?? 100) + (u.squadSize ?? 100);
+            existingFriend.hp = Math.min((existingFriend.strength ?? 1) * 5000, existingFriend.hp + u.hp);
+            existingFriend.ammo = Math.min((existingFriend.strength ?? 1) * 100, (existingFriend.ammo ?? 0) + (u.ammo ?? 0));
+            u.hp = 0;
+            u.assault = undefined;
+            w.units = w.units.filter((x) => x.id !== u.id);
+          } else {
+            u.pos = [a.targetPos[0], a.targetPos[1]];
+            u.assault = undefined;
+            u.frontStatus = 'holding';
+          }
 
           if (opp) {
             const retreatTile = this.findRetreatTile(tgtCell, opp.team);
@@ -1929,6 +1966,7 @@ export class Sim {
                 friend.attackDebuffUntil = w.time + 120; // 2 minutes attack debuff
                 friend.morale = Math.max(10, (friend.morale ?? 100) - 20);
                 opp.hp = 0; // Merged into existing squad
+                w.units = w.units.filter((x) => x.id !== opp.id);
               } else {
                 opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
                 opp.ammo = Math.max(0, (opp.ammo ?? 0) - 20);
@@ -1937,6 +1975,7 @@ export class Sim {
               }
             } else {
               opp.hp = 0; // Encircled / destroyed
+              w.units = w.units.filter((x) => x.id !== opp.id);
             }
           }
 

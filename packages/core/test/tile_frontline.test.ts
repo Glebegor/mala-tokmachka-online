@@ -25,7 +25,19 @@ assert.ok(ruGarrisons.every((u) => (u.strength ?? 1) === 1), 'All RU garrisons s
 assert.ok(uaGarrisons.every((u) => u.squadSize === 100), 'All UA garrisons start with 100 soldiers');
 assert.ok(uaGarrisons.every((u) => u.hp === 5000), 'All UA garrisons start with 5000 HP');
 assert.ok(uaGarrisons.every((u) => u.ammo === 100), 'All UA garrisons start with 100 ammo');
-console.log(`✓ Garrisons deployed in every border tile: ${uaGarrisons.length} UA, ${ruGarrisons.length} RU (Strength 1, 100 soldiers, 5000 HP, 100 Ammo)`);
+
+const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+const uaDiagonalOnly = uaGarrisons.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !dirs.some(([dx, dy]) => sim.side(cellCenter(cx + dx, cy + dy)) === 1);
+});
+const ruDiagonalOnly = ruGarrisons.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !dirs.some(([dx, dy]) => sim.side(cellCenter(cx + dx, cy + dy)) === 0);
+});
+assert.equal(uaDiagonalOnly.length, 0, 'No UA diagonal corner garrisons exist');
+assert.equal(ruDiagonalOnly.length, 0, 'No RU diagonal corner garrisons exist');
+console.log(`✓ Frontline Garrison Deployment Verified: ${uaGarrisons.length} UA, ${ruGarrisons.length} RU (0 diagonal-only corner garrisons, 100 soldiers, 5000 HP, 100 Ammo)`);
 
 // Find an opposing pair of garrisons
 const gUA = uaGarrisons[0];
@@ -204,5 +216,53 @@ for (let i = 0; i < 60; i++) sim.step(1.0);
 assert.equal(gUA.assault, undefined, 'Relocation complete');
 assert.ok(distKm(gUA.pos, cellCenter(friendlyNeighbor[0], friendlyNeighbor[1])) < 0.05, 'Garrison arrived at friendly tile center');
 console.log('✓ Friendly Movement: Garrison repositions to friendly tile center over 60s');
+
+// 6. Test Friendly Garrison Stacking / Merging:
+// When garrison A moves into garrison B's tile, garrison B absorbs garrison A (strength & soldiers stack), and garrison A disappears (hp = 0, removed from units)
+const friendTile = friendlyNeighbor;
+const existingGarrison = gUA; // gUA is now stationed at friendTile
+existingGarrison.strength = 1;
+existingGarrison.squadSize = 100;
+existingGarrison.hp = 5000;
+existingGarrison.ammo = 80;
+
+// Find another adjacent friendly tile to spawn an incoming garrison
+let neighborOfFriend: [number, number] | null = null;
+for (const [dx, dy] of orthogonalDirs) {
+  const cand: [number, number] = [friendTile[0] + dx, friendTile[1] + dy];
+  if (sim.side(cellCenter(cand[0], cand[1])) === 0 && !(cand[0] === friendTile[0] && cand[1] === friendTile[1])) {
+    neighborOfFriend = cand;
+    break;
+  }
+}
+assert.ok(neighborOfFriend, 'Found neighbor tile of friend');
+const incomingGarrison = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(neighborOfFriend[0], neighborOfFriend[1]));
+incomingGarrison.strength = 1;
+incomingGarrison.squadSize = 100;
+incomingGarrison.hp = 5000;
+incomingGarrison.ammo = 90;
+
+const mergeOrder = sim.apply('player1', {
+  type: 'attackTile',
+  unitId: incomingGarrison.id,
+  targetCell: friendTile,
+});
+assert.equal(mergeOrder.ok, true, 'Relocation to occupied friendly tile accepted');
+assert.equal(incomingGarrison.assault?.isRelocation, true, 'Marked as friendly relocation');
+
+// March for 60 seconds
+for (let i = 0; i < 60; i++) sim.step(1.0);
+
+assert.equal(incomingGarrison.hp, 0, 'Incoming garrison disappeared (hp set to 0)');
+assert.ok(!sim.world.units.some((u) => u.id === incomingGarrison.id), 'Incoming garrison removed from world units');
+assert.equal(existingGarrison.strength, 2, 'Existing garrison strength stacked (1 + 1 = 2)');
+assert.equal(existingGarrison.squadSize, 200, 'Existing garrison squadSize stacked (100 + 100 = 200)');
+assert.ok(existingGarrison.hp >= 9500 && existingGarrison.hp <= 10000, `Existing garrison HP stacked (~10000, actual=${existingGarrison.hp})`);
+assert.ok(existingGarrison.ammo >= 150, `Existing garrison ammo stacked (~170, actual=${existingGarrison.ammo})`);
+
+// Verify only 1 unit exists in this tile
+const unitsInTile = sim.world.units.filter((u) => u.hp > 0 && cellOf(u.pos)[0] === friendTile[0] && cellOf(u.pos)[1] === friendTile[1]);
+assert.equal(unitsInTile.length, 1, 'Only exactly 1 garrison remains stationed in the tile after stacking');
+console.log('✓ Friendly Garrison Stacking & Merge Verified: Neighboring garrison merged, strength stacked to 2 (200 soldiers), incoming unit disappeared without duplicate tokens');
 
 console.log('All Tile Frontline tests passed successfully!');
