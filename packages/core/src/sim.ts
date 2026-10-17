@@ -4543,7 +4543,7 @@ export class Sim {
   /** Marching frontline garrisons moving to occupy gaps along the front line */
   private stepMarchingGarrisons(dt: number) {
     const w = this.world;
-    const marchSpeedKmS = 30.0 / 3600; // 30 km/h marching speed
+    const marchSpeedKmS = 60.0 / 3600; // 60 km/h marching speed (doubled)
     const stepKm = marchSpeedKmS * dt;
 
     for (const u of w.units) {
