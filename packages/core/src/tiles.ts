@@ -1,5 +1,5 @@
 import { LIBERATED_CELL, type FrontNode, type Team } from './state';
-import type { LngLat } from './geo';
+import { distKm, type LngLat } from './geo';
 import { OccupiedIndex } from './frontline';
 
 export const TILE_CW = LIBERATED_CELL.lng; // 0.02° ≈ 1.5 km
@@ -202,51 +202,45 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
   const [ix, iy] = cell;
   const x0 = ix * cw, x1 = (ix + 1) * cw;
   const y0 = iy * ch, y1 = (iy + 1) * ch;
+  const center = cellCenter(ix, iy);
 
-  const out: FrontNode[] = [];
-  let substituted = false;
-
-  for (let i = 0; i < front.length; i++) {
-    const p = front[i];
-    if (!substituted && i < front.length - 1) {
-      const q = front[i + 1];
-      const minX = Math.min(p.lng, q.lng), maxX = Math.max(p.lng, q.lng);
-      const minY = Math.min(p.lat, q.lat), maxY = Math.max(p.lat, q.lat);
-
-      // Check if p->q touches one of the edges of this cell
-      const isSouth = Math.abs(p.lat - y0) < 1e-6 && Math.abs(q.lat - y0) < 1e-6 && minX >= x0 - 1e-6 && maxX <= x1 + 1e-6;
-      const isNorth = Math.abs(p.lat - y1) < 1e-6 && Math.abs(q.lat - y1) < 1e-6 && minX >= x0 - 1e-6 && maxX <= x1 + 1e-6;
-      const isWest = Math.abs(p.lng - x0) < 1e-6 && Math.abs(q.lng - x0) < 1e-6 && minY >= y0 - 1e-6 && maxY <= y1 + 1e-6;
-      const isEast = Math.abs(p.lng - x1) < 1e-6 && Math.abs(q.lng - x1) < 1e-6 && minY >= y0 - 1e-6 && maxY <= y1 + 1e-6;
-
-      if (isSouth || isNorth || isWest || isEast) {
-        out.push(p);
-        if (team === 0) {
-          if (isSouth) {
-            out.push({ lng: x0, lat: y1, v: 0 });
-            out.push({ lng: x1, lat: y1, v: 0 });
-          } else if (isWest) {
-            out.push({ lng: x1, lat: y0, v: 0 });
-            out.push({ lng: x1, lat: y1, v: 0 });
-          } else {
-            out.push({ lng: (x0 + x1) / 2, lat: (y0 + y1) / 2, v: 0 });
-          }
-        } else {
-          if (isNorth) {
-            out.push({ lng: x1, lat: y0, v: 0 });
-            out.push({ lng: x0, lat: y0, v: 0 });
-          } else if (isEast) {
-            out.push({ lng: x0, lat: y1, v: 0 });
-            out.push({ lng: x0, lat: y0, v: 0 });
-          } else {
-            out.push({ lng: (x0 + x1) / 2, lat: (y0 + y1) / 2, v: 0 });
-          }
-        }
-        substituted = true;
-        continue;
-      }
+  // Find the segment i -> i+1 of the front line closest to the captured cell center
+  let bestIdx = -1;
+  let bestDist = Infinity;
+  for (let i = 0; i < front.length - 1; i++) {
+    const midLng = (front[i].lng + front[i + 1].lng) / 2;
+    const midLat = (front[i].lat + front[i + 1].lat) / 2;
+    const d = distKm(center, [midLng, midLat]);
+    if (d < bestDist) {
+      bestDist = d;
+      bestIdx = i;
     }
-    out.push(p);
   }
-  return out.length >= 2 ? out : front;
+
+  if (bestIdx < 0 || bestDist > 8.0) return front;
+
+  // The replacement edges wrapping around this cell:
+  // For Ukraine (team 0): the front line wraps along the East and South edges of the cell
+  // so the cell is firmly inside Ukrainian territory.
+  // For Russia (team 1): the front line wraps along the West and North edges of the cell.
+  const newNodes: FrontNode[] = [];
+  if (team === 0) {
+    newNodes.push({ lng: x0, lat: y0, v: 0 });
+    newNodes.push({ lng: x1, lat: y0, v: 0 });
+    newNodes.push({ lng: x1, lat: y1, v: 0 });
+    newNodes.push({ lng: x0, lat: y1, v: 0 });
+  } else {
+    newNodes.push({ lng: x1, lat: y1, v: 0 });
+    newNodes.push({ lng: x0, lat: y1, v: 0 });
+    newNodes.push({ lng: x0, lat: y0, v: 0 });
+    newNodes.push({ lng: x1, lat: y0, v: 0 });
+  }
+
+  const out: FrontNode[] = [
+    ...front.slice(0, bestIdx + 1),
+    ...newNodes,
+    ...front.slice(bestIdx + 1),
+  ];
+
+  return out;
 }

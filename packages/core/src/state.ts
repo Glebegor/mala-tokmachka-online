@@ -218,6 +218,15 @@ export interface Unit {
   serviceBuilding?: number;
   /** Direction vector pushed by advancing enemy. */
   pushedDir?: [number, number];
+  /** HoI tile assault or redeployment in progress (marching to tile center over 60s). */
+  assault?: {
+    targetCell: [number, number];
+    startPos: LngLat;
+    targetPos: LngLat;
+    elapsed: number;
+    total: number;
+    isRelocation?: boolean;
+  };
 }
 
 /**

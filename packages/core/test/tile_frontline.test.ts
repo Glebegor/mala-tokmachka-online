@@ -10,15 +10,22 @@ const sim = new Sim(rs, 'zaporizhzhia', [
   { id: 'player2', name: 'Player 2', team: 1, bot: false },
 ]);
 
-console.log('--- Testing Tile Frontline & Troop Movement (HoI Style) ---');
+console.log('--- Testing Tile Frontline & Troop Movement (HoI Style, 60s Assault) ---');
 
-// 1. Initial State Verification
+// 1. Initial State Verification: Every border tile has a garrison, strength 1 (100 soldiers, 5000 HP, 100 ammo)
 const uaGarrisons = sim.world.units.filter((u) => u.team === 0 && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry'));
 const ruGarrisons = sim.world.units.filter((u) => u.team === 1 && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry'));
 
-assert.ok(uaGarrisons.length > 0, 'UA frontline garrisons deployed');
-assert.ok(ruGarrisons.length > 0, 'RU frontline garrisons deployed');
-console.log(`✓ Garrisons deployed: ${uaGarrisons.length} UA, ${ruGarrisons.length} RU`);
+assert.ok(uaGarrisons.length > 50, `UA frontline garrisons deployed across tiles (count=${uaGarrisons.length})`);
+assert.ok(ruGarrisons.length > 50, `RU frontline garrisons deployed across tiles (count=${ruGarrisons.length})`);
+
+// Verify all initial garrisons start with strength 1, 100 squadSize, 5000 HP, 100 ammo
+assert.ok(uaGarrisons.every((u) => (u.strength ?? 1) === 1), 'All UA garrisons start with strength 1');
+assert.ok(ruGarrisons.every((u) => (u.strength ?? 1) === 1), 'All RU garrisons start with strength 1');
+assert.ok(uaGarrisons.every((u) => u.squadSize === 100), 'All UA garrisons start with 100 soldiers');
+assert.ok(uaGarrisons.every((u) => u.hp === 5000), 'All UA garrisons start with 5000 HP');
+assert.ok(uaGarrisons.every((u) => u.ammo === 100), 'All UA garrisons start with 100 ammo');
+console.log(`✓ Garrisons deployed in every border tile: ${uaGarrisons.length} UA, ${ruGarrisons.length} RU (Strength 1, 100 soldiers, 5000 HP, 100 Ammo)`);
 
 // Find an opposing pair of garrisons
 const gUA = uaGarrisons[0];
@@ -43,54 +50,70 @@ for (let dx = -1; dx <= 1; dx++) {
 assert.ok(adjEnemyCell, 'Found adjacent enemy tile to UA garrison');
 console.log(`Adjacent enemy tile: [${adjEnemyCell[0]}, ${adjEnemyCell[1]}]`);
 
-// 2. Test Stalemate: Enemy has equal/more troops AND has ammo -> Attack fails
-// Place a strong RU garrison in that target tile with ammo
+// 2. Test Stalemate: Enemy has equal/more troops AND has ammo -> 60s assault is repelled
 const candCenter = cellCenter(adjEnemyCell[0], adjEnemyCell[1]);
 const defendingRu = sim.world.units.find((u) => u.team === 1 && cellOf(u.pos)[0] === adjEnemyCell![0] && cellOf(u.pos)[1] === adjEnemyCell![1])
   ?? sim.spawnUnit('frontline_infantry', sim.player('player2')!, candCenter);
 
-defendingRu.hp = 25000;
-defendingRu.squadSize = 500;
-defendingRu.ammo = 500;
-defendingRu.pos = candCenter;
+defendingRu.hp = 5000;
+defendingRu.squadSize = 100;
+defendingRu.ammo = 100;
+defendingRu.pos = [candCenter[0], candCenter[1]];
 
-gUA.hp = 25000;
-gUA.squadSize = 500;
-gUA.ammo = 500;
+gUA.hp = 5000;
+gUA.squadSize = 100;
+gUA.ammo = 100;
+const startUaPos: [number, number] = [gUA.pos[0], gUA.pos[1]];
 
-const preAttackUaAmmo = gUA.ammo;
-const preAttackRuAmmo = defendingRu.ammo;
-
-const repelledRes = sim.apply('player1', {
+const orderRes = sim.apply('player1', {
   type: 'attackTile',
   unitId: gUA.id,
   targetCell: adjEnemyCell,
 });
 
-assert.equal(repelledRes.ok, false, 'Attack repelled when enemy has equal troops and ammo');
-assert.ok(gUA.ammo < preAttackUaAmmo, 'Attacker consumed ammo in skirmish firefight');
-assert.ok(defendingRu.ammo < preAttackRuAmmo, 'Defender consumed ammo in skirmish firefight');
+assert.equal(orderRes.ok, true, 'Assault order accepted');
+assert.ok(gUA.assault, 'Assault object created on attacking garrison');
+assert.equal(gUA.assault?.total, 60, 'Assault takes 60 seconds (1 minute march)');
+assert.equal(gUA.frontStatus, 'advancing', 'Garrison status updated to advancing');
+
+// March for 30 seconds (halfway)
+for (let i = 0; i < 30; i++) sim.step(1.0);
+assert.ok(gUA.assault, 'Assault still underway after 30 seconds');
+assert.ok(distKm(gUA.pos, startUaPos) > 0.1, 'Garrison physically marched towards target tile');
+assert.ok(distKm(gUA.pos, candCenter) < distKm(startUaPos, candCenter), 'Garrison is closer to enemy tile center');
+
+// March remaining 30 seconds to completion (total 60s)
+for (let i = 0; i < 30; i++) sim.step(1.0);
+assert.equal(gUA.assault, undefined, 'Assault completed at 60 seconds');
+assert.deepEqual(gUA.pos, startUaPos, 'Attacking garrison fell back to home tile after being repelled');
 assert.equal(sim.side(candCenter), 1, 'Tile remains under Russian control');
-console.log('✓ Attack Repelled & Skirmish Exchange: Enemy holds position when troops >= ours and has ammo');
+assert.ok(gUA.ammo < 100, 'Attacker consumed ammo in skirmishes and repel penalty');
+console.log('✓ 60-Second March & Stalemate: Garrison marches for 1 min, skirmishes, and is repelled when forces are equal and defender has ammo');
 
 // 3. Test Breakthrough Condition A: Enemy runs out of ammo (ammo <= 0)
 defendingRu.ammo = 0; // Out of ammo!
-const preUaPos = [...gUA.pos];
+gUA.ammo = 80; // Reset UA ammo
+gUA.hp = 5000;
+const preFrontCount = sim.world.front.length;
 
-const winAmmoRes = sim.apply('player1', {
+const winAmmoOrder = sim.apply('player1', {
   type: 'attackTile',
   unitId: gUA.id,
   targetCell: adjEnemyCell,
 });
+assert.equal(winAmmoOrder.ok, true, 'Attack order accepted against out-of-ammo defender');
 
-assert.equal(winAmmoRes.ok, true, 'Attack succeeds when enemy ran out of ammo');
+// March for 60 seconds
+for (let i = 0; i < 60; i++) sim.step(1.0);
+
+assert.equal(gUA.assault, undefined, 'Assault completed');
 assert.equal(sim.side(candCenter), 0, 'Target tile flipped to Ukrainian control');
-assert.notDeepEqual(gUA.pos, preUaPos, 'Garrison advanced into the captured tile');
-assert.notDeepEqual(defendingRu.pos, candCenter, 'Defeated enemy garrison retreated from tile');
-console.log('✓ Breakthrough via Ammo Depletion: Garrison takes tile when defending enemy ammo <= 0');
+assert.ok(distKm(gUA.pos, candCenter) < 0.05, 'Attacking garrison reached target tile center');
+assert.ok(distKm(defendingRu.pos, candCenter) > 0.5, 'Defeated enemy garrison retreated from captured tile');
+assert.notEqual(sim.world.front.length, preFrontCount, 'Frontline polyline modified to wrap around captured tile');
+console.log('✓ Breakthrough via Ammo Depletion: Garrison marches 60s, breaks through, tile flips, frontline wraps around cell');
 
 // 4. Test Breakthrough Condition B: Attacker has numerical superiority (myTroops > enemyTroops)
-// Find another adjacent enemy tile
 const curCell2 = cellOf(gUA.pos);
 let adjEnemyCell2: [number, number] | null = null;
 for (let dx = -1; dx <= 1; dx++) {
@@ -111,22 +134,27 @@ if (adjEnemyCell2) {
   const ruDefender2 = sim.world.units.find((u) => u.team === 1 && cellOf(u.pos)[0] === adjEnemyCell2![0] && cellOf(u.pos)[1] === adjEnemyCell2![1])
     ?? sim.spawnUnit('frontline_infantry', sim.player('player2')!, center2);
 
-  ruDefender2.pos = center2;
-  ruDefender2.ammo = 200;
-  ruDefender2.squadSize = 300; // Smaller force (300 soldiers)
+  ruDefender2.pos = [center2[0], center2[1]];
+  ruDefender2.ammo = 100;
+  ruDefender2.squadSize = 100; // 100 defenders
 
-  gUA.squadSize = 500; // Superior force (500 soldiers)
-  gUA.ammo = 300;
+  gUA.squadSize = 300; // 300 attackers (superior force)
+  gUA.ammo = 100;
+  gUA.hp = 15000;
 
-  const winSuperiorRes = sim.apply('player1', {
+  const winSuperiorOrder = sim.apply('player1', {
     type: 'attackTile',
     unitId: gUA.id,
     targetCell: adjEnemyCell2,
   });
 
-  assert.equal(winSuperiorRes.ok, true, 'Attack succeeds when attacker has troop superiority');
-  assert.equal(sim.side(center2), 0, 'Tile captured by UA garrison');
-  console.log('✓ Breakthrough via Force Superiority: Garrison takes tile when myTroops > oppTroops');
+  assert.equal(winSuperiorOrder.ok, true, 'Attack order accepted');
+  // March for 60 seconds
+  for (let i = 0; i < 60; i++) sim.step(1.0);
+
+  assert.equal(sim.side(center2), 0, 'Tile captured by superior UA garrison');
+  assert.ok(distKm(gUA.pos, center2) < 0.05, 'Garrison reached target center');
+  console.log('✓ Breakthrough via Force Superiority: Garrison takes tile after 60s march when myTroops > oppTroops');
 }
 
 // 5. Test Friendly Tile Movement (Relocation)
@@ -149,7 +177,12 @@ const moveRes = sim.apply('player1', {
   unitId: gUA.id,
   targetCell: friendlyNeighbor,
 });
-assert.equal(moveRes.ok, true, 'Garrison moves freely between friendly tiles');
-console.log('✓ Friendly Movement: Garrison repositions between friendly tiles');
+assert.equal(moveRes.ok, true, 'Garrison relocation order accepted');
+assert.equal(gUA.assault?.isRelocation, true, 'Marked as friendly relocation');
+// Step 60s
+for (let i = 0; i < 60; i++) sim.step(1.0);
+assert.equal(gUA.assault, undefined, 'Relocation complete');
+assert.ok(distKm(gUA.pos, cellCenter(friendlyNeighbor[0], friendlyNeighbor[1])) < 0.05, 'Garrison arrived at friendly tile center');
+console.log('✓ Friendly Movement: Garrison repositions to friendly tile center over 60s');
 
 console.log('All Tile Frontline tests passed successfully!');

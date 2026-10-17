@@ -160,7 +160,7 @@ export class Sim {
     const startRes: ResourceAmounts = {};
     for (const res of this.ruleset.resources) if (!this.isGood(res.id)) startRes[res.id] = res.start; // goods start in the HQ
     const players: Player[] = slots.map((s) => ({ ...s, res: { ...startRes }, share: true }));
-    const front = buildFront(this.map.front, r.frontNodeSpacingKm);
+    const front = snapFrontToTileEdges(buildFront(this.map.front, r.frontNodeSpacingKm));
     const initialFront = front.map((n) => ({ ...n }));
     this.tileMap.initFromMap(this.map.bounds, initialFront, this.map.occupiedClosure);
     const w: World = {
@@ -197,7 +197,7 @@ export class Sim {
     return w;
   }
 
-  /** Spawns 100-man autonomous infantry squads every 4 km along the front line to hold positions. */
+  /** Spawns 100-man autonomous infantry squads in every tile along the front line to hold positions. */
   private spawnFrontlineGarrisons(w: World) {
     if (!w.front || w.front.length < 2) return;
     const front = w.front;
@@ -206,12 +206,14 @@ export class Sim {
       cum.push(cum[i - 1] + distKm([front[i - 1].lng, front[i - 1].lat], [front[i].lng, front[i].lat]));
     }
     const totalDist = cum[cum.length - 1];
-    if (totalDist < 4) return;
+    if (totalDist < 2) return;
 
-    const stepKm = 4.0;
+    const stepKm = 1.35;
     let seg = 0;
+    const uaCells = new Set<number>();
+    const ruCells = new Set<number>();
 
-    for (let s = 2.0; s < totalDist; s += stepKm) {
+    for (let s = 0.65; s < totalDist; s += stepKm) {
       while (seg < front.length - 2 && cum[seg + 1] < s) seg++;
       const a = front[seg];
       const b = front[seg + 1];
@@ -224,32 +226,39 @@ export class Sim {
       if (isDnipro) continue;
 
       const [nx, ny] = normalAt(front, seg);
-
-      // Distance from front line: 0.9 km behind the front into friendly territory
-      // (1.8 km distance between opposing lines prevents premature mutual fire with 1.5 km weapons)
-      const offset = 0.9;
+      const offset = 0.75;
 
       // Ukraine (team 0)
+      const uaRawPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
+      const [uax, uay] = cellOf(uaRawPos);
+      const uaKey = cellKey(uax, uay);
+      const uaPos = cellCenter(uax, uay);
       let uaUnit: Unit | null = null;
-      const uaPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
       if (
+        !uaCells.has(uaKey) &&
         this.isPlayableGround(uaPos) &&
         this.terrainAt(uaPos).id !== 'water' &&
         !this.foreign(uaPos) &&
         this.side(uaPos) === 0
       ) {
+        uaCells.add(uaKey);
         uaUnit = this.spawnFrontlineUnit(w, 0, uaPos);
       }
 
       // Russia (team 1)
+      const ruRawPos: LngLat = offsetKm(pt, nx * offset, ny * offset);
+      const [rux, ruy] = cellOf(ruRawPos);
+      const ruKey = cellKey(rux, ruy);
+      const ruPos = cellCenter(rux, ruy);
       let ruUnit: Unit | null = null;
-      const ruPos: LngLat = offsetKm(pt, nx * offset, ny * offset);
       if (
+        !ruCells.has(ruKey) &&
         this.isPlayableGround(ruPos) &&
         this.terrainAt(ruPos).id !== 'water' &&
         !this.foreign(ruPos) &&
         this.side(ruPos) === 1
       ) {
+        ruCells.add(ruKey);
         ruUnit = this.spawnFrontlineUnit(w, 1, ruPos);
       }
 
@@ -268,11 +277,11 @@ export class Sim {
       owner: '__front_' + team,
       team,
       pos,
-      hp: d.hp, // 25000 HP (500 soldiers, 5 strength)
-      strength: 5,
-      squadSize: d.squadSize ?? 500,
+      hp: 5000, // 100 soldiers, 1 strength
+      strength: 1,
+      squadSize: 100,
       morale: 100,
-      ammo: 500,
+      ammo: 100,
       skirmishTimer: 1 + Math.random() * 8,
       target: null,
       cooldown: 0,
@@ -1042,6 +1051,10 @@ export class Sim {
         const isGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
         if (!isGarrison) return fail('attackTile is only available for frontline garrisons');
 
+        if (u.assault) {
+          return fail('Гарнизон уже выполняет наступление или передислокацию');
+        }
+
         const curCell = cellOf(u.pos);
         const tgtCell = cmd.targetCell;
 
@@ -1052,89 +1065,33 @@ export class Sim {
         const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
         const tgtOwner = this.side(tgtCenter);
 
-        // Friendly tile movement (redeploy garrison)
+        // Friendly tile movement (redeploy garrison over 60s)
         if (tgtOwner === u.team) {
-          const tgtPos = cellCenter(tgtCell[0], tgtCell[1]);
-          u.pos = tgtPos;
-          const post = w.posts?.find((fp) => fp.id === u.frontPost || fp.garrison.includes(u.id));
-          if (post) post.pos = tgtPos;
+          u.assault = {
+            targetCell: tgtCell,
+            startPos: [u.pos[0], u.pos[1]],
+            targetPos: tgtCenter,
+            elapsed: 0,
+            total: 60,
+            isRelocation: true,
+          };
+          u.frontStatus = 'advancing';
+          this.hooks?.emit('toast', { text: `Передислокация гарнизона в тайл [${tgtCell[0]}, ${tgtCell[1]}] (время: 60 с)` });
           return ok();
         }
 
-        // Offense against enemy tile:
-        // Find defending enemy unit in that target cell
-        const opp = w.units.find((e) => e.team !== u.team && e.hp > 0 && !e.embarkedIn && cellOf(e.pos)[0] === tgtCell[0] && cellOf(e.pos)[1] === tgtCell[1]);
-
-        const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
-        const myTroops = u.squadSize ?? Math.round(u.hp / 50);
-        const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
-
-        // Condition: enemy has fewer troops OR enemy ran out of ammo (or tile is empty)
-        const canAdvance = !opp || oppAmmo <= 0 || myTroops > oppTroops;
-
-        if (canAdvance) {
-          // Attack successful! Breakthrough into target tile!
-          if (opp) {
-            // Defeated enemy retreats to an adjacent friendly tile
-            const retreatTile = this.findRetreatTile(tgtCell, opp.team);
-            if (retreatTile) {
-              opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
-              opp.ammo = Math.max(0, (opp.ammo ?? 0) - 30);
-              opp.morale = Math.max(10, (opp.morale ?? 100) - 40);
-              opp.hp = Math.max(500, opp.hp - 2000);
-            } else {
-              // Encircled: destroyed
-              opp.hp = 0;
-            }
-            // Attacker costs
-            u.ammo = Math.max(0, (u.ammo ?? 500) - 20);
-            u.hp = Math.max(500, u.hp - 1000);
-
-            // Add shot effect
-            this.shots.push({ def: u.def, team: u.team, from: u.pos, to: opp.pos });
-          }
-
-          // Advance attacker into target tile
-          const tgtPos = cellCenter(tgtCell[0], tgtCell[1]);
-          u.pos = tgtPos;
-          const post = w.posts?.find((fp) => fp.id === u.frontPost || fp.garrison.includes(u.id));
-          if (post) post.pos = tgtPos;
-
-          // Flip tile ownership
-          this.tileMap.setOwner(tgtCell[0], tgtCell[1], u.team);
-
-          // Update frontline polyline
-          w.front = advanceFrontOverCell(w.front, tgtCell, u.team);
-          this.occ.tick = -1;
-
-          // Check if any capture point is in this tile
-          for (const cp of w.points) {
-            const mcp = this.map.capturePoints.find((x) => x.id === cp.id);
-            if (mcp) {
-              const cpCell = cellOf(mcp.pos);
-              if (cpCell[0] === tgtCell[0] && cpCell[1] === tgtCell[1]) {
-                cp.owner = u.team;
-              }
-            }
-          }
-
-          // Emit notification
-          this.hooks?.emit('toast', { text: 'Прорыв линии фронта! Тайл взят.' });
-          return ok();
-        } else {
-          // Attack repelled! Stalemate!
-          // Skirmish exchange
-          u.ammo = Math.max(0, (u.ammo ?? 500) - 15);
-          u.hp = Math.max(500, u.hp - 1500);
-          if (opp) {
-            opp.ammo = Math.max(0, (opp.ammo ?? 500) - 15);
-            opp.hp = Math.max(500, opp.hp - 500);
-            this.shots.push({ def: u.def, team: u.team, from: u.pos, to: opp.pos });
-            this.shots.push({ def: opp.def, team: opp.team, from: opp.pos, to: u.pos });
-          }
-          this.hooks?.emit('toast', { text: 'Атака отбита: у противника превосходство в силах и есть БК!' });
-          return fail('Атака отбита: у противника превосходство в силах и есть боеприпасы');
-        }
+        // Offense against enemy tile (60s assault):
+        u.assault = {
+          targetCell: tgtCell,
+          startPos: [u.pos[0], u.pos[1]],
+          targetPos: tgtCenter,
+          elapsed: 0,
+          total: 60,
+          isRelocation: false,
+        };
+        u.frontStatus = 'advancing';
+        this.hooks?.emit('toast', { text: `Приказ гарнизону: штурм тайла [${tgtCell[0]}, ${tgtCell[1]}]! Время наступления: 60 с.` });
+        return ok();
       }
       case 'rally': {
         const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
@@ -1832,6 +1789,7 @@ export class Sim {
     if (w.tick % r.tickRate === 3) this.morale();
     if (w.tick % r.tickRate === 7) this.repeats();
     this.stepMarchingGarrisons(dt);
+    this.updateTileAssaults(dt);
     if (w.tick % r.tickRate === 0) this.frontlineGarrisons(1.0);
     if (!peace && w.tick % (r.tickRate * 2) === 0) this.salientGarrisonSplitting();
     // during the ceasefire the line is frozen, nothing is captured and nobody can win
@@ -1885,6 +1843,102 @@ export class Sim {
       b.upgrade = null;
       b.hp += this.maxBuildingHp(b) - before;
       this.hooks.emit('buildingUpgraded', { id: b.id, def: d.id, owner: b.owner, level: b.level });
+    }
+  }
+
+  /**
+   * Advances and resolves 60-second HoI-style tile assaults and redeployments.
+   */
+  private updateTileAssaults(dt: number) {
+    const w = this.world;
+    for (const u of w.units) {
+      if (u.hp <= 0 || !u.assault) continue;
+      const a = u.assault;
+      a.elapsed += dt;
+      const progress = Math.min(1.0, a.elapsed / a.total);
+      u.pos = [
+        a.startPos[0] + (a.targetPos[0] - a.startPos[0]) * progress,
+        a.startPos[1] + (a.targetPos[1] - a.startPos[1]) * progress,
+      ];
+      u.frontStatus = 'advancing';
+
+      const tgtCell = a.targetCell;
+      const opp = w.units.find(
+        (e) => e.team !== u.team && e.hp > 0 && !e.embarkedIn && cellOf(e.pos)[0] === tgtCell[0] && cellOf(e.pos)[1] === tgtCell[1]
+      );
+
+      // During assault: firefight skirmish every 3 seconds if defender present
+      if (opp && !a.isRelocation && Math.floor(a.elapsed) !== Math.floor(a.elapsed - dt) && Math.floor(a.elapsed) % 3 === 0) {
+        opp.ammo = Math.max(0, (opp.ammo ?? 100) - 1);
+        u.ammo = Math.max(0, (u.ammo ?? 100) - 1);
+        opp.hp = Math.max(500, opp.hp - 100);
+        u.hp = Math.max(500, u.hp - 100);
+        this.shots.push({ def: u.def, team: u.team, from: u.pos, to: opp.pos });
+        this.shots.push({ def: opp.def, team: opp.team, from: opp.pos, to: u.pos });
+      }
+
+      // Assault completed (60 seconds elapsed)
+      if (a.elapsed >= a.total) {
+        if (a.isRelocation) {
+          u.pos = [a.targetPos[0], a.targetPos[1]];
+          u.assault = undefined;
+          u.frontStatus = 'holding';
+          this.hooks?.emit('toast', { text: 'Гарнизон передислоцирован на новую позицию' });
+          continue;
+        }
+
+        // Enemy tile assault resolution
+        const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
+        const myTroops = u.squadSize ?? Math.round(u.hp / 50);
+        const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
+        const canAdvance = !opp || oppAmmo <= 0 || myTroops > oppTroops;
+
+        if (canAdvance) {
+          // Success! Breakthrough into target tile
+          u.pos = [a.targetPos[0], a.targetPos[1]];
+          u.assault = undefined;
+          u.frontStatus = 'holding';
+
+          if (opp) {
+            const retreatTile = this.findRetreatTile(tgtCell, opp.team);
+            if (retreatTile) {
+              opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
+              opp.ammo = Math.max(0, (opp.ammo ?? 0) - 20);
+              opp.morale = Math.max(10, (opp.morale ?? 100) - 30);
+            } else {
+              opp.hp = 0; // Encircled / destroyed
+            }
+          }
+
+          // Flip tile ownership
+          this.tileMap.setOwner(tgtCell[0], tgtCell[1], u.team);
+
+          // Update frontline polyline to wrap around captured cell
+          w.front = advanceFrontOverCell(w.front, tgtCell, u.team);
+          this.occ.tick = -1;
+
+          // Flip capture points in target cell
+          for (const cp of w.points) {
+            const mcp = this.map.capturePoints.find((x) => x.id === cp.id);
+            if (mcp) {
+              const cpCell = cellOf(mcp.pos);
+              if (cpCell[0] === tgtCell[0] && cpCell[1] === tgtCell[1]) {
+                cp.owner = u.team;
+              }
+            }
+          }
+
+          this.hooks?.emit('toast', { text: `Прорыв линии фронта! Тайл [${tgtCell[0]}, ${tgtCell[1]}] взят под контроль!` });
+        } else {
+          // Repelled! Fall back to home tile
+          u.pos = [a.startPos[0], a.startPos[1]];
+          u.assault = undefined;
+          u.frontStatus = 'holding';
+          u.ammo = Math.max(0, (u.ammo ?? 100) - 15);
+          u.hp = Math.max(500, u.hp - 1000);
+          this.hooks?.emit('toast', { text: 'Атака отбита: у противника превосходство в силах и есть боеприпасы' });
+        }
+      }
     }
   }
 
@@ -4323,8 +4377,9 @@ export class Sim {
     }
   }
 
-  /** The "abstract war": economy and local force balance push every front node along its normal. */
+  /** The "abstract war": in tile-frontline branch, continuous pushing and automatic attacks are disabled. */
   private frontline(dt: number) {
+    return;
     const w = this.world;
     const r = this.ruleset.rules;
     const R = r.frontInfluenceKm;
@@ -4630,14 +4685,10 @@ export class Sim {
           const hasAdvancePath = !!(u.advancePath && u.advancePath.length > 0);
           const hasRetreatPath = !!(u.retreatPath && u.retreatPath.length > 0);
           // AdvancePath attacks require combat superiority; смежники advance when paired opponent is retreating
-          const isAdvancing = hasAdvancePath
-            ? (hasCombatSuperiority && myAmmo > 0)
-            : (!isHoldingAssault && (oppRetreating || (u.team === 0 ? v > 0.0005 : v < -0.0005)) && (oppRetreating || hasCombatSuperiority) && myAmmo > 0);
+          const isAdvancing = !!(u.assault && !u.assault.isRelocation);
           const oppAdvancing = oppGarrison && (oppGarrison as Unit).frontStatus === 'advancing';
-          if (!hasRetreatPath && (u.ammo ?? 0) > 0 && !oppSuperiority) {
-            u.pushedDir = undefined;
-          }
-          const isRetreating = !hasAdvancePath && (hasRetreatPath || myAmmo <= 0 || (oppSuperiority && (u.team === 0 ? v < -0.0005 : v > 0.0005)) || (oppSuperiority && oppAdvancing && u.pushedDir !== undefined));
+          u.pushedDir = undefined;
+          const isRetreating = false;
 
           const opp: any = oppGarrison;
           if (isAdvancing) {
@@ -4976,6 +5027,7 @@ export class Sim {
    * Raiders deeper than that only make grey (penetration) ground. Returns whether the line moved.
    */
   private breakthrough(): boolean {
+    return false;
     const w = this.world;
     const f = w.front;
     if (f.length < 5) return false;
@@ -5005,7 +5057,7 @@ export class Sim {
           const [nx, ny] = normalOf(f[j - 1], f[j], f[j + 1]);
           const lng = f[j].lng + (nx * dir * push * share) / kmPerDegLng(f[j].lat);
           const lat = f[j].lat + (ny * dir * push * share) / 111.32;
-          if (this.terrain?.isBarrier([lng, lat]) && !this.terrain.isBarrier([f[j].lng, f[j].lat])) continue; // not across a river
+          if (this.terrain?.isBarrier([lng, lat]) && !this.terrain?.isBarrier([f[j].lng, f[j].lat])) continue; // not across a river
           (f[j].lng = lng), (f[j].lat = lat);
           touched.push(j);
         }
