@@ -811,6 +811,54 @@ assert.ok(truck.target, 'Empty transport ordered to return to anchor base');
 assert.deepEqual(truck.target, basePos, 'Truck destination is anchor base');
 console.log('✓ Bot Transport Embarkation & Reinforcement Verified: Transports board infantry at base, ferry directly to front garrisons, merge upon arrival, and return empty to base');
 
+console.log('--- Testing Bot Base Truck Prioritization & Frontline Breakthrough Offensive ---');
+// 1. Truck procurement priority:
+const testBotP = sim.player('player2')!;
+testBotP.res.money = 110;
+sim.world.queue = sim.world.queue.filter((q) => q.building !== mb.id);
+sim.world.units = sim.world.units.filter((u) => !(u.owner === testBotP.id && u.def === 'truck'));
+
+(bot as any).train(sim, testBotP);
+assert.equal(sim.world.queue.some((q) => q.building === mb.id), false, 'Bot does not buy infantry when it has 0 trucks, saves for truck');
+
+testBotP.res.money = 130;
+(bot as any).train(sim, testBotP);
+assert.ok(sim.world.queue.some((q) => q.building === mb.id && q.unit === 'truck'), 'Bot buys truck as soon as it has 125 money');
+sim.world.queue = sim.world.queue.filter((q) => q.building !== mb.id);
+
+// 2. Frontline breakthrough offensive:
+const offAtkCell: [number, number] = [1815, 3470];
+const offTgtCell: [number, number] = [1815, 3471];
+sim.tileMap.setOwner(offAtkCell[0], offAtkCell[1], 1); // RU
+sim.tileMap.setOwner(offTgtCell[0], offTgtCell[1], 0); // UA
+
+sim.world.units = sim.world.units.filter((u) => {
+  const [cx, cy] = cellOf(u.pos);
+  return !(cx === 1815 && (cy === 3470 || cy === 3471));
+});
+
+const atkGarrison = sim.spawnUnit('frontline_infantry', testBotP, cellCenter(offAtkCell[0], offAtkCell[1]));
+atkGarrison.strength = 1;
+atkGarrison.squadSize = 100;
+atkGarrison.ammo = 100;
+
+const defGarrison = sim.spawnUnit('frontline_infantry', sim.player('player1')!, cellCenter(offTgtCell[0], offTgtCell[1]));
+defGarrison.strength = 1;
+defGarrison.squadSize = 100;
+defGarrison.ammo = 100;
+
+// When atkGarrison has strength 1 (equal to defender with ammo), bot should NOT attack
+(bot as any).frontlineOffensive(sim, testBotP);
+assert.equal(atkGarrison.assault, undefined, 'Garrison with equal strength does not attack (waits for truck reinforcements)');
+
+// Now garrison receives reinforcements and gains force superiority (strength 2 vs 1)
+atkGarrison.strength = 2;
+atkGarrison.squadSize = 200;
+(bot as any).frontlineOffensive(sim, testBotP);
+assert.ok(atkGarrison.assault, 'Garrison with force superiority (strength 2 vs 1) launches attackTile breakthrough!');
+assert.deepEqual((atkGarrison.assault as any)?.targetCell, offTgtCell, 'Attack targets adjacent enemy tile');
+console.log('✓ Bot Base Truck Prioritization & Frontline Breakthrough Offensive Verified: Trucks prioritized at base, garrisons launch breakthrough when force superiority is achieved');
+
 console.log('All Tile Frontline tests passed successfully!');
 
 

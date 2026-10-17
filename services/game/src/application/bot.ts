@@ -1,4 +1,4 @@
-import { type BotDifficulty, type Building, distKm, distToFrontKm, inDeposit, isReconDrone, isStrikeDrone, moveToward, nearestNode, normalAt, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
+import { type BotDifficulty, type Building, cellCenter, cellOf, distKm, distToFrontKm, inDeposit, isReconDrone, isStrikeDrone, moveToward, nearestNode, normalAt, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
   'military_base',
@@ -409,26 +409,51 @@ export class Bot {
           const humveeMgCount = count('humvee_mg');
           const truckCount = count('truck');
 
+          const troopTrucks = w.units.filter((u) => u.owner === p.id && u.def === 'truck' && !u.haul).length;
           const unembarkedInf = w.units.filter((u) => u.owner === p.id && u.def === 'infantry' && !u.embarkedIn && distKm(u.pos, b.pos) <= 30).length;
           const transportsAtBase = w.units.filter((u) => u.owner === p.id && (u.def === 'truck' || u.def === 'humvee') && !u.haul && distKm(u.pos, b.pos) <= 35);
           const emptySeatsAtBase = transportsAtBase.reduce((sum, t) => sum + Math.max(0, (sim.defs.u.get(t.def)?.passengerCap ?? 0) - (t.cargo?.passengers?.length ?? 0)), 0);
-          const allTroopTransports = w.units.filter((u) => u.owner === p.id && (u.def === 'truck' || u.def === 'humvee') && !u.haul).length;
 
-          // Maintain active vehicle transport fleet:
-          // If infantry is waiting without seats, train transports (truck for 5 squads, humvee for 1 squad).
-          // If transports have empty seats, train infantry to fill them.
-          if (unembarkedInf > emptySeatsAtBase && money >= 125) {
-            const pick = money >= 150 && Math.random() < 0.4 ? 'humvee' : 'truck';
-            sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
-          } else if (emptySeatsAtBase > unembarkedInf && money >= 100) {
-            sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
-          } else if (allTroopTransports < 4 && money >= 125) {
-            const pick = money >= 150 && Math.random() < 0.5 ? 'humvee' : 'truck';
-            sim.apply(p.id, { type: 'train', building: b.id, unit: pick });
-          } else if (humveeMgCount < 2 && money >= 200) {
+          // 1. Initial troop transport: The base MUST have at least 1 truck before training infantry!
+          if (troopTrucks < 1) {
+            if (money >= 125) {
+              sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+            }
+            continue; // Wait for 125 to buy first truck! Do NOT waste money on foot infantry!
+          }
+
+          // 2. If unembarked infantry is waiting at base without transport seats:
+          if (unembarkedInf > emptySeatsAtBase) {
+            if (troopTrucks < 4 && money >= 125) {
+              sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+            }
+            continue; // Stop buying infantry when troops are already waiting for rides! Wait for transport!
+          }
+
+          // 3. If there are empty seats in transports at base, train infantry to board them!
+          if (emptySeatsAtBase > unembarkedInf) {
+            if (money >= 100) {
+              sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+            }
+            continue;
+          }
+
+          // 4. Expand transport fleet: maintain at least 2-3 troop trucks for continuous ferrying
+          if (troopTrucks < 3 && money >= 125) {
+            sim.apply(p.id, { type: 'train', building: b.id, unit: 'truck' });
+            continue;
+          }
+
+          // 5. Mobile anti-air defense
+          if (humveeMgCount < 2 && money >= 200) {
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'humvee_mg' });
-          } else if (money >= 100) {
+            continue;
+          }
+
+          // 6. If we have surplus money (>= 250) and active trucks exist, queue more infantry
+          if (money >= 250 && troopTrucks >= 1) {
             sim.apply(p.id, { type: 'train', building: b.id, unit: 'infantry' });
+            continue;
           }
         }
         continue;
@@ -519,6 +544,9 @@ export class Bot {
     const hq = w.buildings.find((b) => b.owner === p.id && b.def === 'hq');
     const anchorBase = myMilitaryBases[0]?.pos ?? fallbackBase?.pos ?? hq?.pos ?? sim.map.center;
     const anchor: LngLat = hq?.pos ?? sim.map.center;
+
+    // Frontline offensive: garrisons with force superiority push into enemy territory and cities
+    this.frontlineOffensive(sim, p);
 
     // 1. Board infantry into available transports (truck or humvee) to move them rapidly
     const transports = w.units.filter((u) =>
@@ -693,8 +721,7 @@ export class Bot {
             localCandidates = [...friendlyGarrisons].sort((a, b) => distKm(a.pos, uBase) - distKm(b.pos, uBase)).slice(0, 3);
           }
 
-          // Sort candidates by threat / deficit:
-          // threat = oppStrength - myEffectiveStrength
+          // Sort candidates by threat / deficit and city breakthrough opportunity:
           localCandidates.sort((a, b) => {
             const oppA = getOpposing(a);
             const oppB = getOpposing(b);
@@ -707,9 +734,22 @@ export class Bot {
             if ((a.ammo ?? 100) <= 0 && (!oppA || (oppA.ammo ?? 100) > 0)) deficitA += 2;
             if ((b.ammo ?? 100) <= 0 && (!oppB || (oppB.ammo ?? 100) > 0)) deficitB += 2;
 
-            // Prioritize higher deficit first (troubled spots)
-            if (deficitB !== deficitA) return deficitB - deficitA;
-            // Then lower total friendly strength
+            // City breakthrough bonus: if garrison is near enemy city and not yet over-reinforced (< 4 strength)
+            let cityDistA = 100, cityDistB = 100;
+            for (const cp of enemyPoints) {
+              const da = distKm(a.pos, cp.pos);
+              const db = distKm(b.pos, cp.pos);
+              if (da < cityDistA) cityDistA = da;
+              if (db < cityDistB) cityDistB = db;
+            }
+            const cityBonusA = (cityDistA < 30 && myStrA < 4) ? 2 : 0;
+            const cityBonusB = (cityDistB < 30 && myStrB < 4) ? 2 : 0;
+
+            const scoreA = deficitA + cityBonusA;
+            const scoreB = deficitB + cityBonusB;
+            if (scoreB !== scoreA) return scoreB - scoreA;
+
+            // Then lower total friendly strength (distribute evenly)
             if (myStrA !== myStrB) return myStrA - myStrB;
             // Then closer to the base
             return distKm(uBase, a.pos) - distKm(uBase, b.pos);
@@ -723,6 +763,7 @@ export class Bot {
             } else if ((sim.defs.u.get(u.def)?.mobility ?? 'foot') === 'foot') {
               added = u.strength ?? 1;
             }
+            incomingStr.set(target.id, (incomingStr.get(target.id) ?? 0) + added);
             sim.apply(p.id, { type: 'reinforce', units: [u.id], targetUnit: target.id });
           }
         }
@@ -765,5 +806,98 @@ export class Bot {
     const rally = moveToward([front.lng, front.lat], anchor, 6);
     const far = idle.filter((u) => distKm(u.pos, rally) > 4);
     if (far.length) sim.apply(p.id, { type: 'move', units: far.map((u) => u.id), to: rally });
+  }
+
+  /** Bot garrisons conduct breakthroughs to advance the front line and capture enemy cities */
+  private frontlineOffensive(sim: Sim, p: Player) {
+    const w = sim.world;
+    const myGarrisons = w.units.filter((u) =>
+      u.team === p.team &&
+      u.hp > 0 &&
+      !u.assault &&
+      (!u.attackDebuffUntil || u.attackDebuffUntil <= w.time) &&
+      (u.ammo ?? 100) > 0 &&
+      (u.def === 'frontline_infantry' || u.owner.startsWith('__front_'))
+    );
+    if (!myGarrisons.length) return;
+
+    const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+    const enemyPoints = sim.map.capturePoints.filter((cp) => sim.side(cp.pos) !== p.team);
+
+    for (const u of myGarrisons) {
+      const [cx, cy] = cellOf(u.pos);
+      const myStrength = u.strength ?? 1;
+
+      let bestTarget: [number, number] | null = null;
+      let bestScore = -Infinity;
+
+      for (const [dx, dy] of dirs) {
+        const tgtCell: [number, number] = [cx + dx, cy + dy];
+        const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
+
+        if (sim.side(tgtCenter) === p.team) continue;
+        if (!sim.isPlayableGround(tgtCenter) || sim.terrainAt(tgtCenter).id === 'water' || sim.foreign(tgtCenter)) continue;
+
+        // Avoid double-assaulting the same cell
+        const alreadyAttacking = w.units.some((x) =>
+          x.team === p.team &&
+          x.hp > 0 &&
+          x.assault &&
+          x.assault.targetCell[0] === tgtCell[0] &&
+          x.assault.targetCell[1] === tgtCell[1]
+        );
+        if (alreadyAttacking) continue;
+
+        const defender = w.units.find((e) =>
+          e.team !== p.team &&
+          e.hp > 0 &&
+          !e.embarkedIn &&
+          cellOf(e.pos)[0] === tgtCell[0] &&
+          cellOf(e.pos)[1] === tgtCell[1]
+        );
+
+        const hasEnemyCity = enemyPoints.some((cp) =>
+          cellOf(cp.pos)[0] === tgtCell[0] &&
+          cellOf(cp.pos)[1] === tgtCell[1]
+        );
+
+        let distToCity = 100;
+        for (const cp of enemyPoints) {
+          const d = distKm(tgtCenter, cp.pos);
+          if (d < distToCity) distToCity = d;
+        }
+
+        let score = -Infinity;
+
+        if (!defender) {
+          score = 50 + Math.max(0, 30 - distToCity);
+          if (hasEnemyCity) score += 200;
+        } else {
+          const defStr = defender.strength ?? 1;
+          const defAmmo = defender.ammo ?? 100;
+
+          if (defAmmo <= 0) {
+            score = 80 + (myStrength - defStr) * 15 + Math.max(0, 30 - distToCity);
+            if (hasEnemyCity) score += 200;
+          } else if (myStrength > defStr) {
+            score = 60 + (myStrength - defStr) * 25 + Math.max(0, 30 - distToCity);
+            if (hasEnemyCity) score += 200;
+          }
+        }
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestTarget = tgtCell;
+        }
+      }
+
+      if (bestTarget && bestScore > 0) {
+        sim.apply(p.id, {
+          type: 'attackTile',
+          unitId: u.id,
+          targetCell: bestTarget,
+        });
+      }
+    }
   }
 }
