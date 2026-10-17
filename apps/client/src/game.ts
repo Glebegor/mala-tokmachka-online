@@ -14,7 +14,7 @@ import { FogOverlay } from './fog';
 import { renderUnitHud, type OrderStyle, type Pickers } from './unitHud';
 import { ALLY_COLOR, drawNato, drawNatoImage, echelonFor, NATION_COLOR, natoLayers, type Relation } from './nato';
 import { aircraftSprite } from './sprites';
-import { cellsToMultiPolygon } from './contours';
+import { cellsToMultiPolygon, smoothPolyline } from './contours';
 import { statsView } from './stats';
 import { openGuide } from './guide';
 import { uiScale, uiScaleControl } from './uiScale';
@@ -764,9 +764,9 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       }
       // front: flat occupied tint, a hard-edged contact zone, and a crisp cased line with sharp corners (no blur, no rounding)
       map.addLayer({ id: 'occupied-fill', type: 'fill', source: 'occupied', paint: { 'fill-color': '#e5383b', 'fill-opacity': 0.12, 'fill-antialias': false } });
-      map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
-      map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
-      map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'miter', 'line-miter-limit': 4 }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
+      map.addLayer({ id: 'front-zone', type: 'line', source: 'front', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#e5383b', 'line-opacity': 0.2, 'line-width': ['interpolate', ['exponential', 2], ['zoom'], 5, 5, 8, 16, 11, 70] } });
+      map.addLayer({ id: 'front-case', type: 'line', source: 'front', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#12060a', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3.4, 10, 6] } });
+      map.addLayer({ id: 'front-line', type: 'line', source: 'front', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#ff4d57', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 1.7, 10, 3] } });
       // DeepState-style areas: grey = penetration area (contested: troops beyond their line, ground just taken),
       // blue = liberated by Ukraine, bright blue = liberated in the last few minutes
       map.addLayer({ id: 'freed-fill', type: 'fill', source: 'freed', paint: { 'fill-color': '#2f7bff', 'fill-opacity': 0.22 } }, 'front-zone');
@@ -1010,14 +1010,19 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       .find((u) => u && u.team === myTeam && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry'));
 
     if (myFrontGarrison) {
+      if (myFrontGarrison.attackDebuffUntil && myFrontGarrison.attackDebuffUntil > s.time) {
+        const rem = Math.ceil(myFrontGarrison.attackDebuffUntil - s.time);
+        toast(`Гарнизон дезорганизован после отступления и не может атаковать еще ${rem} с`, true);
+        return;
+      }
       const curCell = cellOf(posOf(myFrontGarrison));
       const tgtCell = cellOf(to);
       if (curCell[0] === tgtCell[0] && curCell[1] === tgtCell[1]) {
         toast('Гарнизон уже удерживает этот тайл');
         return;
       }
-      if (!isAdjacentCell(curCell, tgtCell, true)) {
-        toast('Можно наступать или перемещаться только на соседний тайл', true);
+      if (!isAdjacentCell(curCell, tgtCell, false)) {
+        toast('Можно наступать или перемещаться только на соседний тайл (по горизонтали или вертикали)', true);
         return;
       }
       const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
@@ -2225,6 +2230,16 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, 'Пехотный рубеж'), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
             h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Тайл [${curCell[0]}, ${curCell[1]}] · Сила: ${u.strength ?? 1} · БК: ${Math.round(u.ammo ?? 100)} / ${(u.strength ?? 1) * 100}`),
             h('div', { class: 'stat', style: { color: statusColor, marginTop: '4px', fontWeight: '500' } }, statusText),
+          );
+          if (u.attackDebuffUntil && u.attackDebuffUntil > snap.time) {
+            const rem = Math.ceil(u.attackDebuffUntil - snap.time);
+            side.append(
+              h('div', { style: { background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '4px', padding: '6px 8px', marginTop: '6px', fontSize: '11px', color: '#fbbf24', fontWeight: '500' } },
+                `⚠️ Дезорганизация после отступления: атака заблокирована на ${rem} с`
+              )
+            );
+          }
+          side.append(
             h('div', { style: { background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '4px', padding: '6px 8px', marginTop: '8px', fontSize: '11px', color: '#fca5a5', lineHeight: '1.4' } },
               '⚔️ Штурм по тайлам: ПКМ по соседнему вражескому тайлу (красный) для атаки. Гарнизон пойдет в атаку в течение 1 минуты. Наступление успешно при численном преимуществе или истощении БК противника.'
             ),
@@ -2942,7 +2957,8 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (pocketKey !== lastPockets) (lastPockets = pocketKey), (moved = true);
     if (!moved && frontDrawn) return;
     frontDrawn = true;
-    const line: LngLat[] = shown.map((n) => [n.lng, n.lat]);
+    const rawLine: LngLat[] = shown.map((n) => [n.lng, n.lat]);
+    const line: LngLat[] = smoothPolyline(rawLine, 2);
     // cauldrons: rings of team 0 ground inside the occupied area are holes in it; rings of team 1 ground are extra patches
     const ring = (k: SnapMsg['pockets'][number]): LngLat[] => [...k.nodes.map((n): LngLat => [n.lng, n.lat]), [k.nodes[0].lng, k.nodes[0].lat]];
     const holes = snap.pockets.filter((k) => k.team === 0).map(ring);

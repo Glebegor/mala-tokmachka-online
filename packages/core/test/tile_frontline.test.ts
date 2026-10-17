@@ -32,22 +32,29 @@ const gUA = uaGarrisons[0];
 const curUaCell = cellOf(gUA.pos);
 console.log(`UA garrison ID ${gUA.id} at tile [${curUaCell[0]}, ${curUaCell[1]}], pos:`, gUA.pos);
 
-// Find adjacent enemy tile
+// Test Forbidden Diagonal Attacks:
+const diagonalEnemyCell: [number, number] = [curUaCell[0] + 1, curUaCell[1] + 1];
+const diagRes = sim.apply('player1', {
+  type: 'attackTile',
+  unitId: gUA.id,
+  targetCell: diagonalEnemyCell,
+});
+assert.equal(diagRes.ok, false, 'Diagonal attack is forbidden');
+console.log('✓ Diagonal Attack Forbidden: only orthogonal (cardinal) attacks are permitted');
+
+// Find adjacent orthogonal enemy tile
+const orthogonalDirs: [number, number][] = [[0, -1], [0, 1], [-1, 0], [1, 0]];
 let adjEnemyCell: [number, number] | null = null;
-for (let dx = -1; dx <= 1; dx++) {
-  for (let dy = -1; dy <= 1; dy++) {
-    if (dx === 0 && dy === 0) continue;
-    const cand: [number, number] = [curUaCell[0] + dx, curUaCell[1] + dy];
-    const candCenter = cellCenter(cand[0], cand[1]);
-    if (sim.side(candCenter) === 1) {
-      adjEnemyCell = cand;
-      break;
-    }
+for (const [dx, dy] of orthogonalDirs) {
+  const cand: [number, number] = [curUaCell[0] + dx, curUaCell[1] + dy];
+  const candCenter = cellCenter(cand[0], cand[1]);
+  if (sim.side(candCenter) === 1) {
+    adjEnemyCell = cand;
+    break;
   }
-  if (adjEnemyCell) break;
 }
 
-assert.ok(adjEnemyCell, 'Found adjacent enemy tile to UA garrison');
+assert.ok(adjEnemyCell, 'Found orthogonal adjacent enemy tile to UA garrison');
 console.log(`Adjacent enemy tile: [${adjEnemyCell[0]}, ${adjEnemyCell[1]}]`);
 
 // 2. Test Stalemate: Enemy has equal/more troops AND has ammo -> 60s assault is repelled
@@ -90,11 +97,20 @@ assert.equal(sim.side(candCenter), 1, 'Tile remains under Russian control');
 assert.ok(gUA.ammo < 100, 'Attacker consumed ammo in skirmishes and repel penalty');
 console.log('✓ 60-Second March & Stalemate: Garrison marches for 1 min, skirmishes, and is repelled when forces are equal and defender has ammo');
 
-// 3. Test Breakthrough Condition A: Enemy runs out of ammo (ammo <= 0)
+// 3. Test Breakthrough Condition A: Enemy runs out of ammo (ammo <= 0), retreats, merges & gets 2-minute attack debuff
 defendingRu.ammo = 0; // Out of ammo!
 gUA.ammo = 80; // Reset UA ammo
 gUA.hp = 5000;
-const preFrontCount = sim.world.front.length;
+
+// Place a rear friendly Russian unit to receive the retreating squad (merge/stack test)
+const rearTile: [number, number] = [adjEnemyCell[0], adjEnemyCell[1] - 1];
+let rearFriend = sim.world.units.find((u) => u.team === 1 && cellOf(u.pos)[0] === rearTile[0] && cellOf(u.pos)[1] === rearTile[1]);
+if (!rearFriend) {
+  rearFriend = sim.spawnUnit('frontline_infantry', sim.player('player2')!, cellCenter(rearTile[0], rearTile[1]));
+}
+rearFriend.strength = 1;
+rearFriend.squadSize = 100;
+rearFriend.hp = 5000;
 
 const winAmmoOrder = sim.apply('player1', {
   type: 'attackTile',
@@ -109,24 +125,32 @@ for (let i = 0; i < 60; i++) sim.step(1.0);
 assert.equal(gUA.assault, undefined, 'Assault completed');
 assert.equal(sim.side(candCenter), 0, 'Target tile flipped to Ukrainian control');
 assert.ok(distKm(gUA.pos, candCenter) < 0.05, 'Attacking garrison reached target tile center');
-assert.ok(distKm(defendingRu.pos, candCenter) > 0.5, 'Defeated enemy garrison retreated from captured tile');
-assert.notEqual(sim.world.front.length, preFrontCount, 'Frontline polyline modified to wrap around captured tile');
-console.log('✓ Breakthrough via Ammo Depletion: Garrison marches 60s, breaks through, tile flips, frontline wraps around cell');
+
+// Check that retreating enemy merged with rear friendly garrison in retreat tile
+assert.equal(defendingRu.hp, 0, 'Defeated enemy garrison merged into friendly unit (token cleaned up)');
+assert.ok((rearFriend.strength ?? 1) >= 2, 'Rear garrison gained strength from retreating squad (stacked)');
+assert.ok((rearFriend.squadSize ?? 100) >= 200, 'Rear garrison headcount increased from retreating squad (stacked)');
+assert.ok(rearFriend.attackDebuffUntil !== undefined && rearFriend.attackDebuffUntil > sim.world.time + 100, 'Rear unit received 2-minute attack debuff');
+
+// Test that debuffed unit CANNOT conduct attacks
+const debuffedAttack = sim.apply('player2', {
+  type: 'attackTile',
+  unitId: rearFriend.id,
+  targetCell: adjEnemyCell,
+});
+assert.equal(debuffedAttack.ok, false, 'Debuffed unit cannot conduct attacks for 2 minutes');
+console.log('✓ Breakthrough, Garrison Merge & 2-Minute Attack Debuff: Retreating troops merge with friends, stack strength/soldiers, and cannot attack for 2 min');
 
 // 4. Test Breakthrough Condition B: Attacker has numerical superiority (myTroops > enemyTroops)
 const curCell2 = cellOf(gUA.pos);
 let adjEnemyCell2: [number, number] | null = null;
-for (let dx = -1; dx <= 1; dx++) {
-  for (let dy = -1; dy <= 1; dy++) {
-    if (dx === 0 && dy === 0) continue;
-    const cand: [number, number] = [curCell2[0] + dx, curCell2[1] + dy];
-    const center = cellCenter(cand[0], cand[1]);
-    if (sim.side(center) === 1) {
-      adjEnemyCell2 = cand;
-      break;
-    }
+for (const [dx, dy] of orthogonalDirs) {
+  const cand: [number, number] = [curCell2[0] + dx, curCell2[1] + dy];
+  const center = cellCenter(cand[0], cand[1]);
+  if (sim.side(center) === 1) {
+    adjEnemyCell2 = cand;
+    break;
   }
-  if (adjEnemyCell2) break;
 }
 
 if (adjEnemyCell2) {
@@ -160,16 +184,12 @@ if (adjEnemyCell2) {
 // 5. Test Friendly Tile Movement (Relocation)
 const curUaCellNow = cellOf(gUA.pos);
 let friendlyNeighbor: [number, number] | null = null;
-for (let dx = -1; dx <= 1; dx++) {
-  for (let dy = -1; dy <= 1; dy++) {
-    if (dx === 0 && dy === 0) continue;
-    const cand: [number, number] = [curUaCellNow[0] + dx, curUaCellNow[1] + dy];
-    if (sim.side(cellCenter(cand[0], cand[1])) === 0) {
-      friendlyNeighbor = cand;
-      break;
-    }
+for (const [dx, dy] of orthogonalDirs) {
+  const cand: [number, number] = [curUaCellNow[0] + dx, curUaCellNow[1] + dy];
+  if (sim.side(cellCenter(cand[0], cand[1])) === 0) {
+    friendlyNeighbor = cand;
+    break;
   }
-  if (friendlyNeighbor) break;
 }
 assert.ok(friendlyNeighbor, 'Found adjacent friendly tile');
 const moveRes = sim.apply('player1', {

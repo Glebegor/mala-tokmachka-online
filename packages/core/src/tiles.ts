@@ -23,7 +23,7 @@ export function keyToCell(key: number): [number, number] {
   return [ix, iy];
 }
 
-export function isAdjacentCell(a: [number, number], b: [number, number], allowDiagonal = true): boolean {
+export function isAdjacentCell(a: [number, number], b: [number, number], allowDiagonal = false): boolean {
   const dx = Math.abs(a[0] - b[0]);
   const dy = Math.abs(a[1] - b[1]);
   if (dx === 0 && dy === 0) return false;
@@ -52,7 +52,12 @@ export class TileMap {
   }
 
   ownerOf(ix: number, iy: number): Team | undefined {
-    return this.tiles.get(cellKey(ix, iy));
+    let t = this.tiles.get(cellKey(ix, iy));
+    if (t === undefined && this.occIndex) {
+      t = this.occIndex.contains(cellCenter(ix, iy)) ? 1 : 0;
+      this.tiles.set(cellKey(ix, iy), t);
+    }
+    return t;
   }
 
   ownerAt(p: LngLat): Team | undefined {
@@ -195,6 +200,7 @@ export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
 
 /**
  * Advances the tile-boundary front line past a captured cell, wrapping around its far edges.
+ * Replaces the shared boundary segment with the perimeter path on the opposite side of the cell.
  */
 export function advanceFrontOverCell(front: FrontNode[], cell: [number, number], team: 0 | 1): FrontNode[] {
   const cw = TILE_CW;
@@ -202,9 +208,82 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
   const [ix, iy] = cell;
   const x0 = ix * cw, x1 = (ix + 1) * cw;
   const y0 = iy * ch, y1 = (iy + 1) * ch;
-  const center = cellCenter(ix, iy);
 
-  // Find the segment i -> i+1 of the front line closest to the captured cell center
+  // Cell vertices in counter-clockwise order:
+  // 0: SW [x0, y0]
+  // 1: SE [x1, y0]
+  // 2: NE [x1, y1]
+  // 3: NW [x0, y1]
+  const corners: [number, number][] = [
+    [x0, y0],
+    [x1, y0],
+    [x1, y1],
+    [x0, y1],
+  ];
+
+  const cornerIdx = (p: { lng: number; lat: number }) => {
+    return corners.findIndex(([cx, cy]) => Math.abs(p.lng - cx) < 1e-4 && Math.abs(p.lat - cy) < 1e-4);
+  };
+
+  // Find continuous subsegment in front that lies on the boundary vertices of this cell
+  let firstIdx = -1;
+  let lastIdx = -1;
+
+  for (let i = 0; i < front.length; i++) {
+    if (cornerIdx(front[i]) !== -1) {
+      if (firstIdx === -1) firstIdx = i;
+      lastIdx = i;
+    } else if (firstIdx !== -1) {
+      break;
+    }
+  }
+
+  const vIn = firstIdx >= 0 ? front[firstIdx] : null;
+  const vOut = lastIdx >= 0 ? front[lastIdx] : null;
+  const inC = vIn ? cornerIdx(vIn) : -1;
+  const outC = vOut ? cornerIdx(vOut) : -1;
+
+  if (inC !== -1 && outC !== -1 && inC !== outC) {
+    // Path CCW: (c + 1) % 4
+    const ccw: [number, number][] = [];
+    for (let c = inC; ; c = (c + 1) % 4) {
+      ccw.push(corners[c]);
+      if (c === outC) break;
+    }
+    // Path CW: (c + 3) % 4
+    const cwP: [number, number][] = [];
+    for (let c = inC; ; c = (c + 3) % 4) {
+      cwP.push(corners[c]);
+      if (c === outC) break;
+    }
+
+    let replacement = ccw;
+    if (lastIdx > firstIdx + 1) {
+      const midC = cornerIdx(front[firstIdx + 1]);
+      if (midC !== -1) {
+        const ccwHasMid = ccw.some(([x, y]) => Math.abs(x - corners[midC][0]) < 1e-4 && Math.abs(y - corners[midC][1]) < 1e-4);
+        replacement = ccwHasMid ? cwP : ccw;
+      }
+    } else {
+      // Single direct edge between inC and outC: replace with the other 3 edges
+      replacement = ccw.length === 2 ? cwP : ccw;
+    }
+
+    const repNodes: FrontNode[] = replacement.map(([lng, lat]) => ({
+      lng,
+      lat,
+      v: 0,
+    }));
+
+    return [
+      ...front.slice(0, firstIdx),
+      ...repNodes,
+      ...front.slice(lastIdx + 1),
+    ];
+  }
+
+  // Fallback: replace nearest front segment without creating loops/spikes
+  const center = cellCenter(ix, iy);
   let bestIdx = -1;
   let bestDist = Infinity;
   for (let i = 0; i < front.length - 1; i++) {
@@ -217,30 +296,13 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
     }
   }
 
-  if (bestIdx < 0 || bestDist > 8.0) return front;
-
-  // The replacement edges wrapping around this cell:
-  // For Ukraine (team 0): the front line wraps along the East and South edges of the cell
-  // so the cell is firmly inside Ukrainian territory.
-  // For Russia (team 1): the front line wraps along the West and North edges of the cell.
-  const newNodes: FrontNode[] = [];
-  if (team === 0) {
-    newNodes.push({ lng: x0, lat: y0, v: 0 });
-    newNodes.push({ lng: x1, lat: y0, v: 0 });
-    newNodes.push({ lng: x1, lat: y1, v: 0 });
-    newNodes.push({ lng: x0, lat: y1, v: 0 });
-  } else {
-    newNodes.push({ lng: x1, lat: y1, v: 0 });
-    newNodes.push({ lng: x0, lat: y1, v: 0 });
-    newNodes.push({ lng: x0, lat: y0, v: 0 });
-    newNodes.push({ lng: x1, lat: y0, v: 0 });
+  if (bestIdx >= 0 && bestDist <= 4.0) {
+    const repl: [number, number][] = team === 0
+      ? [[x0, y1], [x0, y0], [x1, y0], [x1, y1]]
+      : [[x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+    const repNodes: FrontNode[] = repl.map(([lng, lat]) => ({ lng, lat, v: 0 }));
+    return [...front.slice(0, bestIdx), ...repNodes, ...front.slice(bestIdx + 2)];
   }
 
-  const out: FrontNode[] = [
-    ...front.slice(0, bestIdx + 1),
-    ...newNodes,
-    ...front.slice(bestIdx + 1),
-  ];
-
-  return out;
+  return front;
 }

@@ -143,6 +143,8 @@ export function snapshotFor(sim: Sim, playerId: string, team: Team, shots: Shot[
           retreatPath: u.team === team && u.retreatPath ? u.retreatPath.map(p4) : undefined,
           retreatBoost: u.team === team ? u.retreatBoost : undefined,
           serviceBuilding: own ? u.serviceBuilding : undefined,
+          assault: u.assault ? { targetCell: u.assault.targetCell, startPos: p4(u.assault.startPos), targetPos: p4(u.assault.targetPos), elapsed: Math.round(u.assault.elapsed * 10) / 10, total: u.assault.total, isRelocation: u.assault.isRelocation } : undefined,
+          attackDebuffUntil: u.attackDebuffUntil ? Math.round(u.attackDebuffUntil) : undefined,
         };
       }),
     shots: shots.filter((s) => s.team === team || seen(s.from) || seen(s.to)).map((s) => ({ def: s.def, team: s.team, from: p4(s.from), to: p4(s.to) })),

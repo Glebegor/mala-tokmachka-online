@@ -227,6 +227,8 @@ export interface Unit {
     total: number;
     isRelocation?: boolean;
   };
+  /** Sim time until which this unit is disorganized after retreat and cannot attack (2 min). */
+  attackDebuffUntil?: number;
 }
 
 /**

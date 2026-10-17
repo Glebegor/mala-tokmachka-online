@@ -1055,11 +1055,16 @@ export class Sim {
           return fail('Гарнизон уже выполняет наступление или передислокацию');
         }
 
+        if (u.attackDebuffUntil && u.attackDebuffUntil > w.time) {
+          const rem = Math.ceil(u.attackDebuffUntil - w.time);
+          return fail(`Гарнизон дезорганизован после отступления и не может атаковать еще ${rem} с`);
+        }
+
         const curCell = cellOf(u.pos);
         const tgtCell = cmd.targetCell;
 
-        if (!isAdjacentCell(curCell, tgtCell, true)) {
-          return fail('Можно наступать только на соседний тайл');
+        if (!isAdjacentCell(curCell, tgtCell, false)) {
+          return fail('Можно наступать только на соседний тайл (по горизонтали или вертикали)');
         }
 
         const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
@@ -1494,6 +1499,16 @@ export class Sim {
       [cell[0] - 1, cell[1] + 1],
       [cell[0] + 1, cell[1] + 1],
     ];
+    // First priority: adjacent friendly tile that already has friendly troops to merge with
+    for (const [nx, ny] of neighbors) {
+      if (this.side(cellCenter(nx, ny)) === team) {
+        const hasFriend = this.world.units.some(
+          (u) => u.team === team && u.hp > 0 && !u.embarkedIn && cellOf(u.pos)[0] === nx && cellOf(u.pos)[1] === ny
+        );
+        if (hasFriend) return [nx, ny];
+      }
+    }
+    // Second priority: any friendly tile
     for (const [nx, ny] of neighbors) {
       if (this.side(cellCenter(nx, ny)) === team) {
         return [nx, ny];
@@ -1902,9 +1917,24 @@ export class Sim {
           if (opp) {
             const retreatTile = this.findRetreatTile(tgtCell, opp.team);
             if (retreatTile) {
-              opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
-              opp.ammo = Math.max(0, (opp.ammo ?? 0) - 20);
-              opp.morale = Math.max(10, (opp.morale ?? 100) - 30);
+              const friend = w.units.find(
+                (x) => x.team === opp.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === retreatTile[0] && cellOf(x.pos)[1] === retreatTile[1] && x.id !== opp.id
+              );
+              if (friend) {
+                // Merge/stack with friendly troops in that tile
+                friend.strength = (friend.strength ?? 1) + (opp.strength ?? 1);
+                friend.squadSize = (friend.squadSize ?? 100) + (opp.squadSize ?? 100);
+                friend.hp = Math.min((friend.strength ?? 1) * 5000, friend.hp + opp.hp);
+                friend.ammo = Math.min((friend.strength ?? 1) * 100, (friend.ammo ?? 0) + Math.max(0, (opp.ammo ?? 0) - 20));
+                friend.attackDebuffUntil = w.time + 120; // 2 minutes attack debuff
+                friend.morale = Math.max(10, (friend.morale ?? 100) - 20);
+                opp.hp = 0; // Merged into existing squad
+              } else {
+                opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
+                opp.ammo = Math.max(0, (opp.ammo ?? 0) - 20);
+                opp.morale = Math.max(10, (opp.morale ?? 100) - 30);
+                opp.attackDebuffUntil = w.time + 120; // 2 minutes attack debuff
+              }
             } else {
               opp.hp = 0; // Encircled / destroyed
             }

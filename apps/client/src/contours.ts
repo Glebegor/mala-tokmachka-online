@@ -107,3 +107,26 @@ function inside(p: Pt, r: Pt[]): boolean {
   }
   return c;
 }
+
+/**
+ * Smooth an open polyline (e.g. front line) using Chaikin's corner cutting algorithm.
+ * Rounds off sharp 90-degree corners just like the grey and liberated zones.
+ */
+export function smoothPolyline(pts: Pt[], iterations = 2): Pt[] {
+  if (pts.length < 3) return pts;
+  let cur = pts;
+  for (let it = 0; it < iterations; it++) {
+    const next: Pt[] = [cur[0]];
+    for (let i = 0; i < cur.length - 1; i++) {
+      const p0 = cur[i];
+      const p1 = cur[i + 1];
+      const q: Pt = [p0[0] * 0.75 + p1[0] * 0.25, p0[1] * 0.75 + p1[1] * 0.25];
+      const r: Pt = [p0[0] * 0.25 + p1[0] * 0.75, p0[1] * 0.25 + p1[1] * 0.75];
+      next.push(q, r);
+    }
+    next.push(cur[cur.length - 1]);
+    cur = next;
+  }
+  return cur;
+}
+
