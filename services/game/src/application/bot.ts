@@ -389,6 +389,22 @@ export class Bot {
           }
         }
       }
+
+      // 10. Drone factory: 1 per team if we have a military base and spare funds
+      if (!mine.some((b) => b.def === 'drone_factory') && (p.res.money ?? 0) >= 3000 && mine.some((b) => b.def === 'military_base')) {
+        const anchor = mine.find((b) => b.def === 'military_base') ?? hq;
+        if (anchor) {
+          for (let attempt = 0; attempt < 16; attempt++) {
+            const angle = (attempt / 16) * 2 * Math.PI + 0.5;
+            const dist = 5 + (attempt % 4) * 4;
+            const spot = offsetKm(anchor.pos, Math.cos(angle) * dist, Math.sin(angle) * dist);
+            if (sim.isPlayableGround(spot) && sim.side(spot) === p.team) {
+              const res = sim.apply(p.id, { type: 'build', def: 'drone_factory', pos: spot });
+              if (res.ok) break;
+            }
+          }
+        }
+      }
     }
   }
 
@@ -601,7 +617,10 @@ export class Bot {
     const send = (u: Unit, to: LngLat) =>
       u.parkedAt !== undefined ? sim.apply(p.id, { type: 'launchFrom', building: u.parkedAt, units: [u.id], target: to }) : sim.apply(p.id, { type: 'move', units: [u.id], to });
     for (const u of w.units.filter((x) => x.owner === p.id && isStrikeDrone(sim.defs.u.get(x.def)) && !x.target && !x.embarkedIn)) {
-      const targets = w.buildings.filter((b) => b.team !== p.team);
+      const targets = [
+        ...w.buildings.filter((b) => b.team !== p.team),
+        ...w.units.filter((e) => e.team !== p.team && e.hp > 0 && (e.def === 'frontline_infantry' || e.owner.startsWith('__front_'))),
+      ];
       const t = targets[Math.floor(Math.random() * targets.length)];
       if (t) send(u, t.pos);
     }

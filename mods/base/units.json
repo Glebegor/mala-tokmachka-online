@@ -140,6 +140,92 @@
     "damage": 0,
     "vision": 5,
     "symbol": "drone"
+  },
+  {
+    "id": "drone_pd2",
+    "name": "ПД-2",
+    "description": "Украинский разведывательный БПЛА. Скорость в 1.2 раза быстрее хамви. Дальность обзора: 10 км. Время в воздухе: 30 минут.",
+    "kind": "air",
+    "cost": {
+      "money": 200
+    },
+    "trainTime": 8,
+    "hp": 90,
+    "speed": 0.4608,
+    "maxFuel": 66.36,
+    "range": 0,
+    "damage": 0,
+    "vision": 10,
+    "airVision": 10,
+    "mobility": "air",
+    "symbol": "drone_pd2",
+    "droneType": "recon",
+    "side": "ua"
+  },
+  {
+    "id": "drone_fire_point",
+    "name": "Фаер Поинт - 2",
+    "description": "Украинский ударный БПЛА-камикадзе. Скорость 0.4608 км/с. Время в воздухе: 45 минут. Урон: 150 (радиус 50 м). Снижает мораль гарнизонов на 15.",
+    "kind": "air",
+    "cost": {
+      "money": 250
+    },
+    "trainTime": 10,
+    "hp": 80,
+    "speed": 0.4608,
+    "maxFuel": 99.54,
+    "range": 0.5,
+    "damage": 150,
+    "blastKm": 0.05,
+    "vision": 0,
+    "airVision": 0,
+    "mobility": "air",
+    "symbol": "drone_fire_point",
+    "droneType": "strike",
+    "side": "ua"
+  },
+  {
+    "id": "drone_orion",
+    "name": "Орион",
+    "description": "Российский разведывательный БПЛА. Скорость в 1.2 раза быстрее хамви. Дальность обзора: 10 км. Время в воздухе: 30 минут.",
+    "kind": "air",
+    "cost": {
+      "money": 200
+    },
+    "trainTime": 8,
+    "hp": 90,
+    "speed": 0.4608,
+    "maxFuel": 66.36,
+    "range": 0,
+    "damage": 0,
+    "vision": 10,
+    "airVision": 10,
+    "mobility": "air",
+    "symbol": "drone_orion",
+    "droneType": "recon",
+    "side": "ru"
+  },
+  {
+    "id": "drone_shahed",
+    "name": "Шахед 136",
+    "description": "Российский ударный БПЛА-камикадзе. Скорость 0.4608 км/с. Время в воздухе: 45 минут. Урон: 150 (радиус 50 м). Снижает мораль гарнизонов на 15.",
+    "kind": "air",
+    "cost": {
+      "money": 250
+    },
+    "trainTime": 10,
+    "hp": 80,
+    "speed": 0.4608,
+    "maxFuel": 99.54,
+    "range": 0.5,
+    "damage": 150,
+    "blastKm": 0.05,
+    "vision": 0,
+    "airVision": 0,
+    "mobility": "air",
+    "symbol": "drone_shahed",
+    "droneType": "strike",
+    "side": "ru"
   }
 ]
 

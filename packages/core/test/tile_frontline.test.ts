@@ -1072,7 +1072,95 @@ for (let i = 0; i < 40; i++) sim.step(0.1);
 assert.equal(rogueGarrison.hp, 0, 'Rogue idle garrison stranded deep in enemy territory surrendered');
 console.log('✓ Neighbor-Only Gap Coverage, Relocation Safety & Rogue Garrison Surrender Verified!');
 
+// 18. Test 4 Faction Drones (Recon & Strike) and TTX:
+console.log('--- Testing 4 Faction Drones TTX & Blast Mechanics ---');
+const humveeDef = sim.defs.u.get('humvee')!;
+assert.ok(humveeDef, 'humvee def exists');
+assert.equal(humveeDef.speed, 0.384, 'Humvee speed is 0.384');
+
+const pd2Def = sim.defs.u.get('drone_pd2')!;
+const firePointDef = sim.defs.u.get('drone_fire_point')!;
+const orionDef = sim.defs.u.get('drone_orion')!;
+const shahedDef = sim.defs.u.get('drone_shahed')!;
+
+assert.ok(pd2Def, 'drone_pd2 def exists');
+assert.ok(firePointDef, 'drone_fire_point def exists');
+assert.ok(orionDef, 'drone_orion def exists');
+assert.ok(shahedDef, 'drone_shahed def exists');
+
+// Verify factions
+assert.equal(pd2Def.side, 'ua', 'PD-2 is Ukrainian');
+assert.equal(firePointDef.side, 'ua', 'Fire Point - 2 is Ukrainian');
+assert.equal(orionDef.side, 'ru', 'Orion is Russian');
+assert.equal(shahedDef.side, 'ru', 'Shahed 136 is Russian');
+
+// Verify types
+assert.equal(pd2Def.droneType, 'recon');
+assert.equal(orionDef.droneType, 'recon');
+assert.equal(firePointDef.droneType, 'strike');
+assert.equal(shahedDef.droneType, 'strike');
+
+// Verify speed (1.2x faster than humvee)
+const expectedSpeed = Math.round(0.384 * 1.2 * 10000) / 10000;
+assert.equal(pd2Def.speed, expectedSpeed, 'PD-2 speed is 1.2x humvee');
+assert.equal(orionDef.speed, expectedSpeed, 'Orion speed is 1.2x humvee');
+assert.equal(firePointDef.speed, expectedSpeed, 'Fire Point speed is same as recon');
+assert.equal(shahedDef.speed, expectedSpeed, 'Shahed speed is same as recon');
+
+// Verify vision
+assert.equal(pd2Def.vision, 10, 'PD-2 vision is 10 km');
+assert.equal(pd2Def.airVision, 10, 'PD-2 airVision is 10 km');
+assert.equal(orionDef.vision, 10, 'Orion vision is 10 km');
+assert.equal(orionDef.airVision, 10, 'Orion airVision is 10 km');
+assert.equal(firePointDef.vision, 0, 'Fire Point has 0 vision');
+assert.equal(firePointDef.airVision, 0, 'Fire Point has 0 airVision');
+assert.equal(shahedDef.vision, 0, 'Shahed has 0 vision');
+assert.equal(shahedDef.airVision, 0, 'Shahed has 0 airVision');
+
+// Verify flight time (recon: 30m = 1800s, strike: 45m = 2700s)
+// fuel burn rate = speed * 0.08 fuel/s = 0.4608 * 0.08 = 0.036864 fuel/s
+const burnRate = expectedSpeed * 0.08;
+const reconFlightTime = pd2Def.maxFuel! / burnRate;
+const strikeFlightTime = firePointDef.maxFuel! / burnRate;
+assert.ok(Math.abs(reconFlightTime - 1800) < 5, `Recon flight time ~30 min (actual: ${reconFlightTime}s)`);
+assert.ok(Math.abs(strikeFlightTime - 2700) < 5, `Strike flight time ~45 min (actual: ${strikeFlightTime}s)`);
+
+// Verify damage and blast radius
+assert.equal(firePointDef.damage, 150, 'Fire Point damage is 150');
+assert.equal(shahedDef.damage, 150, 'Shahed damage is 150');
+assert.equal(firePointDef.blastKm, 0.05, 'Fire Point blast radius is 50m (0.05 km)');
+assert.equal(shahedDef.blastKm, 0.05, 'Shahed blast radius is 50m (0.05 km)');
+
+// Test strike drone blast on frontline garrison vs normal unit
+const testPos: [number, number] = [36.0, 47.5];
+const garrisonTarget = sim.spawnUnit('frontline_infantry', sim.player('player2')!, testPos);
+garrisonTarget.pos = [testPos[0], testPos[1]];
+garrisonTarget.hp = 25000;
+garrisonTarget.morale = 100;
+
+const truckTarget = sim.spawnUnit('truck', sim.player('player2')!, testPos);
+truckTarget.pos = [testPos[0], testPos[1]];
+truckTarget.hp = 600;
+
+const strikeDrone = sim.spawnUnit('drone_fire_point', sim.player('player1')!, testPos);
+strikeDrone.pos = [testPos[0], testPos[1]];
+assert.equal(strikeDrone.fuel, firePointDef.maxFuel, 'Drone spawns with full fuel tank');
+
+// Call blast directly from strike drone on testPos
+(sim as any).blast(strikeDrone, testPos, firePointDef.blastKm, firePointDef.damage, true);
+
+// Frontline garrison: 0 HP damage, morale reduced by 15!
+assert.equal(garrisonTarget.hp, 25000, 'Frontline garrison takes NO HP damage from strike drone');
+assert.equal(garrisonTarget.morale, 85, 'Frontline garrison morale reduced by 15 points (100 -> 85)');
+
+// Normal vehicle (truck): takes HP damage
+assert.ok(truckTarget.hp < 600, `Normal vehicle takes damage (hp: ${truckTarget.hp})`);
+assert.ok(truckTarget.hp <= 550, `Normal vehicle took blast damage (hp: ${truckTarget.hp})`);
+
+console.log('✓ 4 Faction Drones TTX & Frontline Garrison Blast Immunity Verified!');
+
 console.log('All Tile Frontline tests passed successfully!');
+
 
 
 

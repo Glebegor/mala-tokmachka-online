@@ -1845,8 +1845,8 @@ export class Sim {
         u.loiterCenter = isReconDrone(d) ? to : undefined;
         // strike craft aimed at (or right next to) an enemy lock on to it
         if (isStrikeDrone(d)) {
-          const unit = this.world.units.find((e) => e.team !== u.team && !e.embarkedIn && this.defs.u.get(e.def)!.kind !== 'air' && distKm(e.pos, to) < 0.6);
-          const bld = unit ? undefined : this.world.buildings.find((e) => e.team !== u.team && distKm(e.pos, to) < 0.6);
+          const unit = this.world.units.find((e) => e.team !== u.team && !e.embarkedIn && this.defs.u.get(e.def)!.kind !== 'air' && distKm(e.pos, to) < 1.5);
+          const bld = unit ? undefined : this.world.buildings.find((e) => e.team !== u.team && distKm(e.pos, to) < 1.5);
           u.lockOn = unit ? { unit: unit.id } : bld ? { building: bld.id } : undefined;
         }
         u.loiterRadius = isReconDrone(d) ? 4 : undefined;
@@ -3105,10 +3105,21 @@ export class Sim {
   /** A blast (strike drone, shell) hurting everything of the other side within `radius` km, strongest at the centre. */
   private blast(attacker: Unit, at: LngLat, radius: number, damage: number, hitsCities: boolean): number {
     let total = 0;
+    const attackerDef = this.defs.u.get(attacker.def);
+    const fromStrikeDrone = isStrikeDrone(attackerDef);
     for (const e of this.world.units) {
       if (e.team === attacker.team || e.embarkedIn || e.parkedAt !== undefined || e.hp <= 0 || this.defs.u.get(e.def)!.kind === 'air') continue;
       const d = distKm(at, e.pos);
-      if (d <= radius) total += this.hitUnit(attacker, e, damage * (1 - d / radius));
+      if (d <= radius) {
+        const isGarrison = e.def === 'frontline_infantry' || e.owner.startsWith('__front_') || e.frontPost !== undefined;
+        if (isGarrison && fromStrikeDrone) {
+          e.morale = Math.max(0, (e.morale ?? 100) - 15);
+          e.lastHit = this.world.time;
+          this.hooks?.emit('toast', { text: `Ударный дрон атаковал гарнизон! Мораль снижена на 15 (текущая: ${e.morale})` });
+        } else {
+          total += this.hitUnit(attacker, e, damage * (1 - d / radius));
+        }
+      }
     }
     for (const b of this.world.buildings) {
       if (b.team === attacker.team || b.hp <= 0) continue;
@@ -3990,7 +4001,7 @@ export class Sim {
     u.target = u.path.length ? u.path[u.path.length - 1].p : null;
     if (strike && !u.path.length) {
       // impact
-      const dealt = this.blast(u, u.pos, d.blastKm ?? 1.8, d.damage || 320, true);
+      const dealt = this.blast(u, u.pos, d.blastKm ?? 1.8, d.damage ?? 150, true);
       this.stat(u.owner).damage += dealt;
       this.shots.push({ def: u.def, team: u.team, from: u.pos, to: u.pos });
       this.world.smokes.push({ id: this.world.nextId++, pos: [u.pos[0], u.pos[1]], createdAt: this.world.time, expiresAt: this.world.time + 600 });

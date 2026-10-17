@@ -160,6 +160,11 @@
     },
     "buildTime": 60,
     "hp": 5000,
-    "trains": []
+    "trains": [
+      "drone_pd2",
+      "drone_fire_point",
+      "drone_orion",
+      "drone_shahed"
+    ]
   }
 ]
