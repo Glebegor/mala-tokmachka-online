@@ -238,6 +238,9 @@ small.warn { color: #f59e0b; }
 .cp-hp { display: none; width: 46px; height: 3px; background: rgba(0,0,0,.6); margin-left: 4px; }
 .cp-hp b { display: block; height: 100%; }
 .cp.hurt .cp-hp { display: block; }
+.zoom-city-hp .cp-hp,
+.zoom-out .cp-hp,
+.far .cp-hp { display: none !important; }
 .cp-major span { font-weight: 700; }
 
 /* ceasefire at the start */

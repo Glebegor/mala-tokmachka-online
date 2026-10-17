@@ -815,7 +815,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       // power lines along the roads, shown when a power plant (or a building it feeds) is selected
       map.addLayer({ id: 'power-lines', type: 'line', source: 'power-lines', layout: { 'line-join': 'round', 'line-cap': 'round' }, paint: { 'line-color': '#38bdf8', 'line-width': 1.2, 'line-dasharray': [4, 3], 'line-opacity': 0.6, 'line-offset': 3 } });
       map.addLayer({ id: 'orbits', type: 'line', source: 'orbits', paint: { 'line-color': '#a7f3d0', 'line-width': 1.4, 'line-dasharray': [4, 2], 'line-opacity': 0.8 } });
-      map.addLayer({ id: 'smokes', type: 'symbol', source: 'smokes', layout: { 'icon-image': 'smoke', 'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.0125, 8, 0.2, 12, 3.2], 'icon-allow-overlap': true, 'icon-ignore-placement': true }, paint: { 'icon-opacity': ['get', 'opacity'] } });
+      map.addLayer({ id: 'smokes', type: 'symbol', source: 'smokes', layout: { 'icon-image': 'smoke', 'icon-size': ['interpolate', ['exponential', 2], ['zoom'], 4, 0.0125 / 3, 8, 0.2 / 3, 12, 3.2 / 3], 'icon-allow-overlap': true, 'icon-ignore-placement': true }, paint: { 'icon-opacity': ['get', 'opacity'] } });
       map.addLayer({ id: 'rings', type: 'line', source: 'rings', paint: { 'line-color': ['get', 'color'], 'line-width': ['coalesce', ['get', 'w'], 1], 'line-opacity': ['coalesce', ['get', 'o'], 0.4], 'line-dasharray': [2, 3] } });
       // the selected building's ranges, filled lightly so its reach is easy to read
       map.addLayer({ id: 'rings-sel', type: 'fill', source: 'rings', filter: ['==', ['get', 'sel'], true], paint: { 'fill-color': ['get', 'color'], 'fill-opacity': 0.06 } }, 'rings');
@@ -878,6 +878,7 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       const z = map.getZoom();
       mapEl.classList.toggle('far', z < 6.6);
       mapEl.classList.toggle('zoom-out', z < 7.5);
+      mapEl.classList.toggle('zoom-city-hp', z < 8.5);
     };
     map.on('zoom', updateZoom);
     map.on('zoomend', () => renderUnits()); // ground markers come back when zooming in

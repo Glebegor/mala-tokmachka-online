@@ -1348,6 +1348,12 @@ assert.equal(newDniproAssaults.length, 0, 'Bot must not initiate any assault in 
 
 console.log('✓ Impassable Dnipro Frontline & Water Barrier (No Attacks To/From Dnipro) Verified!');
 
+// --- Testing Doubled Housing Income ---
+const hDef = sim.defs.b.get('housing')!;
+assert.ok(hDef, 'Housing building definition exists');
+assert.equal(hDef.produces!.money, 2, 'Housing produces 2 $/s (doubled from 1 $/s)');
+console.log('✓ Doubled Housing Income Verified (2 $/s, 10$ per 5s)!');
+
 console.log('All Tile Frontline tests passed successfully!');
 
 
