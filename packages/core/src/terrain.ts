@@ -1,4 +1,4 @@
-import type { LngLat } from './geo';
+import { isDniproWater, type LngLat } from './geo';
 
 export interface TerrainGridData {
   west: number;
@@ -113,6 +113,7 @@ export class TerrainGrid {
 
   /** True when this position is inside a river/sea that ground units cannot enter on their own. */
   isBarrier(p: LngLat): boolean {
+    if (isDniproWater(p)) return true;
     const i = this.index(p);
     if (i >= 0) return (this.cells[i] & BARRIER) !== 0;
     const pt = proceduralTerrain(p[0], p[1]);
@@ -126,6 +127,7 @@ export class TerrainGrid {
 
   /** Terrain id at a position; outside the grid procedural terrain is computed seamlessly. */
   at(p: LngLat): string {
+    if (isDniproWater(p)) return 'water';
     const i = this.index(p);
     if (i >= 0) return this.ids[this.cells[i] & KIND];
     return proceduralTerrain(p[0], p[1]);

@@ -1,4 +1,4 @@
-import { type BotDifficulty, type Building, cellCenter, cellOf, distKm, distToFrontKm, inDeposit, isReconDrone, isStrikeDrone, moveToward, nearestNode, normalAt, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
+import { type BotDifficulty, type Building, cellCenter, cellOf, distKm, distToFrontKm, inDeposit, isDniproAttack, isDniproWater, isReconDrone, isStrikeDrone, moveToward, nearestNode, normalAt, offsetKm, type LngLat, type Player, type Sim, type Team, type Unit } from '@sw/core';
 
 const BUILD_ORDER = [
   'military_base',
@@ -884,7 +884,8 @@ export class Bot {
 
         const tgtOwner = sim.tileMap ? sim.tileMap.ownerOf(tgtCell[0], tgtCell[1]) : sim.side(tgtCenter);
         if (tgtOwner === p.team) continue;
-        if (!sim.isPlayableGround(tgtCenter) || sim.terrainAt(tgtCenter).id === 'water' || sim.foreign(tgtCenter)) continue;
+        if (!sim.isPlayableGround(tgtCenter) || sim.terrainAt(tgtCenter).id === 'water' || sim.foreign(tgtCenter) || sim.terrain?.isBarrier(tgtCenter)) continue;
+        if (isDniproAttack(u.pos, tgtCenter) || isDniproWater(tgtCenter)) continue;
 
         // Avoid double-assaulting the same cell
         const alreadyAttacking = w.units.some((x) =>
@@ -976,7 +977,7 @@ export class Bot {
         const nc: [number, number] = [cx + dx, cy + dy];
         const nPos = cellCenter(nc[0], nc[1]);
         const nOwner = sim.tileMap ? sim.tileMap.ownerOf(nc[0], nc[1]) : sim.side(nPos);
-        if (nOwner !== p.team || !sim.isPlayableGround(nPos) || sim.foreign(nPos)) continue;
+        if (nOwner !== p.team || !sim.isPlayableGround(nPos) || sim.foreign(nPos) || isDniproWater(nPos) || sim.terrainAt(nPos).id === 'water' || sim.terrain?.isBarrier(nPos)) continue;
         const neighborHasEnemy = dirs.some(([ndx, ndy]) => (sim.tileMap ? sim.tileMap.ownerOf(nc[0] + ndx, nc[1] + ndy) : sim.side(cellCenter(nc[0] + ndx, nc[1] + ndy))) !== p.team);
         if (neighborHasEnemy) {
           bestTgt = nc;

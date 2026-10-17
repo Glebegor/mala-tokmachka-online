@@ -1108,10 +1108,10 @@ assert.equal(firePointDef.speed, expectedSpeed, 'Fire Point speed is same as rec
 assert.equal(shahedDef.speed, expectedSpeed, 'Shahed speed is same as recon');
 
 // Verify vision
-assert.equal(pd2Def.vision, 10, 'PD-2 vision is 10 km');
-assert.equal(pd2Def.airVision, 10, 'PD-2 airVision is 10 km');
-assert.equal(orionDef.vision, 10, 'Orion vision is 10 km');
-assert.equal(orionDef.airVision, 10, 'Orion airVision is 10 km');
+assert.equal(pd2Def.vision, 5.5, 'PD-2 vision is 5.5 km');
+assert.equal(pd2Def.airVision, 5.5, 'PD-2 airVision is 5.5 km');
+assert.equal(orionDef.vision, 5.5, 'Orion vision is 5.5 km');
+assert.equal(orionDef.airVision, 5.5, 'Orion airVision is 5.5 km');
 assert.equal(firePointDef.vision, 0, 'Fire Point has 0 vision');
 assert.equal(firePointDef.airVision, 0, 'Fire Point has 0 airVision');
 assert.equal(shahedDef.vision, 0, 'Shahed has 0 vision');
@@ -1278,7 +1278,78 @@ sim.step(1.0);
 assert.ok(droneRU.hp < 90, `Humvee with MG (MVG) shoots at drone (drone HP: ${droneRU.hp})`);
 console.log('✓ Garrisons Do Not Shoot At Drones, Only Humvee MG (MVG) Shoots At Drones Verified!');
 
+// --- Testing Impassable Dnipro Frontline & Water Barrier ---
+console.log('--- Testing Impassable Dnipro Frontline & Water Barrier ---');
+
+// 1. Verify Deep Dnipro reservoir is marked as water and impassable barrier
+const deepWaterPt: [number, number] = [35.25, 47.53];
+assert.equal(simUkr.terrainAt(deepWaterPt).id, 'water', 'Dnipro reservoir terrain is water');
+assert.equal(simUkr.terrain?.isBarrier(deepWaterPt), true, 'Dnipro reservoir is barrier');
+
+// 2. Attack in the direction of Dnipro is blocked
+const plavniRuGarrison = simUkr.world.units.find(
+  (u) => u.team === 1 && Math.abs(u.pos[0] - 35.35) < 0.01 && Math.abs(u.pos[1] - 47.54025) < 0.01
+)!;
+assert.ok(plavniRuGarrison, 'Found Russian garrison in Plavni');
+
+const dniproBankUaCell = cellOf([35.33, 47.54025]);
+const attackWestResult = simUkr.apply('player2', {
+  type: 'attackTile',
+  unitId: plavniRuGarrison.id,
+  targetCell: dniproBankUaCell,
+});
+assert.equal(attackWestResult.ok, false, 'Attack towards Dnipro must fail');
+assert.match(
+  attackWestResult.reason ?? '',
+  /Нельзя атаковать в сторону Днепра/,
+  'Expected reason: Нельзя атаковать в сторону Днепра'
+);
+
+// 3. Attack from the direction of Dnipro is blocked
+const dniproBankUaGarrison = simUkr.world.units.find(
+  (u) => u.team === 0 && Math.abs(u.pos[0] - 35.33) < 0.01 && Math.abs(u.pos[1] - 47.54025) < 0.01
+)!;
+assert.ok(dniproBankUaGarrison, 'Found Ukrainian garrison on Dnipro bank');
+
+const plavniRuCell = cellOf(plavniRuGarrison.pos);
+const attackEastResult = simUkr.apply('player1', {
+  type: 'attackTile',
+  unitId: dniproBankUaGarrison.id,
+  targetCell: plavniRuCell,
+});
+assert.equal(attackEastResult.ok, false, 'Attack from Dnipro must fail');
+assert.match(
+  attackEastResult.reason ?? '',
+  /Нельзя атаковать со стороны Днепра/,
+  'Expected reason: Нельзя атаковать со стороны Днепра'
+);
+
+// 4. Ground unit movement cannot cross the front line along the Dnipro
+const ruTruck = simUkr.spawnUnit('truck', simUkr.player('player2')!, plavniRuGarrison.pos);
+const moveAcrossDniproResult = simUkr.apply('player2', {
+  type: 'move',
+  units: [ruTruck.id],
+  to: dniproBankUaGarrison.pos,
+});
+assert.equal(moveAcrossDniproResult.ok, false, 'Ground unit cannot cross frontline along Dnipro');
+assert.match(
+  moveAcrossDniproResult.reason ?? '',
+  /Нельзя пересекать линию фронта вдоль Днепра/,
+  'Expected reason: Нельзя пересекать линию фронта вдоль Днепра'
+);
+
+// 5. Bot does not target cells in or from the Dnipro
+const botRU = new Bot('player2', 'normal');
+(botRU as any).frontlineOffensive(simUkr, simUkr.player('player2')!);
+const newDniproAssaults = simUkr.world.units.filter(
+  (u) => u.assault && (simUkr.isDniproAttack(u.pos, u.assault.targetPos))
+);
+assert.equal(newDniproAssaults.length, 0, 'Bot must not initiate any assault in or from Dnipro barrier');
+
+console.log('✓ Impassable Dnipro Frontline & Water Barrier (No Attacks To/From Dnipro) Verified!');
+
 console.log('All Tile Frontline tests passed successfully!');
+
 
 
 

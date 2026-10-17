@@ -1,6 +1,6 @@
 import type { Command, CommandResult } from './commands';
 import type { BuildingDef, MapDef, RankDef, ResourceAmounts, Ruleset, TerrainDef, UnitDef } from './defs';
-import { clamp, distKm, formationSpot, inPolygon, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
+import { clamp, distKm, formationSpot, inPolygon, isDniproAttack, isDniproWater, isDniproZone, kmPerDegLng, moveToward, offsetKm, type LngLat } from './geo';
 import { buildFront, distToFrontKm, findPinch, nearestNode, normalAt, normalOf, OccupiedIndex, pocketAt, pointInRing, respace, ringAreaKm2, sideOf } from './frontline';
 import { RoadNetwork } from './roads';
 import { TerrainGrid } from './terrain';
@@ -766,7 +766,20 @@ export class Sim {
   }
 
   terrainAt(p: LngLat): TerrainDef {
+    if (isDniproWater(p)) return this.defs.t.get('water') ?? OPEN_GROUND;
     return (this.terrain && this.defs.t.get(this.terrain.at(p))) || OPEN_GROUND;
+  }
+
+  isDniproAttack(fromPos: LngLat, toPos: LngLat): boolean {
+    return isDniproAttack(fromPos, toPos);
+  }
+
+  isDniproWater(pos: LngLat): boolean {
+    return isDniproWater(pos);
+  }
+
+  isDniproZone(pos: LngLat): boolean {
+    return isDniproZone(pos);
   }
 
   /** Off-road speed multiplier for a unit type at a position. */
@@ -965,6 +978,12 @@ export class Sim {
           const ud = this.defs.u.get(u.def);
           return ud?.cannotCrossFront || ud?.id === 'infantry';
         });
+        if (hasGround && this.side(cmd.to) !== p.team && isDniproAttack(mine[0]?.pos ?? cmd.to, cmd.to)) {
+          return fail('Нельзя пересекать линию фронта вдоль Днепра (водная преграда)');
+        }
+        if (hasGround && (isDniproWater(cmd.to) || this.terrainAt(cmd.to).id === 'water' || this.terrain?.isBarrier(cmd.to))) {
+          return fail('cannot enter water');
+        }
         if ((cannotCross || (r.frontPosts && hasGround && !targetPost)) && this.side(cmd.to) !== p.team) {
           return fail('cannot cross the front line');
         }
@@ -1074,6 +1093,9 @@ export class Sim {
 
         // Friendly tile movement (redeploy garrison over 60s)
         if (tgtOwner === u.team) {
+          if (this.terrainAt(tgtCenter).id === 'water' || this.terrain?.isBarrier(tgtCenter)) {
+            return fail('Нельзя перемещаться по воде');
+          }
           u.assault = {
             targetCell: tgtCell,
             startPos: [u.pos[0], u.pos[1]],
@@ -1085,6 +1107,17 @@ export class Sim {
           u.frontStatus = 'advancing';
           this.hooks?.emit('toast', { text: `Передислокация гарнизона в тайл [${tgtCell[0]}, ${tgtCell[1]}] (время: 60 с)` });
           return ok();
+        }
+
+        // Check if attack crosses uncrossable Dnipro frontline / water barrier
+        if (isDniproZone(tgtCenter)) {
+          return fail('Нельзя атаковать в сторону Днепра (водная преграда)');
+        }
+        if (isDniproZone(u.pos)) {
+          return fail('Нельзя атаковать со стороны Днепра (водная преграда)');
+        }
+        if (this.terrainAt(tgtCenter).id === 'water' || this.terrain?.isBarrier(tgtCenter)) {
+          return fail('Нельзя атаковать через водную преграду');
         }
 
         // Offense against enemy tile (60s assault):
@@ -2239,6 +2272,7 @@ export class Sim {
 
     const isBorderTile = (cx: number, cy: number) => {
       const pos = cellCenter(cx, cy);
+      if (isDniproZone(pos)) return false; // Dnipro uncrossable barrier
       if (pos[0] < 35.32 && pos[1] < 47.7) return false; // Dnipro
       const owner = this.tileMap ? this.tileMap.ownerOf(cx, cy) : this.side(pos);
       return (
@@ -2405,6 +2439,7 @@ export class Sim {
 
       for (const [cx, cy] of borderTiles) {
         const pos = cellCenter(cx, cy);
+        if (isDniproZone(pos)) continue; // Dnipro frontline barrier
         if (pos[0] < 35.32 && pos[1] < 47.7) continue; // Dnipro river
         if (!this.isPlayableGround(pos) || this.terrainAt(pos).id === 'water' || this.foreign(pos) || this.terrain?.isBarrier(pos)) continue;
         if (isCoveredByNearbyGarrison(cx, cy)) continue;

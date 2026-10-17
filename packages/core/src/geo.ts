@@ -61,4 +61,43 @@ export function inPolygon(p: LngLat, ring: LngLat[]): boolean {
     if (a[1] > p[1] !== b[1] > p[1] && p[0] < ((b[0] - a[0]) * (p[1] - a[1])) / (b[1] - a[1]) + a[0]) inside = !inside;
   }
   return inside;
-}
+}
+
+/**
+ * Checks if a position is in the deep Dnipro water / reservoir zone along the Plavni-Kamyanske-Vidrada sector.
+ * Where the user indicated: conditionally water, acts as an impassable barrier for ground units and buildings.
+ */
+export function isDniproWater(p: LngLat): boolean {
+  const [lng, lat] = p;
+  if (lat > 47.56 || lat < 46.5) return false;
+  // Northern bay north of Plavni (lat >= 47.558, lng <= 35.32)
+  if (lat >= 47.558 && lng <= 35.32) return true;
+  // Kakhovka reservoir west of Plavni / Kam'yans'ke / Vidrada bank (lat >= 47.47, lng <= 35.30)
+  if (lat >= 47.47 && lng <= 35.30) return true;
+  // Lower Dnipro south of Vidrada towards Verkhnya Krynytsya (lat < 47.47, lng <= 35.26)
+  if (lat < 47.47 && lng <= 35.26) return true;
+  return false;
+}
+
+/**
+ * Checks if a position is in the Dnipro uncrossable frontline zone.
+ * Any tile along the Dnipro riverbank between UA bank cells and RU cells across the river (lat <= 47.56).
+ */
+export function isDniproZone(p: LngLat): boolean {
+  const [lng, lat] = p;
+  if (lat > 47.56 || lat < 46.5) return false;
+  // Plavni / Kam'yans'ke bank & reservoir
+  if (lat >= 47.45 && lng <= 35.335) return true;
+  // Lower Dnipro (Verkhnya Krynytsya, Vasylivka, Enerhodar, Nova Kakhovka, Kherson)
+  if (lat < 47.45 && lng <= 35.28) return true;
+  return false;
+}
+
+/**
+ * Returns true if an offensive attack crosses or enters/exits the uncrossable Dnipro barrier.
+ * Nobody can attack in the direction of the Dnipro or from the Dnipro direction.
+ */
+export function isDniproAttack(fromPos: LngLat, toPos: LngLat): boolean {
+  return isDniproZone(fromPos) || isDniproZone(toPos);
+}
+
