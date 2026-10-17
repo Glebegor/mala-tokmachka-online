@@ -211,6 +211,71 @@ export function removeSpurs(nodes: FrontNode[]): FrontNode[] {
 }
 
 /**
+ * Subdivides multi-tile straight segments into discrete 1-tile orthogonal edges.
+ * Ensures every segment along the front line is exactly 1 tile edge long (TILE_CW or TILE_CH).
+ */
+export function subdivideTileEdges(nodes: FrontNode[]): FrontNode[] {
+  if (nodes.length <= 1) return nodes;
+  const cw = TILE_CW;
+  const ch = TILE_CH;
+  const out: FrontNode[] = [nodes[0]];
+
+  for (let i = 0; i < nodes.length - 1; i++) {
+    const a = nodes[i];
+    const b = nodes[i + 1];
+    const dxSteps = Math.round((b.lng - a.lng) / cw);
+    const dySteps = Math.round((b.lat - a.lat) / ch);
+
+    if (dxSteps !== 0 && dySteps !== 0) {
+      // Diagonal segment: split into orthogonal steps
+      const cornerLng = a.lng + dxSteps * cw;
+      const cornerLat = a.lat;
+      const xSteps = Math.abs(dxSteps);
+      const xDir = Math.sign(dxSteps);
+      for (let s = 1; s <= xSteps; s++) {
+        out.push({
+          lng: a.lng + s * xDir * cw,
+          lat: a.lat,
+          v: a.v,
+        });
+      }
+      const ySteps = Math.abs(dySteps);
+      const yDir = Math.sign(dySteps);
+      for (let s = 1; s <= ySteps; s++) {
+        out.push({
+          lng: cornerLng,
+          lat: cornerLat + s * yDir * ch,
+          v: b.v,
+        });
+      }
+    } else if (dxSteps !== 0) {
+      const xSteps = Math.abs(dxSteps);
+      const xDir = Math.sign(dxSteps);
+      for (let s = 1; s <= xSteps; s++) {
+        const t = s / xSteps;
+        out.push({
+          lng: a.lng + s * xDir * cw,
+          lat: a.lat,
+          v: a.v + (b.v - a.v) * t,
+        });
+      }
+    } else if (dySteps !== 0) {
+      const ySteps = Math.abs(dySteps);
+      const yDir = Math.sign(dySteps);
+      for (let s = 1; s <= ySteps; s++) {
+        const t = s / ySteps;
+        out.push({
+          lng: a.lng,
+          lat: a.lat + s * yDir * ch,
+          v: a.v + (b.v - a.v) * t,
+        });
+      }
+    }
+  }
+  return out;
+}
+
+/**
  * Snaps an authored continuous front line to follow exact orthogonal tile boundaries.
  */
 export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
@@ -232,7 +297,7 @@ export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
       }
     }
   }
-  return removeSpurs(out);
+  return subdivideTileEdges(removeSpurs(out));
 }
 
 /**
@@ -240,7 +305,7 @@ export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
  * Replaces the shared boundary segment with the perimeter path on the opposite side of the cell.
  */
 export function advanceFrontOverCell(front: FrontNode[], cell: [number, number], team: 0 | 1): FrontNode[] {
-  const cleanFront = removeSpurs(front);
+  const cleanFront = subdivideTileEdges(removeSpurs(front));
   const cw = TILE_CW;
   const ch = TILE_CH;
   const [ix, iy] = cell;
@@ -295,7 +360,16 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
     const inC = cornerIdx(cleanFront[bestStart]);
     const outC = cornerIdx(cleanFront[bestEnd]);
 
-    if (inC !== -1 && outC !== -1 && inC !== outC) {
+    if (inC !== -1 && outC !== -1) {
+      if (inC === outC) {
+        // Enclosed loop completely absorbed
+        const newFront = [
+          ...cleanFront.slice(0, bestStart),
+          ...cleanFront.slice(bestEnd),
+        ];
+        return subdivideTileEdges(removeSpurs(newFront));
+      }
+
       // Path CCW: (c + 1) % 4
       const ccw: [number, number][] = [];
       for (let c = inC; ; c = (c + 1) % 4) {
@@ -335,7 +409,7 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
         ...cleanFront.slice(bestEnd + 1),
       ];
 
-      return removeSpurs(newFront);
+      return subdivideTileEdges(removeSpurs(newFront));
     }
   }
 
@@ -374,7 +448,7 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
 
     const repNodes: FrontNode[] = replacement.map(([lng, lat]) => ({ lng, lat, v: 0 }));
     const newFront = [...cleanFront.slice(0, bestIdx), ...repNodes, ...cleanFront.slice(bestIdx + 2)];
-    return removeSpurs(newFront);
+    return subdivideTileEdges(removeSpurs(newFront));
   }
 
   return cleanFront;

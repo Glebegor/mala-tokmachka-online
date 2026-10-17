@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { Sim, cellOf, cellCenter, cellKey, normalAt, offsetKm, isAdjacentCell, distKm, kmPerDegLng, OccupiedIndex, type Unit, type LngLat } from '../src';
+import { Sim, cellOf, cellCenter, cellKey, normalAt, offsetKm, isAdjacentCell, distKm, kmPerDegLng, OccupiedIndex, advanceFrontOverCell, type Unit, type LngLat } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -642,4 +642,41 @@ assert.ok(strandedGarrison.assault, 'Stranded garrison without enemy border init
 assert.equal(strandedGarrison.assault?.isRelocation, true, 'Marked as friendly relocation');
 console.log('✓ Stranded Rear Garrison Redeployment Verified: Garrison without enemy border automatically redeploys to cover front');
 
+console.log('--- Testing Pushing [1886, 3591] in Illinivka Sector ---');
+const testCell: [number, number] = [1886, 3591];
+assert.equal(simUkr.side(cellCenter(testCell[0], testCell[1])), 1, 'Initially occupied by team 1');
+const newFront = advanceFrontOverCell(simUkr.world.front, testCell, 0);
+const occIndexAfter = new OccupiedIndex(newFront, simUkr.map.occupiedClosure);
+const sideAfter = occIndexAfter.contains(cellCenter(testCell[0], testCell[1])) ? 1 : 0;
+assert.equal(sideAfter, 0, 'Cell [1886, 3591] successfully transferred to Ukraine (side = 0)');
+console.log('✓ Illinivka Sector Empty Tile Push Verified: Control transferred and frontline advanced cleanly');
+
+console.log('--- Testing Map-wide Border Capture on All Border Cells ---');
+let totalTested = 0;
+let totalPassed = 0;
+let totalFailed = 0;
+
+for (const g of simUkr.world.units) {
+  if (g.team !== 1) continue;
+  const [cx, cy] = cellOf(g.pos);
+  const hasUaBorder = [[0, 1], [0, -1], [1, 0], [-1, 0]].some(([dx, dy]) => simUkr.side(cellCenter(cx + dx, cy + dy)) === 0);
+  if (!hasUaBorder) continue;
+
+  totalTested++;
+  const updatedFront = advanceFrontOverCell(simUkr.world.front, [cx, cy], 0);
+  const occ = new OccupiedIndex(updatedFront, simUkr.map.occupiedClosure);
+  const sAfter = occ.contains(cellCenter(cx, cy)) ? 1 : 0;
+  if (sAfter === 0) {
+    totalPassed++;
+  } else {
+    totalFailed++;
+    if (totalFailed <= 5) {
+      console.log(`Failed at border cell [${cx}, ${cy}]`);
+    }
+  }
+}
+console.log(`Map-wide border capture test: ${totalPassed} passed, ${totalFailed} failed out of ${totalTested}`);
+assert.equal(totalFailed, 0, 'All border cells must successfully transfer to team 0 after advance');
+
 console.log('All Tile Frontline tests passed successfully!');
+
