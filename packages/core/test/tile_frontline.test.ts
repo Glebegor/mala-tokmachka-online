@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { Sim, cellOf, cellCenter, isAdjacentCell, distKm, OccupiedIndex, type Unit, type LngLat } from '../src';
+import { Sim, cellOf, cellCenter, cellKey, normalAt, offsetKm, isAdjacentCell, distKm, kmPerDegLng, OccupiedIndex, type Unit, type LngLat } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -22,6 +22,68 @@ for (let i = 0; i < simUkr.world.front.length - 2; i++) {
   }
 }
 console.log(`Ukraine map initial frontline length: ${simUkr.world.front.length}, spurs (A->B->A): ${ukrSpurs}`);
+const ukrUaGarrisons = simUkr.world.units.filter((u) => u.team === 0 && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry'));
+const ukrRuGarrisons = simUkr.world.units.filter((u) => u.team === 1 && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry'));
+console.log(`Ukraine map initial garrisons: ${ukrUaGarrisons.length} UA, ${ukrRuGarrisons.length} RU`);
+
+const uaGarrisonCells = new Set(ukrUaGarrisons.map((u) => cellKey(...cellOf(u.pos))));
+const ruGarrisonCells = new Set(ukrRuGarrisons.map((u) => cellKey(...cellOf(u.pos))));
+
+const hasOrthogonalEnemy = (cx: number, cy: number, oppTeam: 0 | 1) => {
+  const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+  return dirs.some(([dx, dy]) => simUkr.side(cellCenter(cx + dx, cy + dy)) === oppTeam);
+};
+
+let missingUa = 0;
+let missingRu = 0;
+
+for (let i = 0; i < simUkr.world.front.length - 1; i++) {
+  const a = simUkr.world.front[i];
+  const b = simUkr.world.front[i + 1];
+  const midLat = (a.lat + b.lat) / 2;
+  const kx = kmPerDegLng(midLat);
+  const tx = (b.lng - a.lng) * kx;
+  const ty = (b.lat - a.lat) * 111.32;
+  const segLenKm = Math.hypot(tx, ty);
+  if (segLenKm < 0.01) continue;
+
+  const nx = ty / segLenKm;
+  const ny = -tx / segLenKm;
+
+  const numSteps = Math.max(1, Math.round(segLenKm / 1.35));
+  for (let s = 0; s < numSteps; s++) {
+    const t = (s + 0.5) / numSteps;
+    const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
+    if (pt[0] < 35.35 && pt[1] < 47.7) continue; // Dnipro
+
+    const uaPos = cellCenter(...cellOf(offsetKm(pt, -nx * 0.75, -ny * 0.75)));
+    const ruPos = cellCenter(...cellOf(offsetKm(pt, nx * 0.75, ny * 0.75)));
+    const [uax, uay] = cellOf(uaPos);
+    const [rux, ruy] = cellOf(ruPos);
+
+    if (
+      simUkr.side(uaPos) === 0 &&
+      simUkr.isPlayableGround(uaPos) &&
+      simUkr.terrainAt(uaPos).id !== 'water' &&
+      !simUkr.foreign(uaPos) &&
+      hasOrthogonalEnemy(uax, uay, 1) &&
+      !uaGarrisonCells.has(cellKey(uax, uay))
+    ) {
+      missingUa++;
+    }
+    if (
+      simUkr.side(ruPos) === 1 &&
+      simUkr.isPlayableGround(ruPos) &&
+      simUkr.terrainAt(ruPos).id !== 'water' &&
+      !simUkr.foreign(ruPos) &&
+      hasOrthogonalEnemy(rux, ruy, 0) &&
+      !ruGarrisonCells.has(cellKey(rux, ruy))
+    ) {
+      missingRu++;
+    }
+  }
+}
+console.log(`Front edges missing garrisons: ${missingUa} UA tiles, ${missingRu} RU tiles!`);
 
 console.log('--- Testing Tile Frontline & Troop Movement (HoI Style, 60s Assault) ---');
 
@@ -199,6 +261,16 @@ if (adjEnemyCell2) {
   ruDefender2.pos = [center2[0], center2[1]];
   ruDefender2.ammo = 100;
   ruDefender2.squadSize = 100; // 100 defenders
+  ruDefender2.hp = 5000;
+  ruDefender2.strength = 1;
+
+  // Ensure the tile directly behind defender is friendly AND empty (no troops)
+  const rearDx = adjEnemyCell2[0] - curCell2[0];
+  const rearDy = adjEnemyCell2[1] - curCell2[1];
+  const rearTile2: [number, number] = [adjEnemyCell2[0] + rearDx, adjEnemyCell2[1] + rearDy];
+  sim.tileMap.setOwner(rearTile2[0], rearTile2[1], 1);
+  // Clear any existing units from the rear tile so it is guaranteed empty
+  sim.world.units = sim.world.units.filter((u) => u.id === ruDefender2.id || u.id === gUA.id || cellOf(u.pos)[0] !== rearTile2[0] || cellOf(u.pos)[1] !== rearTile2[1]);
 
   gUA.squadSize = 300; // 300 attackers (superior force)
   gUA.ammo = 100;
@@ -216,7 +288,14 @@ if (adjEnemyCell2) {
 
   assert.equal(sim.side(center2), 0, 'Tile captured by superior UA garrison');
   assert.ok(distKm(gUA.pos, center2) < 0.05, 'Garrison reached target center');
-  console.log('✓ Breakthrough via Force Superiority: Garrison takes tile after 60s march when myTroops > oppTroops');
+
+  // Verify: Defender retreated into empty rear tile, DID NOT STACK (strength remains 1), and received 5m attack debuff!
+  assert.ok(ruDefender2.hp > 0, 'Defender survived and retreated to empty rear tile (not merged/deleted)');
+  const defCell = cellOf(ruDefender2.pos);
+  assert.deepEqual(defCell, rearTile2, 'Defender retreated directly behind into empty rear cell');
+  assert.equal(ruDefender2.strength ?? 1, 1, 'Defender did not stack (strength remains 1)');
+  assert.ok(ruDefender2.attackDebuffUntil !== undefined && ruDefender2.attackDebuffUntil > sim.world.time + 290, 'Retreating defender received 5-minute attack debuff');
+  console.log('✓ Breakthrough via Force Superiority: Garrison takes tile, defender retreats to empty rear cell without stacking (strength 1, 5m debuff)');
 }
 
 // 5. Test Friendly Tile Movement (Relocation)

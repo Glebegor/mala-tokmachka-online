@@ -201,77 +201,67 @@ export class Sim {
   private spawnFrontlineGarrisons(w: World) {
     if (!w.front || w.front.length < 2) return;
     const front = w.front;
-    const cum: number[] = [0];
-    for (let i = 1; i < front.length; i++) {
-      cum.push(cum[i - 1] + distKm([front[i - 1].lng, front[i - 1].lat], [front[i].lng, front[i].lat]));
-    }
-    const totalDist = cum[cum.length - 1];
-    if (totalDist < 2) return;
-
-    const stepKm = 1.35;
-    let seg = 0;
     const uaCells = new Set<number>();
     const ruCells = new Set<number>();
 
-    for (let s = 0.65; s < totalDist; s += stepKm) {
-      while (seg < front.length - 2 && cum[seg + 1] < s) seg++;
-      const a = front[seg];
-      const b = front[seg + 1];
-      const segLen = cum[seg + 1] - cum[seg];
-      const t = segLen > 0 ? (s - cum[seg]) / segLen : 0;
-      const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
+    const hasOrthogonalEnemy = (cx: number, cy: number, oppTeam: Team) => {
+      const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
+      return dirs.some(([dx, dy]) => this.side(cellCenter(cx + dx, cy + dy)) === oppTeam);
+    };
 
-      // Exclude Dnipro river / reservoir front line (from Black Sea up to Stepnohirsk at ~35.35°E)
-      const isDnipro = pt[0] < 35.35 && pt[1] < 47.7;
-      if (isDnipro) continue;
-
-      const [nx, ny] = normalAt(front, seg);
-      const offset = 0.75;
-
-      const hasOrthogonalEnemy = (cx: number, cy: number, oppTeam: Team) => {
-        const dirs: [number, number][] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
-        return dirs.some(([dx, dy]) => this.side(cellCenter(cx + dx, cy + dy)) === oppTeam);
-      };
-
-      // Ukraine (team 0)
-      const uaRawPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
-      const [uax, uay] = cellOf(uaRawPos);
-      const uaKey = cellKey(uax, uay);
-      const uaPos = cellCenter(uax, uay);
-      let uaUnit: Unit | null = null;
+    const trySpawnGarrison = (team: Team, rawPos: LngLat, cellSet: Set<number>): Unit | null => {
+      const [cx, cy] = cellOf(rawPos);
+      const key = cellKey(cx, cy);
+      if (cellSet.has(key)) return null;
+      const pos = cellCenter(cx, cy);
       if (
-        !uaCells.has(uaKey) &&
-        this.isPlayableGround(uaPos) &&
-        this.terrainAt(uaPos).id !== 'water' &&
-        !this.foreign(uaPos) &&
-        this.side(uaPos) === 0 &&
-        hasOrthogonalEnemy(uax, uay, 1)
+        this.isPlayableGround(pos) &&
+        this.terrainAt(pos).id !== 'water' &&
+        !this.foreign(pos) &&
+        this.side(pos) === team &&
+        hasOrthogonalEnemy(cx, cy, (1 - team) as Team)
       ) {
-        uaCells.add(uaKey);
-        uaUnit = this.spawnFrontlineUnit(w, 0, uaPos);
+        cellSet.add(key);
+        return this.spawnFrontlineUnit(w, team, pos);
       }
+      return null;
+    };
 
-      // Russia (team 1)
-      const ruRawPos: LngLat = offsetKm(pt, nx * offset, ny * offset);
-      const [rux, ruy] = cellOf(ruRawPos);
-      const ruKey = cellKey(rux, ruy);
-      const ruPos = cellCenter(rux, ruy);
-      let ruUnit: Unit | null = null;
-      if (
-        !ruCells.has(ruKey) &&
-        this.isPlayableGround(ruPos) &&
-        this.terrainAt(ruPos).id !== 'water' &&
-        !this.foreign(ruPos) &&
-        this.side(ruPos) === 1 &&
-        hasOrthogonalEnemy(rux, ruy, 0)
-      ) {
-        ruCells.add(ruKey);
-        ruUnit = this.spawnFrontlineUnit(w, 1, ruPos);
-      }
+    for (let i = 0; i < front.length - 1; i++) {
+      const a = front[i];
+      const b = front[i + 1];
+      const midLat = (a.lat + b.lat) / 2;
+      const kx = kmPerDegLng(midLat);
+      const tx = (b.lng - a.lng) * kx;
+      const ty = (b.lat - a.lat) * 111.32;
+      const segLenKm = Math.hypot(tx, ty);
+      if (segLenKm < 0.01) continue;
 
-      if (uaUnit && ruUnit) {
-        uaUnit.pairId = ruUnit.id;
-        ruUnit.pairId = uaUnit.id;
+      // Exact perpendicular normal of this segment pointing to the right (Team 1 side):
+      const nx = ty / segLenKm;
+      const ny = -tx / segLenKm;
+      const offset = 0.75; // half tile width / height
+
+      const numSteps = Math.max(1, Math.round(segLenKm / 1.35));
+      for (let s = 0; s < numSteps; s++) {
+        const t = (s + 0.5) / numSteps;
+        const pt: LngLat = [a.lng + (b.lng - a.lng) * t, a.lat + (b.lat - a.lat) * t];
+
+        // Exclude Dnipro river / reservoir front line (from Black Sea up to Stepnohirsk at ~35.35°E)
+        if (pt[0] < 35.35 && pt[1] < 47.7) continue;
+
+        // Team 0 (left: -nx, -ny)
+        const uaRawPos: LngLat = offsetKm(pt, -nx * offset, -ny * offset);
+        const uaUnit = trySpawnGarrison(0, uaRawPos, uaCells);
+
+        // Team 1 (right: nx, ny)
+        const ruRawPos: LngLat = offsetKm(pt, nx * offset, ny * offset);
+        const ruUnit = trySpawnGarrison(1, ruRawPos, ruCells);
+
+        if (uaUnit && ruUnit) {
+          uaUnit.pairId = ruUnit.id;
+          ruUnit.pairId = uaUnit.id;
+        }
       }
     }
   }
@@ -1529,8 +1519,61 @@ export class Sim {
     }
   }
 
-  private findRetreatTile(cell: [number, number], team: Team): [number, number] | null {
-    const neighbors: [number, number][] = [
+  private findRetreatTile(
+    cell: [number, number],
+    team: Team,
+    fromCell?: [number, number]
+  ): [number, number] | null {
+    const isValidFriendly = (cx: number, cy: number) => {
+      const pos = cellCenter(cx, cy);
+      return (
+        this.side(pos) === team &&
+        this.isPlayableGround(pos) &&
+        this.terrainAt(pos).id !== 'water' &&
+        !this.foreign(pos)
+      );
+    };
+
+    const hasFriendlyTroops = (cx: number, cy: number) =>
+      this.world.units.some(
+        (u) => u.team === team && u.hp > 0 && !u.embarkedIn && cellOf(u.pos)[0] === cx && cellOf(u.pos)[1] === cy
+      );
+
+    if (fromCell) {
+      const dx = cell[0] - fromCell[0];
+      const dy = cell[1] - fromCell[1];
+      const behind: [number, number] = [cell[0] + dx, cell[1] + dy];
+
+      // 1. If cell directly behind is friendly, retreat there!
+      // (If it's empty, unit occupies it without stacking; if someone is already there, unit stacks with them)
+      if (isValidFriendly(behind[0], behind[1])) {
+        return behind;
+      }
+
+      // If directly behind is blocked, check flanking / diagonal backward escape tiles
+      const candidates: [number, number][] = [
+        [cell[0] + dx - dy, cell[1] + dy - dx],
+        [cell[0] + dx + dy, cell[1] + dy + dx],
+        [cell[0] - dy, cell[1] - dx],
+        [cell[0] + dy, cell[1] + dx],
+      ];
+
+      // Prefer empty friendly tiles first (so unit retreats without stacking)
+      for (const [cx, cy] of candidates) {
+        if (isValidFriendly(cx, cy) && !hasFriendlyTroops(cx, cy)) {
+          return [cx, cy];
+        }
+      }
+      // Then friendly tiles with friendly troops (stacking)
+      for (const [cx, cy] of candidates) {
+        if (isValidFriendly(cx, cy)) {
+          return [cx, cy];
+        }
+      }
+    }
+
+    // Fallback: any adjacent friendly tile (excluding fromCell if specified)
+    const allNeighbors: [number, number][] = [
       [cell[0], cell[1] - 1],
       [cell[0], cell[1] + 1],
       [cell[0] - 1, cell[1]],
@@ -1540,21 +1583,21 @@ export class Sim {
       [cell[0] - 1, cell[1] + 1],
       [cell[0] + 1, cell[1] + 1],
     ];
-    // First priority: adjacent friendly tile that already has friendly troops to merge with
+    const neighbors = allNeighbors.filter(([nx, ny]) => !fromCell || nx !== fromCell[0] || ny !== fromCell[1]);
+
+    // First check empty friendly tiles
     for (const [nx, ny] of neighbors) {
-      if (this.side(cellCenter(nx, ny)) === team) {
-        const hasFriend = this.world.units.some(
-          (u) => u.team === team && u.hp > 0 && !u.embarkedIn && cellOf(u.pos)[0] === nx && cellOf(u.pos)[1] === ny
-        );
-        if (hasFriend) return [nx, ny];
-      }
-    }
-    // Second priority: any friendly tile
-    for (const [nx, ny] of neighbors) {
-      if (this.side(cellCenter(nx, ny)) === team) {
+      if (isValidFriendly(nx, ny) && !hasFriendlyTroops(nx, ny)) {
         return [nx, ny];
       }
     }
+    // Then occupied friendly tiles
+    for (const [nx, ny] of neighbors) {
+      if (isValidFriendly(nx, ny)) {
+        return [nx, ny];
+      }
+    }
+
     return null;
   }
 
@@ -1986,7 +2029,8 @@ export class Sim {
           }
 
           if (opp) {
-            const retreatTile = this.findRetreatTile(tgtCell, opp.team);
+            const fromCell = cellOf(a.startPos);
+            const retreatTile = this.findRetreatTile(tgtCell, opp.team, fromCell);
             if (retreatTile) {
               const friend = w.units.find(
                 (x) => x.team === opp.team && x.hp > 0 && !x.embarkedIn && cellOf(x.pos)[0] === retreatTile[0] && cellOf(x.pos)[1] === retreatTile[1] && x.id !== opp.id
