@@ -63,6 +63,8 @@ export type Command =
   /** Purchase an additional dedicated logistics truck directly in a building (mine, steel mill, ammo factory). */
   | { type: 'buyLogisticsTruck'; building: number }
   /** Select destination buildings to service for resource deliveries. */
-  | { type: 'setServiceTargets'; building: number; targets: number[] };
+  | { type: 'setServiceTargets'; building: number; targets: number[] }
+  /** Order a frontline garrison to advance/attack into an adjacent tile (HoI mechanics). */
+  | { type: 'attackTile'; unitId: number; targetCell: [number, number] };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

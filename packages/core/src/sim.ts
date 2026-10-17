@@ -9,6 +9,7 @@ import { generateMatchDeposits, inDeposit, type ResourceDeposit } from './deposi
 import { generateCityHouses } from './housing';
 import { LIBERATED_CELL, type Building, type FrontNode, type FrontPost, type HaulStop, type LiberatedCell, type Player, type Pocket, type Shot, type SlotInit, type Team, type Unit, type UnitStatus, type Waypoint, type World } from './state';
 import type { CapturePointDef } from './defs';
+import { TileMap, cellOf, cellCenter, cellKey, isAdjacentCell, snapFrontToTileEdges, advanceFrontOverCell } from './tiles';
 
 export interface Hooks {
   emit(event: string, data: Record<string, unknown>): void;
@@ -103,6 +104,7 @@ export class Sim {
   shots: Shot[] = [];
   hadEverPlacedHq = new Set<Team>();
   readonly deposits: ResourceDeposit[];
+  readonly tileMap = new TileMap();
 
   constructor(
     readonly ruleset: Ruleset,
@@ -160,6 +162,7 @@ export class Sim {
     const players: Player[] = slots.map((s) => ({ ...s, res: { ...startRes }, share: true }));
     const front = buildFront(this.map.front, r.frontNodeSpacingKm);
     const initialFront = front.map((n) => ({ ...n }));
+    this.tileMap.initFromMap(this.map.bounds, initialFront, this.map.occupiedClosure);
     const w: World = {
       tick: 0,
       time: 0,
@@ -711,6 +714,10 @@ export class Sim {
   side(p: LngLat): Team {
     const pocket = this.world.pockets.length ? pocketAt(this.world.pockets, p) : null;
     if (pocket) return pocket.team;
+    if (this.tileMap) {
+      const tileOwner = this.tileMap.ownerAt(p);
+      if (tileOwner !== undefined) return tileOwner;
+    }
     // the same occupied area the map paints; holes in it (the Sea of Azov) fall back to the nearest stretch of front
     if (this.inHole(p)) return sideOf(this.world.front, p);
     if (!this.map.occupiedClosure.length) return sideOf(this.world.front, p);
@@ -1028,6 +1035,106 @@ export class Sim {
           }
         }
         return ok();
+      }
+      case 'attackTile': {
+        const u = w.units.find((x) => x.id === cmd.unitId && x.team === p.team && x.hp > 0);
+        if (!u) return fail('target garrison not found');
+        const isGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_') || u.frontPost !== undefined;
+        if (!isGarrison) return fail('attackTile is only available for frontline garrisons');
+
+        const curCell = cellOf(u.pos);
+        const tgtCell = cmd.targetCell;
+
+        if (!isAdjacentCell(curCell, tgtCell, true)) {
+          return fail('Можно наступать только на соседний тайл');
+        }
+
+        const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
+        const tgtOwner = this.side(tgtCenter);
+
+        // Friendly tile movement (redeploy garrison)
+        if (tgtOwner === u.team) {
+          const tgtPos = cellCenter(tgtCell[0], tgtCell[1]);
+          u.pos = tgtPos;
+          const post = w.posts?.find((fp) => fp.id === u.frontPost || fp.garrison.includes(u.id));
+          if (post) post.pos = tgtPos;
+          return ok();
+        }
+
+        // Offense against enemy tile:
+        // Find defending enemy unit in that target cell
+        const opp = w.units.find((e) => e.team !== u.team && e.hp > 0 && !e.embarkedIn && cellOf(e.pos)[0] === tgtCell[0] && cellOf(e.pos)[1] === tgtCell[1]);
+
+        const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
+        const myTroops = u.squadSize ?? Math.round(u.hp / 50);
+        const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
+
+        // Condition: enemy has fewer troops OR enemy ran out of ammo (or tile is empty)
+        const canAdvance = !opp || oppAmmo <= 0 || myTroops > oppTroops;
+
+        if (canAdvance) {
+          // Attack successful! Breakthrough into target tile!
+          if (opp) {
+            // Defeated enemy retreats to an adjacent friendly tile
+            const retreatTile = this.findRetreatTile(tgtCell, opp.team);
+            if (retreatTile) {
+              opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
+              opp.ammo = Math.max(0, (opp.ammo ?? 0) - 30);
+              opp.morale = Math.max(10, (opp.morale ?? 100) - 40);
+              opp.hp = Math.max(500, opp.hp - 2000);
+            } else {
+              // Encircled: destroyed
+              opp.hp = 0;
+            }
+            // Attacker costs
+            u.ammo = Math.max(0, (u.ammo ?? 500) - 20);
+            u.hp = Math.max(500, u.hp - 1000);
+
+            // Add shot effect
+            this.shots.push({ def: u.def, team: u.team, from: u.pos, to: opp.pos });
+          }
+
+          // Advance attacker into target tile
+          const tgtPos = cellCenter(tgtCell[0], tgtCell[1]);
+          u.pos = tgtPos;
+          const post = w.posts?.find((fp) => fp.id === u.frontPost || fp.garrison.includes(u.id));
+          if (post) post.pos = tgtPos;
+
+          // Flip tile ownership
+          this.tileMap.setOwner(tgtCell[0], tgtCell[1], u.team);
+
+          // Update frontline polyline
+          w.front = advanceFrontOverCell(w.front, tgtCell, u.team);
+          this.occ.tick = -1;
+
+          // Check if any capture point is in this tile
+          for (const cp of w.points) {
+            const mcp = this.map.capturePoints.find((x) => x.id === cp.id);
+            if (mcp) {
+              const cpCell = cellOf(mcp.pos);
+              if (cpCell[0] === tgtCell[0] && cpCell[1] === tgtCell[1]) {
+                cp.owner = u.team;
+              }
+            }
+          }
+
+          // Emit notification
+          this.hooks?.emit('toast', { text: 'Прорыв линии фронта! Тайл взят.' });
+          return ok();
+        } else {
+          // Attack repelled! Stalemate!
+          // Skirmish exchange
+          u.ammo = Math.max(0, (u.ammo ?? 500) - 15);
+          u.hp = Math.max(500, u.hp - 1500);
+          if (opp) {
+            opp.ammo = Math.max(0, (opp.ammo ?? 500) - 15);
+            opp.hp = Math.max(500, opp.hp - 500);
+            this.shots.push({ def: u.def, team: u.team, from: u.pos, to: opp.pos });
+            this.shots.push({ def: opp.def, team: opp.team, from: opp.pos, to: u.pos });
+          }
+          this.hooks?.emit('toast', { text: 'Атака отбита: у противника превосходство в силах и есть БК!' });
+          return fail('Атака отбита: у противника превосходство в силах и есть боеприпасы');
+        }
       }
       case 'rally': {
         const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
@@ -1417,6 +1524,25 @@ export class Sim {
         return ok();
       }
     }
+  }
+
+  private findRetreatTile(cell: [number, number], team: Team): [number, number] | null {
+    const neighbors: [number, number][] = [
+      [cell[0], cell[1] - 1],
+      [cell[0], cell[1] + 1],
+      [cell[0] - 1, cell[1]],
+      [cell[0] + 1, cell[1]],
+      [cell[0] - 1, cell[1] - 1],
+      [cell[0] + 1, cell[1] - 1],
+      [cell[0] - 1, cell[1] + 1],
+      [cell[0] + 1, cell[1] + 1],
+    ];
+    for (const [nx, ny] of neighbors) {
+      if (this.side(cellCenter(nx, ny)) === team) {
+        return [nx, ny];
+      }
+    }
+    return null;
   }
 
   // ---------- movement planning ----------

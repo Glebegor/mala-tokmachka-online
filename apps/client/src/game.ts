@@ -2,6 +2,7 @@ import maplibregl, { type GeoJSONSource } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
 import {
   DEBUFFS, DEPOSITS, depositsGeoJSON, distKm, distToFrontKm, forbiddenRings, formationSpot, inDeposit, inOccupied, inPolygon, isReconDrone, isStrikeDrone, kmPerDegLng, LIBERATED_CELL, offsetKm, pointInRing, proceduralTerrain, RoadIndex, SPECIAL_ZONES, specialZoneAt, TerrainGrid,
+  cellOf, cellCenter, isAdjacentCell,
   type BuildingDef, type BuildingView, type ClientMsg, type MarkKind, type Command, type FrontNode, type InitMsg, type LngLat, type ResourceDeposit, type ServerMsg, type SnapMsg, type UnitDef, type UnitView,
 } from '@sw/core';
 
@@ -1027,10 +1028,35 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     window.addEventListener('mouseup', onBoxUp);
   }
 
-  /** Right-click dispatcher: reinforces frontline garrison when clicked on one, otherwise moves selection. */
+  /** Right-click dispatcher: reinforces frontline garrison when clicked on one, moves selection, or orders garrison tile attacks/moves. */
   function dispatchRightClick(to: LngLat, screenPt: { x: number; y: number }, ev: { shiftKey: boolean; altKey: boolean }, facing?: number) {
     if (!snap || !selUnits.size) return;
     const s = snap;
+    const myTeam = init?.team;
+
+    // Check if player selected a friendly frontline garrison to command
+    const myFrontGarrison = [...selUnits]
+      .map((id) => s.units.find((x) => x.id === id))
+      .find((u) => u && u.team === myTeam && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry'));
+
+    if (myFrontGarrison) {
+      const curCell = cellOf(posOf(myFrontGarrison));
+      const tgtCell = cellOf(to);
+      if (curCell[0] === tgtCell[0] && curCell[1] === tgtCell[1]) {
+        toast('Гарнизон уже удерживает этот тайл');
+        return;
+      }
+      if (!isAdjacentCell(curCell, tgtCell, true)) {
+        toast('Можно наступать или перемещаться только на соседний тайл', true);
+        return;
+      }
+      const tgtCenter = cellCenter(tgtCell[0], tgtCell[1]);
+      const isFriendly = sideAt(tgtCenter) === myTeam;
+      send({ type: 'attackTile', unitId: myFrontGarrison.id, targetCell: tgtCell });
+      toast(isFriendly ? 'Передислокация гарнизона на рубеже...' : 'Приказ гарнизону: штурм тайла!');
+      return;
+    }
+
     const movable = [...selUnits].filter((id) => {
       const u = s.units.find((x) => x.id === id);
       return u && u.owner === me && !defU.get(u.def)?.stationary && !u.owner.startsWith('__front_');
@@ -1038,7 +1064,6 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (!movable.length) return;
 
     // If it's a simple right click (not dragging a formation facing arrow):
-    const myTeam = init?.team;
     if (facing === undefined && myTeam !== undefined) {
       const layers = ['units-loose', 'units-grouped', 'formations'].filter((l) => map.getLayer(l));
       const features = map.queryRenderedFeatures([[screenPt.x - 16, screenPt.y - 16], [screenPt.x + 16, screenPt.y + 16]], { layers });
@@ -2290,10 +2315,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
             ? `Отступление: ${u.retreatPath.length} точ.`
             : 'Отступление: в тыл';
 
+          const curCell = cellOf(posOf(u));
           side.append(
             h('div', { class: 'row' }, unitIcon(d, u.rank), h('div', {}, h('b', {}, 'Пехотный рубеж'), h('div', { class: 'muted' }, `Численность: ${squadCount} бойцов`))),
-            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Сила: ${u.strength ?? 1} · Мораль: ${u.morale ?? 100}% · БК: ${Math.round(u.ammo ?? 100)} / ${(u.strength ?? 1) * 100}`),
+            h('div', { class: 'stat', style: { fontWeight: '600', color: '#e2e8f0', margin: '8px 0' } }, `Тайл [${curCell[0]}, ${curCell[1]}] · Сила: ${u.strength ?? 1} · БК: ${Math.round(u.ammo ?? 100)} / ${(u.strength ?? 1) * 100}`),
             h('div', { class: 'stat', style: { color: statusColor, marginTop: '4px' } }, statusText),
+            h('div', { style: { background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '4px', padding: '6px 8px', marginTop: '8px', fontSize: '11px', color: '#fca5a5', lineHeight: '1.4' } },
+              '⚔️ Штурм по тайлам: ПКМ по соседнему вражескому тайлу (красный) для атаки. Наступление успешно при численном преимуществе или истощении БК противника.'
+            ),
             h('div', { class: 'stat', style: { fontSize: '11px', color: '#94a3b8', marginTop: '6px' } }, `${advInfo} · ${retInfo}`),
             h('div', { style: { display: 'flex', gap: '4px', marginTop: '6px' } }, advBtn, retBtn, clearBtn),
           );
@@ -2605,11 +2634,70 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
       rings.push({ type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: circle(posOf(u), d.minRange, 48) } });
       if (u.bombardTarget) rings.push({ type: 'Feature', properties: { color: '#ef4444' }, geometry: { type: 'LineString', coordinates: circle(u.bombardTarget, 1, 32) } });
     }
-    // planned routes for frontline garrisons (advance = green, retreat = orange)
+    // planned routes for frontline garrisons (advance = green, retreat = orange) & tile grid
     for (const u of snap.units) {
       if (!selUnits.has(u.id)) continue;
       const isFrontGarrison = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
       if (!isFrontGarrison) continue;
+
+      if (u.team === myTeam) {
+        const curCell = cellOf(posOf(u));
+        const tilePoly = (ix: number, iy: number): LngLat[] => {
+          const x0 = ix * LIBERATED_CELL.lng;
+          const x1 = (ix + 1) * LIBERATED_CELL.lng;
+          const y0 = iy * LIBERATED_CELL.lat;
+          const y1 = (iy + 1) * LIBERATED_CELL.lat;
+          return [[x0, y0], [x1, y0], [x1, y1], [x0, y1], [x0, y0]];
+        };
+
+        // Current garrison tile (Green outline & fill)
+        rings.push({
+          type: 'Feature',
+          properties: { color: '#22c55e', sel: true, w: 2.5, o: 0.9 },
+          geometry: { type: 'Polygon', coordinates: [tilePoly(curCell[0], curCell[1])] },
+        });
+
+        // 8 adjacent neighbor tiles (Red for enemy assault targets, Blue for friendly repositioning)
+        for (let dx = -1; dx <= 1; dx++) {
+          for (let dy = -1; dy <= 1; dy++) {
+            if (dx === 0 && dy === 0) continue;
+            const nx = curCell[0] + dx;
+            const ny = curCell[1] + dy;
+            const nCenter = cellCenter(nx, ny);
+            const nSide = sideAt(nCenter);
+
+            if (nSide !== myTeam) {
+              // Enemy tile: target for assault
+              const opp = snap.units.find(
+                (e) => e.team !== myTeam && !e.embarkedIn && cellOf(posOf(e))[0] === nx && cellOf(posOf(e))[1] === ny,
+              );
+              const myTroops = u.squadSize ?? Math.round(u.hp / 50);
+              const oppTroops = opp ? (opp.squadSize ?? Math.round(opp.hp / 50)) : 0;
+              const oppAmmo = opp ? (opp.ammo ?? 0) : 0;
+              const canTake = !opp || oppAmmo <= 0 || myTroops > oppTroops;
+
+              rings.push({
+                type: 'Feature',
+                properties: {
+                  color: canTake ? '#ef4444' : '#991b1b',
+                  sel: true,
+                  w: canTake ? 2.5 : 1.5,
+                  o: 0.85,
+                },
+                geometry: { type: 'Polygon', coordinates: [tilePoly(nx, ny)] },
+              });
+            } else {
+              // Friendly tile: repositioning / movement
+              rings.push({
+                type: 'Feature',
+                properties: { color: '#3b82f6', sel: false, w: 1.5, o: 0.5 },
+                geometry: { type: 'Polygon', coordinates: [tilePoly(nx, ny)] },
+              });
+            }
+          }
+        }
+      }
+
       if (u.advancePath && u.advancePath.length > 0) {
         rings.push({
           type: 'Feature',
