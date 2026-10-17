@@ -1,7 +1,7 @@
 import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import { loadRuleset } from '../../../services/game/src/infrastructure/modLoader';
-import { Sim, cellOf, cellCenter, isAdjacentCell, distKm, type Unit, type LngLat } from '../src';
+import { Sim, cellOf, cellCenter, isAdjacentCell, distKm, OccupiedIndex, type Unit, type LngLat } from '../src';
 
 const rs = await loadRuleset(fileURLToPath(new URL('../../../mods', import.meta.url)));
 
@@ -9,6 +9,19 @@ const sim = new Sim(rs, 'zaporizhzhia', [
   { id: 'player1', name: 'Player 1', team: 0, bot: false },
   { id: 'player2', name: 'Player 2', team: 1, bot: false },
 ]);
+const simUkr = new Sim(rs, 'ukraine', [
+  { id: 'player1', name: 'Player 1', team: 0, bot: false },
+  { id: 'player2', name: 'Player 2', team: 1, bot: false },
+]);
+let ukrSpurs = 0;
+for (let i = 0; i < simUkr.world.front.length - 2; i++) {
+  const p0 = simUkr.world.front[i];
+  const p2 = simUkr.world.front[i + 2];
+  if (Math.abs(p0.lng - p2.lng) < 1e-5 && Math.abs(p0.lat - p2.lat) < 1e-5) {
+    ukrSpurs++;
+  }
+}
+console.log(`Ukraine map initial frontline length: ${simUkr.world.front.length}, spurs (A->B->A): ${ukrSpurs}`);
 
 console.log('--- Testing Tile Frontline & Troop Movement (HoI Style, 60s Assault) ---');
 
@@ -39,7 +52,16 @@ assert.equal(uaDiagonalOnly.length, 0, 'No UA diagonal corner garrisons exist');
 assert.equal(ruDiagonalOnly.length, 0, 'No RU diagonal corner garrisons exist');
 console.log(`✓ Frontline Garrison Deployment Verified: ${uaGarrisons.length} UA, ${ruGarrisons.length} RU (0 diagonal-only corner garrisons, 100 soldiers, 5000 HP, 100 Ammo)`);
 
-// Find an opposing pair of garrisons
+// Check spurs in initial sim.world.front
+let spurCount = 0;
+for (let i = 0; i < sim.world.front.length - 2; i++) {
+  const p0 = sim.world.front[i];
+  const p2 = sim.world.front[i + 2];
+  if (Math.abs(p0.lng - p2.lng) < 1e-5 && Math.abs(p0.lat - p2.lat) < 1e-5) {
+    spurCount++;
+  }
+}
+console.log(`Initial frontline length: ${sim.world.front.length}, spurs (A->B->A): ${spurCount}`);
 const gUA = uaGarrisons[0];
 const curUaCell = cellOf(gUA.pos);
 console.log(`UA garrison ID ${gUA.id} at tile [${curUaCell[0]}, ${curUaCell[1]}], pos:`, gUA.pos);
@@ -137,12 +159,16 @@ for (let i = 0; i < 60; i++) sim.step(1.0);
 assert.equal(gUA.assault, undefined, 'Assault completed');
 assert.equal(sim.side(candCenter), 0, 'Target tile flipped to Ukrainian control');
 assert.ok(distKm(gUA.pos, candCenter) < 0.05, 'Attacking garrison reached target tile center');
+// Check if world.front itself actually moved over the captured cell:
+const occIndex = new OccupiedIndex(sim.world.front, sim.map.occupiedClosure);
+const frontSide = occIndex.contains(candCenter) ? 1 : 0;
+console.log(`Target cell side in tileMap: ${sim.side(candCenter)}, in world.front polygon: ${frontSide}`);
 
 // Check that retreating enemy merged with rear friendly garrison in retreat tile
 assert.equal(defendingRu.hp, 0, 'Defeated enemy garrison merged into friendly unit (token cleaned up)');
 assert.ok((rearFriend.strength ?? 1) >= 2, 'Rear garrison gained strength from retreating squad (stacked)');
 assert.ok((rearFriend.squadSize ?? 100) >= 200, 'Rear garrison headcount increased from retreating squad (stacked)');
-assert.ok(rearFriend.attackDebuffUntil !== undefined && rearFriend.attackDebuffUntil > sim.world.time + 100, 'Rear unit received 2-minute attack debuff');
+assert.ok(rearFriend.attackDebuffUntil !== undefined && rearFriend.attackDebuffUntil > sim.world.time + 290, 'Rear unit received 5-minute attack debuff');
 
 // Test that debuffed unit CANNOT conduct attacks
 const debuffedAttack = sim.apply('player2', {
@@ -150,8 +176,8 @@ const debuffedAttack = sim.apply('player2', {
   unitId: rearFriend.id,
   targetCell: adjEnemyCell,
 });
-assert.equal(debuffedAttack.ok, false, 'Debuffed unit cannot conduct attacks for 2 minutes');
-console.log('✓ Breakthrough, Garrison Merge & 2-Minute Attack Debuff: Retreating troops merge with friends, stack strength/soldiers, and cannot attack for 2 min');
+assert.equal(debuffedAttack.ok, false, 'Debuffed unit cannot conduct attacks for 5 minutes');
+console.log('✓ Breakthrough, Garrison Merge & 5-Minute Attack Debuff: Retreating troops merge with friends, stack strength/soldiers, and cannot attack for 5 min');
 
 // 4. Test Breakthrough Condition B: Attacker has numerical superiority (myTroops > enemyTroops)
 const curCell2 = cellOf(gUA.pos);
@@ -264,5 +290,33 @@ assert.ok(existingGarrison.ammo >= 150, `Existing garrison ammo stacked (~170, a
 const unitsInTile = sim.world.units.filter((u) => u.hp > 0 && cellOf(u.pos)[0] === friendTile[0] && cellOf(u.pos)[1] === friendTile[1]);
 assert.equal(unitsInTile.length, 1, 'Only exactly 1 garrison remains stationed in the tile after stacking');
 console.log('✓ Friendly Garrison Stacking & Merge Verified: Neighboring garrison merged, strength stacked to 2 (200 soldiers), incoming unit disappeared without duplicate tokens');
+
+// 7. Test Garrison Splitting:
+// Splitting existing stacked garrison (strength 2) detaches 1 squad (strength 1, 100 soldiers, 5000 hp)
+assert.equal(existingGarrison.strength, 2, 'Garrison has strength 2 before split');
+const splitRes = sim.apply('player1', {
+  type: 'splitGarrison',
+  unitId: existingGarrison.id,
+});
+assert.equal(splitRes.ok, true, 'splitGarrison command accepted for stacked unit');
+assert.equal(existingGarrison.strength, 1, 'Original garrison strength reduced to 1');
+assert.equal(existingGarrison.squadSize, 100, 'Original garrison soldiers reduced to 100');
+
+// Find the newly spawned detached unit in the tile
+const tileUnitsAfterSplit = sim.world.units.filter((u) => u.hp > 0 && cellOf(u.pos)[0] === friendTile[0] && cellOf(u.pos)[1] === friendTile[1]);
+assert.equal(tileUnitsAfterSplit.length, 2, 'Tile now contains 2 separate garrison units after split');
+const detachedUnit = tileUnitsAfterSplit.find((u) => u.id !== existingGarrison.id)!;
+assert.ok(detachedUnit, 'Detached unit exists');
+assert.equal(detachedUnit.strength, 1, 'Detached unit has strength 1');
+assert.equal(detachedUnit.squadSize, 100, 'Detached unit has 100 soldiers');
+assert.equal(detachedUnit.hp, 5000, 'Detached unit has 5000 HP');
+
+// Test that splitting strength 1 unit fails
+const failSplit = sim.apply('player1', {
+  type: 'splitGarrison',
+  unitId: existingGarrison.id,
+});
+assert.equal(failSplit.ok, false, 'Cannot split garrison with strength 1');
+console.log('✓ Garrison Splitting Verified: Stacked garrison split into 2 separate units (strength 1 each), strength 1 cannot be split');
 
 console.log('All Tile Frontline tests passed successfully!');

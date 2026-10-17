@@ -108,13 +108,46 @@ function inside(p: Pt, r: Pt[]): boolean {
   return c;
 }
 
+export function removePolylineSpurs(pts: Pt[]): Pt[] {
+  let changed = true;
+  let cur = pts;
+  let passes = 0;
+  while (changed && passes < 100) {
+    passes++;
+    changed = false;
+    const next: Pt[] = [];
+    for (let i = 0; i < cur.length; i++) {
+      const p = cur[i];
+      if (next.length >= 1) {
+        const last = next[next.length - 1];
+        if (Math.abs(p[0] - last[0]) < 1e-5 && Math.abs(p[1] - last[1]) < 1e-5) {
+          changed = true;
+          continue;
+        }
+      }
+      if (next.length >= 2) {
+        const prevPrev = next[next.length - 2];
+        if (Math.abs(p[0] - prevPrev[0]) < 1e-5 && Math.abs(p[1] - prevPrev[1]) < 1e-5) {
+          next.pop();
+          changed = true;
+          continue;
+        }
+      }
+      next.push(p);
+    }
+    cur = next;
+  }
+  return cur;
+}
+
 /**
  * Smooth an open polyline (e.g. front line) using Chaikin's corner cutting algorithm.
  * Rounds off sharp 90-degree corners just like the grey and liberated zones.
  */
 export function smoothPolyline(pts: Pt[], iterations = 2): Pt[] {
-  if (pts.length < 3) return pts;
-  let cur = pts;
+  const clean = removePolylineSpurs(pts);
+  if (clean.length < 3) return clean;
+  let cur = clean;
   for (let it = 0; it < iterations; it++) {
     const next: Pt[] = [cur[0]];
     for (let i = 0; i < cur.length - 1; i++) {

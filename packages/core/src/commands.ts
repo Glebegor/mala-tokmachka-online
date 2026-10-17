@@ -65,6 +65,8 @@ export type Command =
   /** Select destination buildings to service for resource deliveries. */
   | { type: 'setServiceTargets'; building: number; targets: number[] }
   /** Order a frontline garrison to advance/attack into an adjacent tile (HoI mechanics). */
-  | { type: 'attackTile'; unitId: number; targetCell: [number, number] };
+  | { type: 'attackTile'; unitId: number; targetCell: [number, number] }
+  /** Split a stacked frontline garrison (strength > 1) to detach 1 squad. */
+  | { type: 'splitGarrison'; unitId: number };
 
 export type CommandResult = { ok: true } | { ok: false; reason: string };

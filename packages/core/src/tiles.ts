@@ -174,6 +174,43 @@ export class TileMap {
 }
 
 /**
+ * Removes dead-end spurs (backtracking edges A -> B -> A), self-intersections, and duplicate points.
+ */
+export function removeSpurs(nodes: FrontNode[]): FrontNode[] {
+  let changed = true;
+  let pts = nodes;
+  let passes = 0;
+  while (changed && passes < 200) {
+    passes++;
+    changed = false;
+    const next: FrontNode[] = [];
+    for (let i = 0; i < pts.length; i++) {
+      const p = pts[i];
+      // Consecutive duplicate point check (A -> A)
+      if (next.length >= 1) {
+        const last = next[next.length - 1];
+        if (Math.abs(p.lng - last.lng) < 1e-5 && Math.abs(p.lat - last.lat) < 1e-5) {
+          changed = true;
+          continue;
+        }
+      }
+      // Dead-end spur check (A -> B -> A)
+      if (next.length >= 2) {
+        const prevPrev = next[next.length - 2];
+        if (Math.abs(p.lng - prevPrev.lng) < 1e-5 && Math.abs(p.lat - prevPrev.lat) < 1e-5) {
+          next.pop(); // Remove B
+          changed = true;
+          continue; // p matches prevPrev, which is already at the end of next
+        }
+      }
+      next.push(p);
+    }
+    pts = next;
+  }
+  return pts;
+}
+
+/**
  * Snaps an authored continuous front line to follow exact orthogonal tile boundaries.
  */
 export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
@@ -195,7 +232,7 @@ export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
       }
     }
   }
-  return out;
+  return removeSpurs(out);
 }
 
 /**
@@ -203,6 +240,7 @@ export function snapFrontToTileEdges(nodes: FrontNode[]): FrontNode[] {
  * Replaces the shared boundary segment with the perimeter path on the opposite side of the cell.
  */
 export function advanceFrontOverCell(front: FrontNode[], cell: [number, number], team: 0 | 1): FrontNode[] {
+  const cleanFront = removeSpurs(front);
   const cw = TILE_CW;
   const ch = TILE_CH;
   const [ix, iy] = cell;
@@ -225,70 +263,89 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
     return corners.findIndex(([cx, cy]) => Math.abs(p.lng - cx) < 1e-4 && Math.abs(p.lat - cy) < 1e-4);
   };
 
-  // Find continuous subsegment in front that lies on the boundary vertices of this cell
-  let firstIdx = -1;
-  let lastIdx = -1;
+  const isAdjacentCorners = (cA: number, cB: number) => {
+    const diff = Math.abs(cA - cB);
+    return diff === 1 || diff === 3;
+  };
 
-  for (let i = 0; i < front.length; i++) {
-    if (cornerIdx(front[i]) !== -1) {
-      if (firstIdx === -1) firstIdx = i;
-      lastIdx = i;
-    } else if (firstIdx !== -1) {
-      break;
-    }
-  }
-
-  const vIn = firstIdx >= 0 ? front[firstIdx] : null;
-  const vOut = lastIdx >= 0 ? front[lastIdx] : null;
-  const inC = vIn ? cornerIdx(vIn) : -1;
-  const outC = vOut ? cornerIdx(vOut) : -1;
-
-  if (inC !== -1 && outC !== -1 && inC !== outC) {
-    // Path CCW: (c + 1) % 4
-    const ccw: [number, number][] = [];
-    for (let c = inC; ; c = (c + 1) % 4) {
-      ccw.push(corners[c]);
-      if (c === outC) break;
-    }
-    // Path CW: (c + 3) % 4
-    const cwP: [number, number][] = [];
-    for (let c = inC; ; c = (c + 3) % 4) {
-      cwP.push(corners[c]);
-      if (c === outC) break;
-    }
-
-    let replacement = ccw;
-    if (lastIdx > firstIdx + 1) {
-      const midC = cornerIdx(front[firstIdx + 1]);
-      if (midC !== -1) {
-        const ccwHasMid = ccw.some(([x, y]) => Math.abs(x - corners[midC][0]) < 1e-4 && Math.abs(y - corners[midC][1]) < 1e-4);
-        replacement = ccwHasMid ? cwP : ccw;
+  // Find longest contiguous run of shared perimeter edges in front
+  let bestStart = -1;
+  let bestEnd = -1;
+  for (let i = 0; i < cleanFront.length - 1; i++) {
+    const cA = cornerIdx(cleanFront[i]);
+    const cB = cornerIdx(cleanFront[i + 1]);
+    if (cA !== -1 && cB !== -1 && isAdjacentCorners(cA, cB)) {
+      let j = i + 1;
+      while (j < cleanFront.length - 1) {
+        const cNext = cornerIdx(cleanFront[j + 1]);
+        if (cNext !== -1 && isAdjacentCorners(cornerIdx(cleanFront[j]), cNext)) {
+          j++;
+        } else {
+          break;
+        }
       }
-    } else {
-      // Single direct edge between inC and outC: replace with the other 3 edges
-      replacement = ccw.length === 2 ? cwP : ccw;
+      if (j - i > bestEnd - bestStart) {
+        bestStart = i;
+        bestEnd = j;
+      }
     }
-
-    const repNodes: FrontNode[] = replacement.map(([lng, lat]) => ({
-      lng,
-      lat,
-      v: 0,
-    }));
-
-    return [
-      ...front.slice(0, firstIdx),
-      ...repNodes,
-      ...front.slice(lastIdx + 1),
-    ];
   }
 
-  // Fallback: replace nearest front segment without creating loops/spikes
+  if (bestStart !== -1 && bestEnd !== -1 && bestEnd > bestStart) {
+    const inC = cornerIdx(cleanFront[bestStart]);
+    const outC = cornerIdx(cleanFront[bestEnd]);
+
+    if (inC !== -1 && outC !== -1 && inC !== outC) {
+      // Path CCW: (c + 1) % 4
+      const ccw: [number, number][] = [];
+      for (let c = inC; ; c = (c + 1) % 4) {
+        ccw.push(corners[c]);
+        if (c === outC) break;
+      }
+      // Path CW: (c + 3) % 4
+      const cwP: [number, number][] = [];
+      for (let c = inC; ; c = (c + 3) % 4) {
+        cwP.push(corners[c]);
+        if (c === outC) break;
+      }
+
+      const oldEdgeCount = bestEnd - bestStart;
+      let replacement: [number, number][];
+
+      if (ccw.length - 1 === oldEdgeCount && cwP.length - 1 !== oldEdgeCount) {
+        replacement = cwP;
+      } else if (cwP.length - 1 === oldEdgeCount && ccw.length - 1 !== oldEdgeCount) {
+        replacement = ccw;
+      } else {
+        // Compare intermediate vertices
+        const oldMid = cleanFront[bestStart + 1];
+        const ccwHasOldMid = ccw.some(([x, y]) => Math.abs(x - oldMid.lng) < 1e-4 && Math.abs(y - oldMid.lat) < 1e-4);
+        replacement = ccwHasOldMid ? cwP : ccw;
+      }
+
+      const repNodes: FrontNode[] = replacement.map(([lng, lat]) => ({
+        lng,
+        lat,
+        v: 0,
+      }));
+
+      const newFront = [
+        ...cleanFront.slice(0, bestStart),
+        ...repNodes,
+        ...cleanFront.slice(bestEnd + 1),
+      ];
+
+      return removeSpurs(newFront);
+    }
+  }
+
+  // Fallback: replace nearest front segment
   const center = cellCenter(ix, iy);
   let bestIdx = -1;
   let bestDist = Infinity;
-  for (let i = 0; i < front.length - 1; i++) {
-    const midLng = (front[i].lng + front[i + 1].lng) / 2;
-    const midLat = (front[i].lat + front[i + 1].lat) / 2;
+  for (let i = 0; i < cleanFront.length - 1; i++) {
+    const midLng = (cleanFront[i].lng + cleanFront[i + 1].lng) / 2;
+    const midLat = (cleanFront[i].lat + cleanFront[i + 1].lat) / 2;
     const d = distKm(center, [midLng, midLat]);
     if (d < bestDist) {
       bestDist = d;
@@ -297,12 +354,28 @@ export function advanceFrontOverCell(front: FrontNode[], cell: [number, number],
   }
 
   if (bestIdx >= 0 && bestDist <= 4.0) {
-    const repl: [number, number][] = team === 0
-      ? [[x0, y1], [x0, y0], [x1, y0], [x1, y1]]
-      : [[x1, y0], [x1, y1], [x0, y1], [x0, y0]];
-    const repNodes: FrontNode[] = repl.map(([lng, lat]) => ({ lng, lat, v: 0 }));
-    return [...front.slice(0, bestIdx), ...repNodes, ...front.slice(bestIdx + 2)];
+    const pA = cleanFront[bestIdx];
+    const pB = cleanFront[bestIdx + 1];
+    const cA = cornerIdx(pA);
+    const cB = cornerIdx(pB);
+
+    let replacement: [number, number][];
+    if (cA !== -1 && cB !== -1 && cA !== cB) {
+      const ccw: [number, number][] = [];
+      for (let c = cA; ; c = (c + 1) % 4) { ccw.push(corners[c]); if (c === cB) break; }
+      const cwP: [number, number][] = [];
+      for (let c = cA; ; c = (c + 3) % 4) { cwP.push(corners[c]); if (c === cB) break; }
+      replacement = ccw.length === 2 ? cwP : ccw;
+    } else {
+      replacement = team === 0
+        ? [[x0, y1], [x1, y1], [x1, y0], [x0, y0]]
+        : [[x1, y0], [x0, y0], [x0, y1], [x1, y1]];
+    }
+
+    const repNodes: FrontNode[] = replacement.map(([lng, lat]) => ({ lng, lat, v: 0 }));
+    const newFront = [...cleanFront.slice(0, bestIdx), ...repNodes, ...cleanFront.slice(bestIdx + 2)];
+    return removeSpurs(newFront);
   }
 
-  return front;
+  return cleanFront;
 }

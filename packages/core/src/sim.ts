@@ -1105,6 +1105,40 @@ export class Sim {
         this.hooks?.emit('toast', { text: `Приказ гарнизону: штурм тайла [${tgtCell[0]}, ${tgtCell[1]}]! Время наступления: 60 с.` });
         return ok();
       }
+      case 'splitGarrison': {
+        const u = w.units.find((x) => x.id === cmd.unitId && x.hp > 0 && !x.embarkedIn);
+        if (!u) return fail('unit not found');
+        if (u.team !== p.team) return fail('not your unit');
+        const isFront = u.def === 'frontline_infantry' || u.owner.startsWith('__front_');
+        if (!isFront) return fail('только для пехотных гарнизонов');
+        if ((u.strength ?? 1) <= 1) return fail('гарнизон не застакан (сила равна 1)');
+        if (u.assault) return fail('гарнизон находится в наступлении/перемещении');
+
+        // Deduct 1 strength (100 soldiers) from current garrison
+        const prevStr = u.strength ?? 1;
+        u.strength = prevStr - 1;
+        u.squadSize = Math.max(100, (u.squadSize ?? (prevStr * 100)) - 100);
+        u.hp = Math.min(u.strength * 5000, Math.max(500, u.hp - 5000));
+        const splitAmmo = Math.min(100, Math.max(50, Math.floor((u.ammo ?? 100) / 2)));
+        u.ammo = Math.max(0, (u.ammo ?? 100) - splitAmmo);
+
+        // Spawn detached squad in the same tile with a small offset for clickability
+        const spawnPos: LngLat = [u.pos[0] + 0.003, u.pos[1] + 0.002];
+        const newUnit = this.spawnFrontlineUnit(w, u.team, spawnPos);
+        newUnit.owner = u.owner;
+        newUnit.strength = 1;
+        newUnit.squadSize = 100;
+        newUnit.hp = 5000;
+        newUnit.ammo = splitAmmo;
+        newUnit.attackDebuffUntil = u.attackDebuffUntil;
+        newUnit.frontStatus = 'holding';
+        newUnit.post = [spawnPos[0], spawnPos[1]];
+
+        this.hooks?.emit('toast', {
+          text: `Отделен гарнизон (Сила: 1). На позиции осталось сил: ${u.strength} (${u.squadSize} бойцов)`,
+        });
+        return ok();
+      }
       case 'rally': {
         const b = w.buildings.find((x) => x.id === cmd.building && x.team === p.team);
         if (!b || !this.defs.b.get(b.def)!.trains?.length) return fail('not a production building');
@@ -1963,7 +1997,7 @@ export class Sim {
                 friend.squadSize = (friend.squadSize ?? 100) + (opp.squadSize ?? 100);
                 friend.hp = Math.min((friend.strength ?? 1) * 5000, friend.hp + opp.hp);
                 friend.ammo = Math.min((friend.strength ?? 1) * 100, (friend.ammo ?? 0) + Math.max(0, (opp.ammo ?? 0) - 20));
-                friend.attackDebuffUntil = w.time + 120; // 2 minutes attack debuff
+                friend.attackDebuffUntil = w.time + 300; // 5 minutes attack debuff
                 friend.morale = Math.max(10, (friend.morale ?? 100) - 20);
                 opp.hp = 0; // Merged into existing squad
                 w.units = w.units.filter((x) => x.id !== opp.id);
@@ -1971,7 +2005,7 @@ export class Sim {
                 opp.pos = cellCenter(retreatTile[0], retreatTile[1]);
                 opp.ammo = Math.max(0, (opp.ammo ?? 0) - 20);
                 opp.morale = Math.max(10, (opp.morale ?? 100) - 30);
-                opp.attackDebuffUntil = w.time + 120; // 2 minutes attack debuff
+                opp.attackDebuffUntil = w.time + 300; // 5 minutes attack debuff
               }
             } else {
               opp.hp = 0; // Encircled / destroyed

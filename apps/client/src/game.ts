@@ -1219,6 +1219,14 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
     if (k === 'm') return toggleBasemap();
     if (k === 'g' && selUnits.size) return makeGroup();
     if (k === 'u' && selUnits.size) return ungroup();
+    if (k === 'x' && selUnits.size && snap) {
+      const g = snap.units.find((u) => selUnits.has(u.id) && u.team === init?.team && (u.owner.startsWith('__front_') || u.def === 'frontline_infantry') && (u.strength ?? 1) > 1);
+      if (g) {
+        send({ type: 'splitGarrison', unitId: g.id });
+        toast('Отделен 1 гарнизон (Сила: 1)');
+        return;
+      }
+    }
     if (/^[1-9]$/.test(e.key)) {
       const n = Number(e.key);
       if (e.ctrlKey || e.metaKey || e.altKey) {
@@ -2244,6 +2252,33 @@ export function startGame(app: HTMLElement, session: Session, matchId: string, o
               h('div', { style: { background: 'rgba(245, 158, 11, 0.15)', border: '1px solid rgba(245, 158, 11, 0.4)', borderRadius: '4px', padding: '6px 8px', marginTop: '6px', fontSize: '11px', color: '#fbbf24', fontWeight: '500' } },
                 `⚠️ Дезорганизация после отступления: атака заблокирована на ${rem} с`
               )
+            );
+          }
+          if ((u.strength ?? 1) > 1 && !u.assault) {
+            side.append(
+              h('button', {
+                class: 'bld',
+                style: {
+                  marginTop: '10px',
+                  width: '100%',
+                  background: 'rgba(59, 130, 246, 0.2)',
+                  border: '1px solid #3b82f6',
+                  color: '#93c5fd',
+                  fontWeight: '600',
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  fontSize: '12px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  gap: '6px',
+                },
+                onClick: () => {
+                  send({ type: 'splitGarrison', unitId: u.id });
+                  toast('Отделен 1 гарнизон (Сила: 1)');
+                },
+              }, '✂️ Разделить гарнизон (отделить 1 отряд · X)')
             );
           }
           side.append(
