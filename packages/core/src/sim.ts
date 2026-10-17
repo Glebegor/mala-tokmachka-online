@@ -4408,6 +4408,23 @@ export class Sim {
       // Displace frontline garrisons on BOTH sides of the front line in lockstep with front line
       // Follow advancePath / retreatPath waypoint-by-waypoint, or advance along normal with line
       if (!closed) {
+        // Global territorial sanitation: eliminate bypassed/overrun garrisons deep in enemy territory (HoI4 mechanic)
+        for (const u of w.units) {
+          if (u.hp <= 0 || u.embarkedIn || u.encircled) continue;
+          if (u.def !== 'frontline_infantry' && !u.owner.startsWith('__front_') && u.frontPost === undefined) continue;
+          const isAttacking = (u.frontStatus === 'advancing' || (u.advancePath && u.advancePath.length > 0));
+          if (!isAttacking && this.side(u.pos) !== u.team) {
+            const ni = nearestNode(n, u.pos);
+            const dist = distKm(u.pos, [n[ni].lng, n[ni].lat]);
+            if (dist > 3.0) {
+              // Cut off > 3.0 km behind enemy lines without a sector: overrun (HoI4 mechanic)
+              u.hp = 0;
+              u.strength = 0;
+              u.squadSize = 0;
+            }
+          }
+        }
+
         this.updateGarrisonPairs();
         for (const u of w.units) {
           if (u.hp <= 0 || u.embarkedIn || u.encircled || w.pockets.some((k) => pointInRing(k.nodes, u.pos))) continue;

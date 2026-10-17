@@ -1453,7 +1453,24 @@ sim.step(2.0);
 const distAfterCatchup = distKm(testUa.pos, [strandedNode.lng, strandedNode.lat]);
 assert.ok(distAfterCatchup < distBeforeCatchup, 'Holding garrison left in deep rear steps forward to catch up to front line standoff');
 
-console.log('✓ Anti-Clumping Repulsion, Holding Trench Catch-up, and Flank Breakthrough Immunity verified');
+// 52. Frontline Territorial Inviolability: Overrun of Cut-off Bypassed Enemy Garrisons in Rear
+// Place an enemy Russian garrison deep in Ukrainian rear (5 km into Ukraine, without a sector)
+const cutOffNodeIdx = nearestNode(sim.world.front, testUa.pos);
+const cutOffNode = sim.world.front[cutOffNodeIdx];
+const [coNx, coNy] = normalAt(sim.world.front, cutOffNodeIdx);
+// Ukrainian rear is in direction [-coNx, -coNy]
+const deepRearPos: LngLat = offsetKm([cutOffNode.lng, cutOffNode.lat], -coNx * 5.0, -coNy * 5.0);
+assert.equal(sim.side(deepRearPos), 0, 'Deep rear position is inside Ukrainian territory');
+
+const cutOffRuGarrison = (sim as any).spawnFrontlineUnit(sim.world, 1, deepRearPos);
+cutOffRuGarrison.ammo = 500;
+cutOffRuGarrison.frontStatus = 'holding';
+(sim as any).indexWorld();
+
+assert.ok(cutOffRuGarrison.hp > 0, 'Cut-off Russian garrison initially spawned');
+sim.step(1.0);
+assert.equal(cutOffRuGarrison.hp, 0, 'Cut-off enemy garrison stranded deep in rear without sector is overrun and eliminated');
+console.log('✓ Territorial Inviolability & Overrun: Cut-off enemy garrisons left in friendly rear eliminated verified');
 
 console.log('All reboot tests passed successfully!');
 
